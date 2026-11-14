@@ -187,3 +187,33 @@
 ## Other work today
 
 - Added `npm test` (Node's built-in test runner; no new packages).
+
+### 2. Renewal data fix (re-seed)
+
+**The challenge.** The renewal win rate was 37.5% (6 won, 10 lost), which looked like Lumen loses most renewals. In fact, 73 customers renewed in the last 6 months and 10 churned. The seed recorded a deal for every lost renewal but only 6 of the 73 wins.
+
+**How we solved it.**
+
+1. **Found it** in the live check of win rate by deal type, then confirmed it in the seed code: it deliberately created exactly 6 won renewal deals.
+2. **Added a Closed Won renewal deal for the other 67 renewals** in `scripts/seed.ts`. Each is dated just before the customer's renewal date, with the amount equal to the ARR the customer was paying at that time.
+   - **No price changes**, so invoices and MRR stay exactly the same.
+   - **Own random stream, added last**, so the existing deals `opp_0001`–`opp_0140` keep their ids and values. The new ones are `opp_0141`–`opp_0207`.
+3. **Took a fingerprint of the live metrics before and after** the re-seed. Account economics for all 150 customers, ARR, pipeline and NRR came out identical. Only win rate changed, as intended.
+4. **Ran the dry run first, then the re-seed.** New data fingerprint: `08eda9901247`.
+
+| Win rate (last 6 months) | Before | After |
+|---|---|---|
+| Renewal | 37.5% (6 / 16) | **88.0% (73 / 83)** |
+| Overall | 27.5% (22 / 80) | **60.5% (89 / 147)** |
+| New | 18.2% | 18.2% (no change) |
+| Expansion | 40.0% | 40.0% (no change) |
+| Avg sales cycle, won deals | 49.2 days | 46.2 days |
+
+**Lessons.**
+
+- A win rate that mixes deal types can hide a data gap. Always look at it by type.
+- Renewals only show up in metrics if a renewal deal is recorded every time. In HubSpot or Salesforce, make a renewal deal for every contract, not only the ones at risk.
+- Before a re-seed, fingerprint the metrics you care about, then compare afterwards.
+- Renewals older than 6 months still have no deal. No metric looks back that far today.
+
+The live results table in section 1 shows the figures from before this fix. Overall win rate is now 60.5%, and the renewal data-gap note there is resolved.

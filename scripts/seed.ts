@@ -588,7 +588,8 @@ function buildUsage(accounts: AccountPlan[]): UsageRow[] {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Opportunities (60 open, 80 closed in the last 6 months)
+// 3. Opportunities (60 open; closed deals from the last 6 months, including a
+//    won renewal for every customer that renewed in that time)
 //    and the MRR changes that won deals and plan changes cause
 // ---------------------------------------------------------------------------
 
@@ -762,6 +763,25 @@ function buildOpportunitiesAndChanges(accounts: AccountPlan[]): OpportunityRow[]
   for (const acc of growers) {
     const before = roundTo(acc.row.mrr_usd * m.float(0.6, 0.85), 10);
     setChange(acc, addMonths(CURRENT_MONTH, -m.int(4, 11)), acc.row.mrr_usd - before, "seat growth");
+  }
+
+  // ===== Renewal, won, no price change: every other customer whose yearly =====
+  // renewal date fell in the last 6 months. Without these, only the 6 uplift
+  // renewals above had a deal, so the renewal win rate looked like 6 / 16.
+  // Added last and drawn from their own random stream, so every deal above
+  // keeps its id, dates and amount, and no invoice or MRR changes.
+  const rr = makeRng("renewals-flat");
+  const sixMonthsAgo = addMonths(AS_OF, -6).getTime();
+  for (const acc of customers) {
+    if (recentlyRenewed.includes(acc)) continue;
+    const lastAnniversary = addMonths(parseDate(acc.row.renewal_date!), -12);
+    const isRenewal = lastAnniversary.getTime() > parseDate(acc.row.start_date!).getTime(); // not the first contract
+    if (!isRenewal || lastAnniversary.getTime() <= sixMonthsAgo) continue;
+    // Renewed at the MRR the account was paying on its renewal date.
+    const change = acc.mrrChange;
+    const mrrThen = change && lastAnniversary.getTime() < change.fromMonth.getTime() ? acc.billedMrr - change.delta : acc.billedMrr;
+    const close = addDays(lastAnniversary, -rr.int(3, 10));
+    make(acc, "renewal", "Closed Won", mrrThen * 12, addDays(close, -rr.int(30, 60)), close);
   }
 
   return opps.map((o, i) => ({ id: `opp_${pad(i + 1, 4)}`, ...o }));
