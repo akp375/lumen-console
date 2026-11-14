@@ -1,0 +1,361 @@
+// Tests for src/lib/metrics.ts against a tiny hand-made dataset.
+// Run with: npm test
+//
+// "Today" in these tests is fixed at 2026-11-13, so they never depend on the
+// real clock or on AS_OF_DATE. Key dates that follow from it:
+//   30-day usage window: 2026-10-14 to 2026-11-12 (today excluded)
+//   win-rate window:     closed after 2026-05-13, up to 2026-11-13
+//   NRR start:           2026-08-15 -> start month 2026-08, end month 2026-11
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  calcArr,
+  calcPipeline,
+  calcWinRateAndCycle,
+  calcTokenCost30d,
+  calcGrossMargin,
+  calcCapacity,
+  calcAccountEconomics,
+  calcNrr90d,
+  usageWindow,
+  type AccountRow,
+  type OpportunityRow,
+  type UsageRow,
+  type ModelPriceRow,
+  type InvoiceRow,
+} from "./metrics.ts";
+
+const TODAY = "2026-11-13";
+
+function close(actual: number | null, expected: number, label = "") {
+  assert.ok(actual !== null, `${label} should not be null`);
+  assert.ok(Math.abs(actual - expected) < 1e-9, `${label} expected ${expected}, got ${actual}`);
+}
+
+// ---------------------------------------------------------------------------
+// Hand-made dataset
+// ---------------------------------------------------------------------------
+
+const acc = (a: Partial<AccountRow> & Pick<AccountRow, "id" | "status">): AccountRow => ({
+  name: a.id,
+  mrr_usd: 0,
+  included_tokens_monthly: 0,
+  start_date: null,
+  churn_date: null,
+  ...a,
+});
+
+const ACCOUNTS: AccountRow[] = [
+  // A1: long-time customer, upgraded since August
+  acc({ id: "A1", status: "customer", mrr_usd: 1000, included_tokens_monthly: 10_000_000, start_date: "2025-01-10" }),
+  // A2: long-time customer, downgraded since August, heavy usage
+  acc({ id: "A2", status: "customer", mrr_usd: 500, included_tokens_monthly: 2_000_000, start_date: "2025-06-01" }),
+  // A3: joined 2026-10-01 (inside the NRR period); sits exactly on both thresholds
+  acc({ id: "A3", status: "customer", mrr_usd: 200, included_tokens_monthly: 108_000_000, start_date: "2026-10-01" }),
+  // P1: prospect - never counts toward customer metrics
+  acc({ id: "P1", status: "prospect" }),
+  // C1: churned 2026-09-20 (after the NRR start date, so it is in the NRR cohort)
+  acc({ id: "C1", status: "churned", start_date: "2024-03-01", churn_date: "2026-09-20" }),
+  // C2: churned 2026-06-01 (before the NRR start date, so it is not in the cohort)
+  acc({ id: "C2", status: "churned", start_date: "2023-01-01", churn_date: "2026-06-01" }),
+];
+
+const opp = (o: Partial<OpportunityRow> & Pick<OpportunityRow, "id" | "stage">): OpportunityRow => ({
+  account_id: "A1",
+  type: "new",
+  source: "inbound",
+  forecast_category: "Pipeline",
+  amount_usd: 0,
+  probability: 0,
+  created_date: "2026-10-01",
+  close_date: "2026-12-01",
+  ...o,
+});
+
+const OPPORTUNITIES: OpportunityRow[] = [
+  // Open deals
+  opp({ id: "O1", account_id: "A1", type: "expansion", source: "inbound", stage: "Discovery", forecast_category: "Pipeline", amount_usd: 10_000, probability: 10 }),
+  opp({ id: "O2", account_id: "P1", type: "new", source: "outbound", stage: "Demo", forecast_category: "Pipeline", amount_usd: 20_000, probability: 25 }),
+  opp({ id: "O3", account_id: "P1", type: "new", source: "inbound", stage: "Proposal", forecast_category: "Best Case", amount_usd: 40_000, probability: 50 }),
+  opp({ id: "O4", account_id: "A2", type: "renewal", source: "existing customer", stage: "Negotiation", forecast_category: "Commit", amount_usd: 6_000, probability: 70 }),
+  // Closed in the last 6 months
+  opp({ id: "W1", account_id: "A3", type: "new", source: "partner", stage: "Closed Won", forecast_category: "Closed", amount_usd: 2_400, probability: 100, created_date: "2026-08-02", close_date: "2026-09-01" }), // 30 days
+  opp({ id: "W2", account_id: "A1", type: "expansion", source: "existing customer", stage: "Closed Won", forecast_category: "Closed", amount_usd: 12_000, probability: 100, created_date: "2026-06-01", close_date: "2026-07-21" }), // 50 days
+  opp({ id: "L1", account_id: "C1", type: "renewal", source: "existing customer", stage: "Closed Lost", forecast_category: "Omitted", amount_usd: 3_600, created_date: "2026-08-01", close_date: "2026-09-15" }),
+  opp({ id: "L2", account_id: "P1", type: "new", source: "outbound", stage: "Closed Lost", forecast_category: "Omitted", amount_usd: 5_000, created_date: "2026-04-01", close_date: "2026-06-10" }),
+  // Closed too long ago (excluded)
+  opp({ id: "W3", stage: "Closed Won", forecast_category: "Closed", amount_usd: 9_999, probability: 100, created_date: "2026-05-01", close_date: "2026-05-13" }), // exactly 6 months ago: excluded
+  opp({ id: "L3", stage: "Closed Lost", forecast_category: "Omitted", amount_usd: 9_999, created_date: "2026-01-01", close_date: "2026-03-01" }),
+];
+
+// Prices per million tokens: big = $10 in / $50 out, small = $1 in / $5 out
+const PRICES: ModelPriceRow[] = [
+  { model: "big", input_usd_per_million: 10, output_usd_per_million: 50 },
+  { model: "small", input_usd_per_million: 1, output_usd_per_million: 5 },
+];
+
+const usageRow = (account_id: string, date: string, model: string, input_tokens: number, output_tokens: number): UsageRow => ({
+  account_id, date, model, input_tokens, output_tokens,
+});
+
+const USAGE: UsageRow[] = [
+  // A1 inside the window: $20 + $4 = $24, 3.6M tokens
+  usageRow("A1", "2026-11-01", "big", 1_000_000, 200_000), // 1M x $10 + 0.2M x $50 = $10 + $10 = $20
+  usageRow("A1", "2026-10-14", "small", 2_000_000, 400_000), // first day of window: 2M x $1 + 0.4M x $5 = $2 + $2 = $4
+  // A1 outside the window (must be ignored)
+  usageRow("A1", "2026-10-13", "big", 9_000_000, 0), // the day before the window
+  usageRow("A1", "2026-11-13", "big", 9_000_000, 0), // today
+  // A2: 20M x $10 + 4M x $50 = $200 + $200 = $400, 24M tokens
+  usageRow("A2", "2026-11-12", "big", 20_000_000, 4_000_000), // last day of window
+  // A3: 100M x $1 + 8M x $5 = $100 + $40 = $140, 108M tokens
+  usageRow("A3", "2026-11-05", "small", 100_000_000, 8_000_000),
+  // C1 (churned) inside the window: not a customer, must not appear
+  usageRow("C1", "2026-10-20", "big", 5_000_000, 1_000_000),
+];
+
+const INVOICES: InvoiceRow[] = [
+  // A1: $800 in August -> $1,000 in November (upgrade +$200)
+  { account_id: "A1", month: "2026-07-01", amount_usd: 800 },
+  { account_id: "A1", month: "2026-08-01", amount_usd: 800 },
+  { account_id: "A1", month: "2026-11-01", amount_usd: 1000 },
+  // A2: $600 in August -> $500 in November (downgrade -$100)
+  { account_id: "A2", month: "2026-08-01", amount_usd: 600 },
+  { account_id: "A2", month: "2026-11-01", amount_usd: 500 },
+  // A3: joined in October - excluded from NRR
+  { account_id: "A3", month: "2026-10-01", amount_usd: 200 },
+  { account_id: "A3", month: "2026-11-01", amount_usd: 200 },
+  // C1: $300 in August, billed to August, churned in September (churn -$300)
+  { account_id: "C1", month: "2026-08-01", amount_usd: 300 },
+  // C2: churned before the period - excluded
+  { account_id: "C2", month: "2026-05-01", amount_usd: 400 },
+];
+
+// ---------------------------------------------------------------------------
+// 1. ARR
+// ---------------------------------------------------------------------------
+
+test("ARR: MRR x 12 for customers only", () => {
+  const r = calcArr(ACCOUNTS);
+  // A1 1,000 x 12 = 12,000; A2 500 x 12 = 6,000; A3 200 x 12 = 2,400. Total 20,400.
+  assert.equal(r.totalArr, 20_400);
+  assert.equal(r.customerCount, 3);
+  assert.deepEqual(
+    r.byAccount.map((a) => [a.accountId, a.arr]),
+    [["A1", 12_000], ["A2", 6_000], ["A3", 2_400]],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 2. Pipeline
+// ---------------------------------------------------------------------------
+
+test("Pipeline: open deals only, with count, value and weighted value", () => {
+  const r = calcPipeline(OPPORTUNITIES);
+  const rows = (b: { key: string; count: number; value: number; weightedValue: number }[]) =>
+    b.map((x) => [x.key, x.count, x.value, x.weightedValue]);
+
+  // Weighted: O1 10,000 x 10% = 1,000; O2 20,000 x 25% = 5,000;
+  //           O3 40,000 x 50% = 20,000; O4 6,000 x 70% = 4,200. Sum 30,200.
+  assert.deepEqual([r.total.count, r.total.value, r.total.weightedValue], [4, 76_000, 30_200]);
+
+  // Growth = new + expansion: O1 + O2 + O3 = 70,000, weighted 1,000 + 5,000 + 20,000 = 26,000
+  assert.deepEqual([r.growth.count, r.growth.value, r.growth.weightedValue], [3, 70_000, 26_000]);
+  // Renewal: O4 = 6,000, weighted 4,200. Growth + renewal = total.
+  assert.deepEqual([r.renewal.count, r.renewal.value, r.renewal.weightedValue], [1, 6_000, 4_200]);
+
+  assert.deepEqual(rows(r.byStage), [
+    ["Discovery", 1, 10_000, 1_000],
+    ["Demo", 1, 20_000, 5_000],
+    ["Proposal", 1, 40_000, 20_000],
+    ["Negotiation", 1, 6_000, 4_200],
+  ]);
+  assert.deepEqual(rows(r.bySource), [
+    ["inbound", 2, 50_000, 21_000], // O1 + O3
+    ["outbound", 1, 20_000, 5_000], // O2
+    ["existing customer", 1, 6_000, 4_200], // O4
+  ]);
+  assert.deepEqual(rows(r.byType), [
+    ["new", 2, 60_000, 25_000], // O2 + O3
+    ["expansion", 1, 10_000, 1_000], // O1
+    ["renewal", 1, 6_000, 4_200], // O4
+  ]);
+  assert.deepEqual(rows(r.byForecastCategory), [
+    ["Pipeline", 2, 30_000, 6_000], // O1 + O2
+    ["Best Case", 1, 40_000, 20_000], // O3
+    ["Commit", 1, 6_000, 4_200], // O4
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// 3. Win rate and sales cycle
+// ---------------------------------------------------------------------------
+
+test("Win rate and sales cycle: deals closed in the last 6 months", () => {
+  const r = calcWinRateAndCycle(OPPORTUNITIES, TODAY);
+  // In window: W1, W2 won; L1, L2 lost. W3 (exactly 6 months ago) and L3 excluded.
+  assert.equal(r.windowStart, "2026-05-13");
+  assert.equal(r.won, 2);
+  assert.equal(r.lost, 2);
+  close(r.winRate, 0.5, "win rate"); // 2 / (2 + 2)
+  close(r.avgSalesCycleDays, 40, "sales cycle"); // won only: (30 + 50) / 2
+});
+
+test("Win rate and sales cycle by deal type", () => {
+  const r = calcWinRateAndCycle(OPPORTUNITIES, TODAY);
+  const byType = Object.fromEntries(r.byType.map((t) => [t.type, t]));
+  assert.deepEqual(r.byType.map((t) => t.type), ["new", "expansion", "renewal"]);
+  // new: W1 won (30 days), L2 lost -> 1 / 2 = 50%, cycle 30
+  assert.deepEqual([byType.new.won, byType.new.lost], [1, 1]);
+  close(byType.new.winRate, 0.5, "new win rate");
+  close(byType.new.avgSalesCycleDays, 30, "new cycle");
+  // expansion: W2 won (50 days) -> 100%, cycle 50
+  assert.deepEqual([byType.expansion.won, byType.expansion.lost], [1, 0]);
+  close(byType.expansion.winRate, 1, "expansion win rate");
+  close(byType.expansion.avgSalesCycleDays, 50, "expansion cycle");
+  // renewal: L1 lost -> 0%, no won deals so no cycle
+  assert.deepEqual([byType.renewal.won, byType.renewal.lost], [0, 1]);
+  close(byType.renewal.winRate, 0, "renewal win rate");
+  assert.equal(byType.renewal.avgSalesCycleDays, null);
+});
+
+test("Win rate and sales cycle: null when nothing closed", () => {
+  const r = calcWinRateAndCycle([], TODAY);
+  assert.equal(r.winRate, null);
+  assert.equal(r.avgSalesCycleDays, null);
+});
+
+// ---------------------------------------------------------------------------
+// 4. 30-day token cost
+// ---------------------------------------------------------------------------
+
+test("30-day window is the 30 days before today", () => {
+  assert.deepEqual(usageWindow(TODAY), { start: "2026-10-14", end: "2026-11-12" });
+});
+
+test("Token cost: input and output priced separately, window only, customers only", () => {
+  const r = calcTokenCost30d(ACCOUNTS, USAGE, PRICES, TODAY);
+  assert.deepEqual(r.map((x) => x.accountId), ["A1", "A2", "A3"]); // no P1, C1, C2
+  const byId = Object.fromEntries(r.map((x) => [x.accountId, x]));
+  close(byId.A1.tokenCost30d, 24, "A1 cost"); // $20 + $4; rows on 10-13 and 11-13 ignored
+  close(byId.A2.tokenCost30d, 400, "A2 cost");
+  close(byId.A3.tokenCost30d, 140, "A3 cost");
+  assert.equal(byId.A1.inputTokens, 3_000_000);
+  assert.equal(byId.A1.outputTokens, 600_000);
+});
+
+test("Token cost: a customer with no usage costs $0", () => {
+  const r = calcTokenCost30d(ACCOUNTS, [], PRICES, TODAY);
+  assert.ok(r.every((x) => x.tokenCost30d === 0));
+});
+
+test("Token cost: stops with a clear error for a model with no price", () => {
+  assert.throws(
+    () => calcTokenCost30d(ACCOUNTS, [usageRow("A1", "2026-11-01", "mystery", 1, 1)], PRICES, TODAY),
+    /No price in model_prices for model "mystery"/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 5. Gross margin
+// ---------------------------------------------------------------------------
+
+test("Gross margin: (MRR - token cost) / MRR, underwater below 30%", () => {
+  const r = calcGrossMargin(ACCOUNTS, USAGE, PRICES, TODAY);
+  const byId = Object.fromEntries(r.map((x) => [x.accountId, x]));
+  close(byId.A1.grossMargin, 0.976, "A1"); // (1,000 - 24) / 1,000
+  assert.equal(byId.A1.underwater, false);
+  close(byId.A2.grossMargin, 0.2, "A2"); // (500 - 400) / 500
+  assert.equal(byId.A2.underwater, true);
+  close(byId.A3.grossMargin, 0.3, "A3"); // (200 - 140) / 200: exactly 30% is NOT underwater
+  assert.equal(byId.A3.underwater, false);
+});
+
+test("Gross margin: not available when MRR is 0", () => {
+  const zero = [acc({ id: "Z", status: "customer", mrr_usd: 0, start_date: "2025-01-01" })];
+  const [row] = calcGrossMargin(zero, [], PRICES, TODAY);
+  assert.equal(row.grossMargin, null);
+  assert.equal(row.underwater, false);
+});
+
+// ---------------------------------------------------------------------------
+// 6. Capacity used
+// ---------------------------------------------------------------------------
+
+test("Capacity: 30-day tokens / included monthly tokens, overage above 100%", () => {
+  const r = calcCapacity(ACCOUNTS, USAGE, PRICES, TODAY);
+  const byId = Object.fromEntries(r.map((x) => [x.accountId, x]));
+  close(byId.A1.capacityUsed, 0.36, "A1"); // 3.6M / 10M
+  assert.equal(byId.A1.overage, false);
+  close(byId.A2.capacityUsed, 12, "A2"); // 24M / 2M = 1,200%
+  assert.equal(byId.A2.overage, true);
+  close(byId.A3.capacityUsed, 1, "A3"); // 108M / 108M: exactly 100% is NOT overage
+  assert.equal(byId.A3.overage, false);
+});
+
+test("Capacity: not available when the allowance is 0", () => {
+  const zero = [acc({ id: "Z", status: "customer", mrr_usd: 100, included_tokens_monthly: 0, start_date: "2025-01-01" })];
+  const [row] = calcCapacity(zero, [], PRICES, TODAY);
+  assert.equal(row.capacityUsed, null);
+  assert.equal(row.overage, false);
+});
+
+// ---------------------------------------------------------------------------
+// 4-6 together: account economics
+// ---------------------------------------------------------------------------
+
+test("Account economics: one row per customer with cost, margin and capacity", () => {
+  const r = calcAccountEconomics(ACCOUNTS, USAGE, PRICES, TODAY);
+  assert.deepEqual(r.map((x) => x.accountId), ["A1", "A2", "A3"]);
+  const a2 = r.find((x) => x.accountId === "A2")!;
+  // A2: MRR 500, cost 400, margin 20% (underwater), 24M of 2M tokens = 1,200% (overage)
+  assert.equal(a2.mrr, 500);
+  close(a2.tokenCost30d, 400, "A2 cost");
+  close(a2.grossMargin, 0.2, "A2 margin");
+  assert.equal(a2.underwater, true);
+  assert.equal(a2.tokens30d, 24_000_000);
+  assert.equal(a2.includedTokensMonthly, 2_000_000);
+  close(a2.capacityUsed, 12, "A2 capacity");
+  assert.equal(a2.overage, true);
+  // Same answers as the separate calculators
+  const margin = calcGrossMargin(ACCOUNTS, USAGE, PRICES, TODAY);
+  const capacity = calcCapacity(ACCOUNTS, USAGE, PRICES, TODAY);
+  r.forEach((row, i) => {
+    assert.equal(row.grossMargin, margin[i].grossMargin);
+    assert.equal(row.capacityUsed, capacity[i].capacityUsed);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. NRR
+// ---------------------------------------------------------------------------
+
+test("NRR: August -> November for accounts that were customers 90 days ago", () => {
+  const r = calcNrr90d(ACCOUNTS, INVOICES, TODAY);
+  assert.equal(r.startDate, "2026-08-15");
+  assert.equal(r.startMonth, "2026-08-01");
+  assert.equal(r.endMonth, "2026-11-01");
+  // Cohort: A1, A2, C1. A3 joined in October, C2 churned in June, P1 is a prospect.
+  assert.equal(r.accountsInCohort, 3);
+  assert.equal(r.startingMrr, 1_700); // 800 + 600 + 300
+  assert.equal(r.upgrades, 200); // A1 800 -> 1,000
+  assert.equal(r.downgrades, 100); // A2 600 -> 500
+  assert.equal(r.churnedMrr, 300); // C1
+  assert.equal(r.endingMrr, 1_500); // 1,000 + 500 + 0
+  assert.deepEqual([r.upgradedCount, r.downgradedCount, r.churnedCount], [1, 1, 1]);
+  close(r.nrr, 15 / 17, "NRR"); // (1,700 + 200 - 100 - 300) / 1,700 = 88.2%
+});
+
+test("NRR: a customer that churned in late August uses its last invoice as starting MRR", () => {
+  // Churned 2026-08-20 (after the 08-15 start), so billed only up to July.
+  const accounts = [acc({ id: "E", status: "churned", start_date: "2024-01-01", churn_date: "2026-08-20" })];
+  const invoices = [{ account_id: "E", month: "2026-07-01", amount_usd: 250 }];
+  const r = calcNrr90d(accounts, invoices, TODAY);
+  assert.equal(r.startingMrr, 250);
+  assert.equal(r.churnedMrr, 250);
+  close(r.nrr, 0, "NRR");
+});
+
+test("NRR: null when nobody was a customer 90 days ago", () => {
+  assert.equal(calcNrr90d([], [], TODAY).nrr, null);
+});

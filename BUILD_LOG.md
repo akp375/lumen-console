@@ -112,3 +112,78 @@
   - Metrics use the as-of date, not the real clock.
   - Pipeline metrics count open deals only.
   - Customer metrics count accounts with status `customer` only, unless a metric such as NRR needs churned accounts.
+
+## 2026-11-14 (Saturday)
+
+## Highlights
+
+### 1. Business metrics module (`src/lib/metrics.ts`)
+
+**The challenge.** Every screen and the Ask RevOps agent need the same numbers, calculated the same way, from one place. Each metric needed a written definition the owner agreed to before any code was written.
+
+**How we solved it.**
+
+1. **Agreed every definition in plain English first** (listed below).
+2. **Split the code into two layers.**
+   - *Calculators* are pure math on lists of rows, with "today" passed in.
+   - *Loaders* read Supabase on the server with the service-role key and pass the rows to the calculators.
+
+   The tests can check the math without a database.
+3. **Read data in pages of 1,000 rows.** Supabase returns at most 1,000 rows per request, and the 30-day usage window has about 13,000 rows. Without paging, totals would come out quietly wrong.
+4. **Wrote 17 tests against a tiny hand-made dataset** (`src/lib/metrics.test.ts`). Every expected answer has its hand calculation next to it. Run them with `npm test`, which uses Node's built-in test runner, so there are no new packages.
+5. **Checked against the live data (read-only).** ARR, win rate, underwater count and over-capacity count all matched the seed's own self-check exactly.
+
+**Lessons.**
+
+- Boundaries get their own tests. Exactly 30% margin is *not* underwater, exactly 100% capacity is *not* overage, and a deal closed exactly 6 months ago is outside the window.
+- If usage mentions a model with no price, the code stops with an error instead of counting it as $0.
+- Running against Supabase from Claude's sandbox needs `NODE_USE_ENV_PROXY=1`. The app on Vercel and `npm run seed` in your own Terminal don't.
+
+## Metric definitions (agreed by the owner)
+
+"Today" = `AS_OF_DATE`. "Customer" = status `customer`. "Open deal" = Discovery, Demo, Proposal or Negotiation.
+
+1. **ARR.** Per customer: MRR × 12. Total = the sum over customers.
+2. **Pipeline.** Open deals only, from any account. Weighted value = amount × probability ÷ 100.
+   - Shown by stage, source, deal type and forecast category, each with count, value and weighted value.
+   - Also split into **growth** (new + expansion) and **renewal**, because renewals protect revenue we already have rather than adding new revenue.
+3. **Win rate and sales cycle.** Deals closed after today − 6 months, up to today.
+   - Win rate = won ÷ (won + lost), counted by number of deals. It's shown overall and per deal type.
+   - Sales cycle = the average of (close date − created date) in days, over won deals only.
+4. **30-day token cost.** The window is the 30 days before today; today itself is left out. Cost = input tokens ÷ 1M × input price + output tokens ÷ 1M × output price, using `model_prices`.
+5. **Gross margin.** (MRR − 30-day token cost) ÷ MRR. **Underwater** = strictly below 30%.
+6. **Capacity used.** 30-day (input + output) tokens ÷ included monthly tokens. **Overage** = strictly above 100%.
+7. **NRR, last 90 days.** There's no daily MRR history, so monthly invoices are the MRR record.
+   - **Starting group:** accounts that were customers on today − 90 days, including those that have churned since. Customers who joined later are left out.
+   - **Starting MRR** = each account's latest invoice in or before the start month.
+   - **Ending MRR** = its invoice for the current month, or $0 if it has churned.
+   - **NRR** = (starting + upgrades − downgrades − churned) ÷ starting.
+8. **Account economics.** Token cost, margin and capacity together, one row per customer, reading usage only once.
+
+## Live results (as of 2026-11-13)
+
+| Metric | Value |
+|---|---|
+| ARR | $3,069,960 (150 customers; top 10 = 35%) |
+| Open pipeline | 60 deals, $1,261,900 ($401,446 weighted) |
+| Growth pipeline | 38 deals, $696,100 ($193,930 weighted) |
+| Renewal pipeline | 22 deals, $565,800 ($207,516 weighted) |
+| Win rate, 6 months | 27.5% overall (new 18.2%, expansion 40.0%, renewal 37.5%) |
+| Average sales cycle | 49.2 days (new 54.4, expansion 46.5, renewal 46.0) |
+| Token cost, 30 days | $96,494; margin after token costs 62.3% |
+| Underwater / overage | 12 / 15 (no account is both) |
+| NRR, 90 days | 96.8% (start $264,258 + $1,932 up − $3,970 down − $6,390 churn) |
+
+## Things worth noting (for the owner)
+
+- **The largest customer barely makes money.** Copperleaf Labs (#1, $162K ARR) runs at 2.6% margin, and Harborview Analytics (#5) at 11%.
+- **7 customers cost more in tokens than they pay.** The 12 underwater accounts bring in about 14% of ARR but use about 35% of token spend.
+- **The margin problem is pricing, not overuse.** No underwater account is over its allowance, which points to plan design.
+- **Overage usage is unbilled.** The 15 over-capacity accounts are profitable, but invoices always equal MRR, so the extra usage isn't charged. It's either upsell or revenue leakage, and the expansion pipeline is only $105K.
+- **NRR has slipped.** 90-day NRR is 96.8%, against a 12-month figure of 108.2%. No customer joined in the last 90 days.
+- **The renewal win rate (37.5%) is a data gap, not a real renewal rate.** Only 16 renewals closed through a deal in 6 months. Contracts renew yearly, so roughly half of 150 customers would have come up for renewal in that time. Most renewals have no deal record, so this number understates retention.
+- **The partner channel has no open deals.**
+
+## Other work today
+
+- Added `npm test` (Node's built-in test runner; no new packages).
