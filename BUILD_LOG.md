@@ -57,16 +57,50 @@
 - **Started this build log** (`aaffcf2`).
 - **Data model, seed script and as-of date committed** (`b6f944f`).
 
+## What we set up
+
+- **Supabase database:** 11 tables (`accounts`, `opportunities`, `invoices`, `usage_daily`, `model_prices`, `support_tickets`, `nps_responses`, `health_scores`, `expansion_plays`, `briefings`, `llm_calls`), created by `supabase/migrations/20261113000000_create_core_tables.sql`.
+- **Demo data:** loaded by `scripts/seed.ts` (`npm run seed`). It fills 7 tables. `health_scores`, `expansion_plays`, `briefings` and `llm_calls` start empty, because the app fills them later.
+- **Row Level Security (RLS):** turned on for all 11 tables in the migration, with no access policies. The app reads data only through its own server, using the service-role key, which is allowed past RLS. Nobody can read through the public key.
+  - **Checked from the project:** the server key reads every table, with row counts matching the seed exactly.
+  - **The public key was rejected outright** (`401 Unauthorized`) on every table. So it can't read anything, but that result doesn't by itself prove RLS is on. The SQL check in Supabase's SQL Editor confirms RLS for each table.
+- **As-of date setting:** `src/lib/as-of-date.ts`.
+- **`.env.local` names the code expects:** `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Only the names were checked, never the values.
+
+## Data design decisions (made by the owner)
+
+1. **Account status with prospects and churned customers.** `accounts` has a `status` of `prospect`, `customer` or `churned`, plus a `churn_date`.
+   - **Why:**
+     - It maps cleanly to HubSpot's lifecycle stage and Salesforce's account type.
+     - New-business deals need a prospect to belong to.
+     - Net revenue retention (NRR) is only honest if churned customers stay in the data.
+   - **Result:**
+     - 150 customers, 30 prospects (no revenue, usage or invoices), and 10 accounts that churned in the last 6 months. Their invoices and usage stop at churn.
+     - Open and lost "new" deals belong to prospects; won "new" deals belong to the newest customers.
+     - Rule in `CLAUDE.md`: customer metrics count `customer` accounts only, unless a metric such as NRR needs churned accounts.
+2. **Separate stage and forecast category on every deal.**
+   - **Stage** says where the deal is in the sales process: Discovery, Demo, Proposal, Negotiation, Closed Won or Closed Lost. Probability follows the stage: Discovery 10%, Demo 25%, Proposal 50%, Negotiation 70%, Closed Won 100% and Closed Lost 0%.
+   - **Forecast category** says how it counts in the forecast:
+     - Pipeline (Discovery and Demo)
+     - Best Case (Proposal)
+     - Commit (Negotiation)
+     - Closed (Closed Won)
+     - Omitted (Closed Lost)
+   - **Why:** this matches how Salesforce and HubSpot forecasting works, and it lets the forecast be read separately from stage.
+   - **Rule in `CLAUDE.md`:** pipeline metrics count open deals only.
+3. **A fixed as-of date.** "Today" is 2026-11-13, set once in `src/lib/as-of-date.ts`.
+   - **Why:** the numbers never drift as real days pass.
+   - **How to move the data forward:** change that one value and re-run the seed.
+   - **Rule in `CLAUDE.md`:** metrics use this date, never the real clock.
+4. **Deterministic IDs and data.** IDs are fixed: `acc_0001`–`acc_0190`, `opp_0001`–`opp_0140`, `tkt_00001…` and `nps_00001…`, and the random seed is fixed.
+   - **Why:** every run produces identical data, and the fingerprint (`4cecab8bbd52`) proves it.
+   - **Re-seeds:** a re-seed updates accounts in place and never deletes them, so health scores and expansion plays the app creates stay linked to the same accounts.
+
 ## Data model and demo data: details
 
-- **Decisions made on the data model:**
-  - `accounts` has a `status` (prospect, customer, churned) and a `churn_date`.
-  - Opportunities use the stages Discovery, Demo, Proposal, Negotiation, Closed Won and Closed Lost. Each deal also has a `forecast_category` (Pipeline, Best Case, Commit, Closed, Omitted) and a `created_date`.
+- **Other data model choices:**
   - `nps_responses`, `expansion_plays`, `briefings` and `llm_calls` got an `id` column.
-  - `health_scores`, `expansion_plays`, `briefings` and `llm_calls` are created empty. The app fills them later.
-  - Row Level Security is on for all 11 tables.
-- **As-of date:** `src/lib/as-of-date.ts` fixes "today" at 2026-11-13. Changing that one value and re-running the seed moves all the data forward.
-- **Seed script:** `scripts/seed.ts` uses a fixed random seed, so the data and IDs are identical on every run. A re-seed updates accounts in place and never deletes them, so app-made health scores and expansion plays stay linked.
+  - Every deal has a `created_date`.
 - **Demo data, as reported by the seed's self-check:**
   - 150 customers, 30 prospects and 10 accounts that churned in the last 6 months.
   - About $3.07M ARR, with the top 10 customers making up 35% of it.
