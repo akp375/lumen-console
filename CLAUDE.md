@@ -21,7 +21,7 @@ The owner is a RevOps and strategy lead acting as product owner. The tool is als
 
 ## Product
 
-**Lumen Console** is a RevOps app for AI-native startups. It joins CRM pipeline, billing and LLM token usage to show margin, health and renewal risk per account.
+**Cockpit** is the RevOps app we are building for our client, Lumen AI (an AI-native startup). It has no product name of its own: it is a build-out for Lumen AI. The code folder, GitHub repo and package keep the name `lumen-console`. It joins CRM pipeline, billing and LLM token usage to show margin, health and renewal risk per account.
 
 **Demo company:** Lumen AI, a fictional 40-person AI startup with about $3M ARR and 150 customer accounts. All data is synthetic.
 

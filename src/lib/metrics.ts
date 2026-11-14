@@ -1,4 +1,4 @@
-// Lumen Console business metrics. All business math lives in this file.
+// Cockpit (built for Lumen AI) business metrics. All business math lives in this file.
 //
 // Two layers:
 //   1. Calculators (calc*): pure functions. They take plain rows plus "today"
@@ -24,10 +24,13 @@ export type AccountRow = {
   id: string;
   name: string;
   status: "prospect" | "customer" | "churned";
+  segment: string; // SMB, mid-market, enterprise
   mrr_usd: number;
   included_tokens_monthly: number;
   start_date: string | null;
+  renewal_date: string | null; // next renewal; empty for prospects and churned accounts
   churn_date: string | null;
+  owner: string; // account owner
 };
 
 export type OpportunityRow = {
@@ -120,20 +123,39 @@ function customersOnly(accounts: AccountRow[]): AccountRow[] {
 // 1. ARR
 // ---------------------------------------------------------------------------
 
+export const SEGMENT_ORDER = ["enterprise", "mid-market", "SMB"];
+
+function segmentRank(s: string): number {
+  const i = SEGMENT_ORDER.indexOf(s);
+  return i === -1 ? SEGMENT_ORDER.length : i;
+}
+
 export type ArrResult = {
   totalArr: number;
   customerCount: number;
+  top10Share: number | null; // share of ARR from the 10 largest customers
+  bySegment: { segment: string; customers: number; arr: number; share: number | null }[]; // enterprise, mid-market, SMB
   byAccount: { accountId: string; name: string; mrr: number; arr: number }[]; // largest first
 };
 
-/** ARR per customer = MRR x 12. Total = sum over customers. */
+/** ARR per customer = MRR x 12. Total = sum over customers. Also split by segment. */
 export function calcArr(accounts: AccountRow[]): ArrResult {
-  const byAccount = customersOnly(accounts)
+  const customers = customersOnly(accounts);
+  const byAccount = customers
     .map((a) => ({ accountId: a.id, name: a.name, mrr: a.mrr_usd, arr: a.mrr_usd * 12 }))
     .sort((x, y) => y.arr - x.arr || x.accountId.localeCompare(y.accountId));
+  const totalArr = byAccount.reduce((s, a) => s + a.arr, 0);
+  const top10 = byAccount.slice(0, 10).reduce((s, a) => s + a.arr, 0);
+  const segments = [...new Set(customers.map((a) => a.segment))].sort((x, y) => segmentRank(x) - segmentRank(y));
   return {
-    totalArr: byAccount.reduce((s, a) => s + a.arr, 0),
+    totalArr,
     customerCount: byAccount.length,
+    top10Share: totalArr > 0 ? top10 / totalArr : null,
+    bySegment: segments.map((segment) => {
+      const list = customers.filter((a) => a.segment === segment);
+      const arr = list.reduce((s, a) => s + a.mrr_usd * 12, 0);
+      return { segment, customers: list.length, arr, share: totalArr > 0 ? arr / totalArr : null };
+    }),
     byAccount,
   };
 }
@@ -265,21 +287,30 @@ export function usageWindow(asOf: string): { start: string; end: string } {
 
 type UsageTotals = { inputTokens: number; outputTokens: number; costUsd: number };
 
-function sumUsage30d(usage: UsageRow[], prices: ModelPriceRow[], asOf: string): Map<string, UsageTotals> {
+/** Returns a function that prices one usage row: input/1M x input price + output/1M x output price. */
+function usageCoster(prices: ModelPriceRow[]): (u: UsageRow) => number {
   const priceByModel = new Map(prices.map((p) => [p.model, p]));
+  return (u) => {
+    const price = priceByModel.get(u.model);
+    if (!price) throw new Error(`No price in model_prices for model "${u.model}"`);
+    return (
+      (u.input_tokens / 1_000_000) * price.input_usd_per_million +
+      (u.output_tokens / 1_000_000) * price.output_usd_per_million
+    );
+  };
+}
+
+function sumUsage30d(usage: UsageRow[], prices: ModelPriceRow[], asOf: string): Map<string, UsageTotals> {
+  const cost = usageCoster(prices);
   const { start, end } = usageWindow(asOf);
   const totals = new Map<string, UsageTotals>();
   for (const u of usage) {
     const d = day(u.date);
     if (d < start || d > end) continue;
-    const price = priceByModel.get(u.model);
-    if (!price) throw new Error(`No price in model_prices for model "${u.model}"`);
     const t = totals.get(u.account_id) ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     t.inputTokens += u.input_tokens;
     t.outputTokens += u.output_tokens;
-    t.costUsd +=
-      (u.input_tokens / 1_000_000) * price.input_usd_per_million +
-      (u.output_tokens / 1_000_000) * price.output_usd_per_million;
+    t.costUsd += cost(u);
     totals.set(u.account_id, t);
   }
   return totals;
@@ -359,19 +390,79 @@ export function calcCapacity(accounts: AccountRow[], usage: UsageRow[], prices: 
 
 // 4-6 together: one row per customer with cost, margin and capacity
 
+// Customer lifecycle
+
+export const LIFECYCLE_STAGES = ["Onboarding", "First year", "Established", "Renewal due"] as const;
+export type LifecycleStage = (typeof LIFECYCLE_STAGES)[number];
+export const ONBOARDING_DAYS = 90; // Onboarding = customer for fewer than 90 days
+export const FIRST_YEAR_DAYS = 365; // First year = 90 to 364 days; Established = 365 days or more
+export const RENEWAL_DUE_DAYS = 90; // Renewal due = renewal date within the next 90 days (overrides the rest)
+
+/** Whole months from `from` to `to` (a month counts once the same day of the month is reached). */
+function wholeMonthsBetween(from: string, to: string): number {
+  const a = parseDate(from);
+  const b = parseDate(to);
+  let months = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth());
+  if (b.getUTCDate() < a.getUTCDate()) months -= 1;
+  return Math.max(0, months);
+}
+
+export type Lifecycle = {
+  tenureMonths: number; // whole months since start_date
+  daysToRenewal: number | null;
+  stage: LifecycleStage;
+};
+
+/**
+ * Renewal due: renewal date is today or within the next 90 days (checked first,
+ * because it needs action). Otherwise by time since start: Onboarding under 90
+ * days, First year under 365 days, Established after that.
+ */
+export function calcLifecycle(startDate: string, renewalDate: string | null, asOf: string): Lifecycle {
+  const tenureDays = daysBetween(day(startDate), asOf);
+  const daysToRenewal = renewalDate === null ? null : daysBetween(asOf, day(renewalDate));
+  const stage: LifecycleStage =
+    daysToRenewal !== null && daysToRenewal >= 0 && daysToRenewal <= RENEWAL_DUE_DAYS
+      ? "Renewal due"
+      : tenureDays < ONBOARDING_DAYS
+        ? "Onboarding"
+        : tenureDays < FIRST_YEAR_DAYS
+          ? "First year"
+          : "Established";
+  return { tenureMonths: wholeMonthsBetween(day(startDate), asOf), daysToRenewal, stage };
+}
+
 export type AccountEconomicsRow = TokenCostRow &
   Omit<GrossMarginRow, "accountId" | "name" | "tokenCost30d"> &
-  Omit<CapacityRow, "accountId" | "name">;
+  Omit<CapacityRow, "accountId" | "name"> & {
+    segment: string;
+    owner: string;
+    startDate: string | null;
+    renewalDate: string | null;
+    tenureMonths: number | null;
+    daysToRenewal: number | null;
+    lifecycleStage: LifecycleStage | null;
+  };
 
-/** Joins token cost, gross margin and capacity per customer from one set of rows. */
+/** Joins token cost, gross margin, capacity and lifecycle per customer from one set of rows. */
 export function calcAccountEconomics(accounts: AccountRow[], usage: UsageRow[], prices: ModelPriceRow[], asOf: string): AccountEconomicsRow[] {
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r]));
   const capacity = new Map(calcCapacity(accounts, usage, prices, asOf).map((r) => [r.accountId, r]));
+  const account = new Map(accounts.map((a) => [a.id, a]));
   return calcTokenCost30d(accounts, usage, prices, asOf).map((c) => {
     const m = margin.get(c.accountId)!;
     const k = capacity.get(c.accountId)!;
+    const a = account.get(c.accountId)!;
+    const life = a.start_date ? calcLifecycle(a.start_date, a.renewal_date, asOf) : null;
     return {
       ...c,
+      segment: a.segment,
+      owner: a.owner,
+      startDate: a.start_date,
+      renewalDate: a.renewal_date,
+      tenureMonths: life?.tenureMonths ?? null,
+      daysToRenewal: life?.daysToRenewal ?? null,
+      lifecycleStage: life?.stage ?? null,
       mrr: m.mrr,
       grossMargin: m.grossMargin,
       underwater: m.underwater,
@@ -380,6 +471,167 @@ export function calcAccountEconomics(accounts: AccountRow[], usage: UsageRow[], 
       capacityUsed: k.capacityUsed,
       overage: k.overage,
     };
+  });
+}
+
+// Portfolio totals across all customers
+
+export type PortfolioEconomics = {
+  customerCount: number;
+  totalMrr: number;
+  totalTokenCost30d: number;
+  blendedGrossMargin: number | null; // (total MRR - total token cost) / total MRR
+  underwaterCount: number;
+  negativeMarginCount: number; // token cost above MRR
+  underwaterMrr: number;
+  underwaterMrrShare: number | null; // underwater MRR / total MRR
+  underwaterTokenCostShare: number | null; // underwater token cost / total token cost
+  overageCount: number;
+};
+
+/** Totals over the per-customer economics rows. Blended margin weights each account by its MRR. */
+export function calcPortfolioEconomics(rows: AccountEconomicsRow[]): PortfolioEconomics {
+  const totalMrr = rows.reduce((s, r) => s + r.mrr, 0);
+  const totalTokenCost30d = rows.reduce((s, r) => s + r.tokenCost30d, 0);
+  const underwater = rows.filter((r) => r.underwater);
+  const underwaterMrr = underwater.reduce((s, r) => s + r.mrr, 0);
+  const underwaterCost = underwater.reduce((s, r) => s + r.tokenCost30d, 0);
+  return {
+    customerCount: rows.length,
+    totalMrr,
+    totalTokenCost30d,
+    blendedGrossMargin: totalMrr > 0 ? (totalMrr - totalTokenCost30d) / totalMrr : null,
+    underwaterCount: underwater.length,
+    negativeMarginCount: rows.filter((r) => r.grossMargin !== null && r.grossMargin < 0).length,
+    underwaterMrr,
+    underwaterMrrShare: totalMrr > 0 ? underwaterMrr / totalMrr : null,
+    underwaterTokenCostShare: totalTokenCost30d > 0 ? underwaterCost / totalTokenCost30d : null,
+    overageCount: rows.filter((r) => r.overage).length,
+  };
+}
+
+// Economics by segment
+
+export type SegmentEconomicsRow = {
+  segment: string;
+  customers: number;
+  mrr: number;
+  tokenCost30d: number;
+  grossMargin: number | null; // (segment MRR - segment token cost) / segment MRR
+  underwaterCount: number;
+  overageCount: number;
+};
+
+/** The portfolio totals, one row per segment (enterprise, mid-market, SMB). */
+export function calcEconomicsBySegment(rows: AccountEconomicsRow[]): SegmentEconomicsRow[] {
+  const segments = [...new Set(rows.map((r) => r.segment))].sort((x, y) => segmentRank(x) - segmentRank(y));
+  return segments.map((segment) => {
+    const p = calcPortfolioEconomics(rows.filter((r) => r.segment === segment));
+    return {
+      segment,
+      customers: p.customerCount,
+      mrr: p.totalMrr,
+      tokenCost30d: p.totalTokenCost30d,
+      grossMargin: p.blendedGrossMargin,
+      underwaterCount: p.underwaterCount,
+      overageCount: p.overageCount,
+    };
+  });
+}
+
+// Token cost by model
+
+export type ModelCostRow = { model: string; tokens: number; cost: number; share: number | null };
+
+/** Customers' 30-day token cost and tokens per model, largest cost first. Share = model cost / total. */
+export function calcTokenCostByModel(accounts: AccountRow[], usage: UsageRow[], prices: ModelPriceRow[], asOf: string): ModelCostRow[] {
+  const customerIds = new Set(customersOnly(accounts).map((a) => a.id));
+  const cost = usageCoster(prices);
+  const { start, end } = usageWindow(asOf);
+  const byModel = new Map<string, { tokens: number; cost: number }>();
+  for (const u of usage) {
+    const d = day(u.date);
+    if (d < start || d > end || !customerIds.has(u.account_id)) continue;
+    const m = byModel.get(u.model) ?? { tokens: 0, cost: 0 };
+    m.tokens += u.input_tokens + u.output_tokens;
+    m.cost += cost(u);
+    byModel.set(u.model, m);
+  }
+  const total = [...byModel.values()].reduce((s, m) => s + m.cost, 0);
+  return [...byModel.entries()]
+    .map(([model, m]) => ({ model, tokens: m.tokens, cost: m.cost, share: total > 0 ? m.cost / total : null }))
+    .sort((a, b) => b.cost - a.cost || a.model.localeCompare(b.model));
+}
+
+// Lifecycle mix
+
+export type LifecycleMixRow = { stage: LifecycleStage; customers: number; mrr: number };
+
+/** Customers and MRR per lifecycle stage, in stage order (stages with no customers included as 0). */
+export function calcLifecycleMix(rows: AccountEconomicsRow[]): LifecycleMixRow[] {
+  return LIFECYCLE_STAGES.map((stage) => {
+    const list = rows.filter((r) => r.lifecycleStage === stage);
+    return { stage, customers: list.length, mrr: list.reduce((s, r) => s + r.mrr, 0) };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Monthly revenue vs token cost (whole company)
+// ---------------------------------------------------------------------------
+
+/** Usage history in the database: the 90 days before asOf. */
+export const USAGE_HISTORY_DAYS = 90;
+
+export function usageHistory(asOf: string): { start: string; end: string } {
+  return { start: addDays(asOf, -USAGE_HISTORY_DAYS), end: addDays(asOf, -1) };
+}
+
+/** Calendar months (first day, YYYY-MM-01) that usage history covers from first day to last. */
+export function fullUsageMonths(asOf: string): string[] {
+  const { start, end } = usageHistory(asOf);
+  const months: string[] = [];
+  for (let m = monthStart(start); m <= end; m = addMonths(m, 1)) {
+    const lastDay = addDays(addMonths(m, 1), -1);
+    if (m >= start && lastDay <= end) months.push(m);
+  }
+  return months;
+}
+
+export type MonthlyRevenueCostRow = {
+  month: string; // YYYY-MM-01
+  revenue: number; // sum of invoices for the month
+  tokenCost: number; // priced usage for the month
+  grossMargin: number | null; // (revenue - token cost) / revenue
+};
+
+/**
+ * For each complete month of usage history: revenue = all invoices for that
+ * month; token cost = all usage that month, priced per model. Covers every
+ * account, including churned ones while they were still paying and using.
+ * Partial months are left out so they don't look like a drop in cost.
+ */
+export function calcMonthlyRevenueVsTokenCost(
+  invoices: InvoiceRow[],
+  usage: UsageRow[],
+  prices: ModelPriceRow[],
+  asOf: string,
+): MonthlyRevenueCostRow[] {
+  const months = fullUsageMonths(asOf);
+  const revenue = new Map(months.map((m) => [m, 0]));
+  const tokenCost = new Map(months.map((m) => [m, 0]));
+  const cost = usageCoster(prices);
+  for (const i of invoices) {
+    const m = monthStart(day(i.month));
+    if (revenue.has(m)) revenue.set(m, revenue.get(m)! + i.amount_usd);
+  }
+  for (const u of usage) {
+    const m = monthStart(day(u.date));
+    if (tokenCost.has(m)) tokenCost.set(m, tokenCost.get(m)! + cost(u));
+  }
+  return months.map((month) => {
+    const rev = revenue.get(month)!;
+    const tc = tokenCost.get(month)!;
+    return { month, revenue: rev, tokenCost: tc, grossMargin: rev > 0 ? (rev - tc) / rev : null };
   });
 }
 
@@ -401,6 +653,7 @@ export type NrrResult = {
   downgradedCount: number;
   churnedCount: number;
   nrr: number | null; // null when starting MRR is 0
+  grr: number | null; // gross revenue retention = (starting - downgrades - churned) / starting
 };
 
 /**
@@ -433,7 +686,7 @@ export function calcNrr90d(accounts: AccountRow[], invoices: InvoiceRow[], asOf:
   const r: NrrResult = {
     startDate, startMonth, endMonth,
     accountsInCohort: 0, startingMrr: 0, upgrades: 0, downgrades: 0, churnedMrr: 0, endingMrr: 0,
-    upgradedCount: 0, downgradedCount: 0, churnedCount: 0, nrr: null,
+    upgradedCount: 0, downgradedCount: 0, churnedCount: 0, nrr: null, grr: null,
   };
 
   for (const a of cohort) {
@@ -461,6 +714,7 @@ export function calcNrr90d(accounts: AccountRow[], invoices: InvoiceRow[], asOf:
     }
   }
   r.nrr = r.startingMrr > 0 ? (r.startingMrr + r.upgrades - r.downgrades - r.churnedMrr) / r.startingMrr : null;
+  r.grr = r.startingMrr > 0 ? (r.startingMrr - r.downgrades - r.churnedMrr) / r.startingMrr : null;
   return r;
 }
 
@@ -484,19 +738,40 @@ function db(): SupabaseClient {
 
 type Query = ReturnType<ReturnType<SupabaseClient["from"]>["select"]>;
 
-/** Reads every matching row, 1,000 at a time, in a stable order. */
+const PARALLEL_PAGES = 6; // pages read at the same time after the first
+
+/**
+ * Reads every matching row, 1,000 at a time, in a stable order. The first
+ * page also returns the total row count, so the rest are read in parallel.
+ */
 async function fetchAll(table: string, columns: string, orderBy: string[], filter?: (q: Query) => Query): Promise<Record<string, unknown>[]> {
-  const rows: Record<string, unknown>[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    let q = db().from(table).select(columns) as unknown as Query;
+  const readPage = async (from: number, withCount: boolean) => {
+    let q = db().from(table).select(columns, withCount ? { count: "exact" } : undefined) as unknown as Query;
     if (filter) q = filter(q);
     for (const col of orderBy) q = q.order(col, { ascending: true });
-    const { data, error } = await q.range(from, from + PAGE_SIZE - 1);
+    const { data, error, count } = await q.range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(`Reading ${table} failed: ${error.message}`);
-    const page = (data ?? []) as unknown as Record<string, unknown>[];
-    rows.push(...page);
-    if (page.length < PAGE_SIZE) return rows;
-  }
+    return { rows: (data ?? []) as unknown as Record<string, unknown>[], count };
+  };
+
+  const first = await readPage(0, true);
+  if (first.rows.length < PAGE_SIZE) return first.rows;
+  if (first.count === null || first.count === undefined) throw new Error(`Reading ${table} failed: no row count returned`);
+
+  const starts: number[] = [];
+  for (let from = PAGE_SIZE; from < first.count; from += PAGE_SIZE) starts.push(from);
+  const pages: Record<string, unknown>[][] = new Array(starts.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < starts.length) {
+      const k = next++;
+      pages[k] = (await readPage(starts[k], false)).rows;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PARALLEL_PAGES, starts.length) }, worker));
+  const rows = [first.rows, ...pages].flat();
+  if (rows.length !== first.count) throw new Error(`Reading ${table} failed: expected ${first.count} rows, got ${rows.length}`);
+  return rows;
 }
 
 const num = (v: unknown): number => Number(v ?? 0);
@@ -504,15 +779,23 @@ const str = (v: unknown): string => String(v);
 const strOrNull = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
 
 async function loadAccounts(filter?: (q: Query) => Query): Promise<AccountRow[]> {
-  const rows = await fetchAll("accounts", "id, name, status, mrr_usd, included_tokens_monthly, start_date, churn_date", ["id"], filter);
+  const rows = await fetchAll(
+    "accounts",
+    "id, name, status, segment, mrr_usd, included_tokens_monthly, start_date, renewal_date, churn_date, owner",
+    ["id"],
+    filter,
+  );
   return rows.map((r) => ({
     id: str(r.id),
     name: str(r.name),
     status: str(r.status) as AccountRow["status"],
+    segment: str(r.segment),
     mrr_usd: num(r.mrr_usd),
     included_tokens_monthly: num(r.included_tokens_monthly),
     start_date: strOrNull(r.start_date),
+    renewal_date: strOrNull(r.renewal_date),
     churn_date: strOrNull(r.churn_date),
+    owner: str(r.owner),
   }));
 }
 
@@ -537,8 +820,10 @@ async function loadOpportunities(filter?: (q: Query) => Query): Promise<Opportun
   }));
 }
 
-async function loadUsageAndPrices(asOf: string): Promise<{ usage: UsageRow[]; prices: ModelPriceRow[] }> {
-  const { start, end } = usageWindow(asOf);
+async function loadUsageAndPrices(asOf: string, from?: string): Promise<{ usage: UsageRow[]; prices: ModelPriceRow[] }> {
+  const window = usageWindow(asOf);
+  const start = from && from < window.start ? from : window.start;
+  const end = window.end;
   const [usageRows, priceRows] = await Promise.all([
     fetchAll("usage_daily", "account_id, date, feature, model, input_tokens, output_tokens", ["account_id", "date", "feature", "model"], (q) =>
       q.gte("date", start).lte("date", end),
@@ -598,12 +883,57 @@ export async function getAccountEconomics(asOf: string = AS_OF_DATE): Promise<Ac
   return calcAccountEconomics(accounts, usage, prices, asOf);
 }
 
+async function loadInvoices(upToMonth: string): Promise<InvoiceRow[]> {
+  const rows = await fetchAll("invoices", "account_id, month, amount_usd", ["account_id", "month"], (q) => q.lte("month", upToMonth));
+  return rows.map((r) => ({ account_id: str(r.account_id), month: str(r.month), amount_usd: num(r.amount_usd) }));
+}
+
 export async function getNrr90d(asOf: string = AS_OF_DATE): Promise<NrrResult> {
-  const endMonth = monthStart(asOf);
-  const [accounts, invoiceRows] = await Promise.all([
-    loadAccounts((q) => q.neq("status", "prospect")),
-    fetchAll("invoices", "account_id, month, amount_usd", ["account_id", "month"], (q) => q.lte("month", endMonth)),
-  ]);
-  const invoices = invoiceRows.map((r) => ({ account_id: str(r.account_id), month: str(r.month), amount_usd: num(r.amount_usd) }));
+  const [accounts, invoices] = await Promise.all([loadAccounts((q) => q.neq("status", "prospect")), loadInvoices(monthStart(asOf))]);
   return calcNrr90d(accounts, invoices, asOf);
+}
+
+export async function getMonthlyRevenueVsTokenCost(asOf: string = AS_OF_DATE): Promise<MonthlyRevenueCostRow[]> {
+  const months = fullUsageMonths(asOf);
+  const [invoices, { usage, prices }] = await Promise.all([loadInvoices(monthStart(asOf)), loadUsageAndPrices(asOf, months[0])]);
+  return calcMonthlyRevenueVsTokenCost(invoices, usage, prices, asOf);
+}
+
+export type HomePageData = {
+  asOf: string;
+  arr: ArrResult;
+  pipeline: PipelineResult;
+  winRate: WinRateResult;
+  accounts: AccountEconomicsRow[];
+  portfolio: PortfolioEconomics;
+  bySegment: SegmentEconomicsRow[];
+  tokenCostByModel: ModelCostRow[];
+  lifecycleMix: LifecycleMixRow[];
+  monthly: MonthlyRevenueCostRow[];
+  nrr: NrrResult;
+};
+
+/** Everything the home page shows. Reads each table once, then runs the calculators. */
+export async function getHomePageData(asOf: string = AS_OF_DATE): Promise<HomePageData> {
+  const months = fullUsageMonths(asOf);
+  const [accounts, opportunities, invoices, { usage, prices }] = await Promise.all([
+    loadAccounts(),
+    loadOpportunities(),
+    loadInvoices(monthStart(asOf)),
+    loadUsageAndPrices(asOf, months[0]),
+  ]);
+  const economics = calcAccountEconomics(accounts, usage, prices, asOf);
+  return {
+    asOf,
+    arr: calcArr(accounts),
+    pipeline: calcPipeline(opportunities),
+    winRate: calcWinRateAndCycle(opportunities, asOf),
+    accounts: economics,
+    portfolio: calcPortfolioEconomics(economics),
+    bySegment: calcEconomicsBySegment(economics),
+    tokenCostByModel: calcTokenCostByModel(accounts, usage, prices, asOf),
+    lifecycleMix: calcLifecycleMix(economics),
+    monthly: calcMonthlyRevenueVsTokenCost(invoices, usage, prices, asOf),
+    nrr: calcNrr90d(accounts, invoices, asOf),
+  };
 }

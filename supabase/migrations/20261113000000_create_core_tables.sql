@@ -1,4 +1,4 @@
--- Lumen Console: core data model (11 tables).
+-- Cockpit (built for Lumen AI): core data model (11 tables).
 -- Table and column names follow the project's Data model reference exactly.
 -- Row Level Security is on for every table. No access policies are added, so
 -- the public (anon) key can read nothing; server-side code uses the service

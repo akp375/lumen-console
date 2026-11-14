@@ -1,4 +1,6 @@
-# Build Log: Lumen Console
+# Build Log: Cockpit (built for Lumen AI)
+
+> The app was called "Lumen Console" until 2026-11-14, when it was renamed **Cockpit** so it is not confused with the client, Lumen AI. Older entries below keep the old name as history. The code folder, GitHub repo and package are still named `lumen-console`.
 
 ## 2026-11-13 (Friday)
 

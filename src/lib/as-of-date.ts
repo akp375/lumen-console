@@ -1,4 +1,4 @@
-// The single "today" for Lumen Console.
+// The single "today" for Cockpit, the RevOps app built for Lumen AI.
 //
 // The demo data is synthetic and built around this date, so the app treats it
 // as today instead of reading the real clock. That keeps every number stable.

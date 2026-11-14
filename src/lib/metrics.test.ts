@@ -17,6 +17,13 @@ import {
   calcGrossMargin,
   calcCapacity,
   calcAccountEconomics,
+  calcPortfolioEconomics,
+  calcEconomicsBySegment,
+  calcTokenCostByModel,
+  calcLifecycle,
+  calcLifecycleMix,
+  calcMonthlyRevenueVsTokenCost,
+  fullUsageMonths,
   calcNrr90d,
   usageWindow,
   type AccountRow,
@@ -39,10 +46,13 @@ function close(actual: number | null, expected: number, label = "") {
 
 const acc = (a: Partial<AccountRow> & Pick<AccountRow, "id" | "status">): AccountRow => ({
   name: a.id,
+  segment: "SMB",
   mrr_usd: 0,
   included_tokens_monthly: 0,
   start_date: null,
+  renewal_date: null,
   churn_date: null,
+  owner: "Owner",
   ...a,
 });
 
@@ -326,6 +336,127 @@ test("Account economics: one row per customer with cost, margin and capacity", (
   });
 });
 
+test("Account economics: carries each customer's segment", () => {
+  const withSegments = ACCOUNTS.map((a) => (a.id === "A1" ? { ...a, segment: "enterprise" } : a));
+  const r = calcAccountEconomics(withSegments, USAGE, PRICES, TODAY);
+  assert.deepEqual(r.map((x) => [x.accountId, x.segment]), [["A1", "enterprise"], ["A2", "SMB"], ["A3", "SMB"]]);
+});
+
+test("Portfolio economics: totals and blended margin across customers", () => {
+  const p = calcPortfolioEconomics(calcAccountEconomics(ACCOUNTS, USAGE, PRICES, TODAY));
+  assert.equal(p.customerCount, 3);
+  assert.equal(p.totalMrr, 1_700); // 1,000 + 500 + 200
+  close(p.totalTokenCost30d, 564, "total cost"); // 24 + 400 + 140
+  close(p.blendedGrossMargin, 1_136 / 1_700, "blended margin"); // (1,700 - 564) / 1,700 = 66.8%
+  assert.equal(p.underwaterCount, 1); // A2
+  assert.equal(p.overageCount, 1); // A2
+});
+
+// A1 enterprise; A2 and A3 SMB. A2 renews 2027-01-15 (63 days away).
+const SEGMENTED = ACCOUNTS.map((a) =>
+  a.id === "A1" ? { ...a, segment: "enterprise" } : a.id === "A2" ? { ...a, renewal_date: "2027-01-15" } : a,
+);
+
+test("ARR: split by segment, and the top-10 share", () => {
+  const r = calcArr(SEGMENTED);
+  assert.deepEqual(
+    r.bySegment.map((s) => [s.segment, s.customers, s.arr]),
+    [["enterprise", 1, 12_000], ["SMB", 2, 8_400]], // SMB: 6,000 + 2,400
+  );
+  close(r.bySegment[0].share, 12_000 / 20_400, "enterprise share"); // 58.8%
+  close(r.top10Share, 1, "top 10"); // only 3 customers, so all ARR
+});
+
+test("Portfolio economics: how much underwater accounts weigh", () => {
+  const p = calcPortfolioEconomics(calcAccountEconomics(ACCOUNTS, USAGE, PRICES, TODAY));
+  assert.equal(p.underwaterMrr, 500); // A2
+  close(p.underwaterMrrShare, 500 / 1_700, "MRR share"); // 29.4%
+  close(p.underwaterTokenCostShare, 400 / 564, "cost share"); // 70.9%
+  assert.equal(p.negativeMarginCount, 0); // A2 is at +20%
+});
+
+test("Economics by segment: MRR, token cost and margin per segment", () => {
+  const r = calcEconomicsBySegment(calcAccountEconomics(SEGMENTED, USAGE, PRICES, TODAY));
+  assert.deepEqual(r.map((s) => [s.segment, s.customers, s.mrr, s.underwaterCount, s.overageCount]), [
+    ["enterprise", 1, 1_000, 0, 0],
+    ["SMB", 2, 700, 1, 1], // A2 is both
+  ]);
+  close(r[0].tokenCost30d, 24, "enterprise cost");
+  close(r[0].grossMargin, 0.976, "enterprise margin"); // (1,000 - 24) / 1,000
+  close(r[1].tokenCost30d, 540, "SMB cost"); // 400 + 140
+  close(r[1].grossMargin, 160 / 700, "SMB margin"); // (700 - 540) / 700 = 22.9%
+});
+
+test("Token cost by model: customers only, last 30 days, largest first", () => {
+  const r = calcTokenCostByModel(ACCOUNTS, USAGE, PRICES, TODAY);
+  assert.deepEqual(r.map((m) => [m.model, m.tokens]), [
+    ["big", 25_200_000], // A1 1.2M + A2 24M (C1 is churned, days outside the window ignored)
+    ["small", 110_400_000], // A1 2.4M + A3 108M
+  ]);
+  close(r[0].cost, 420, "big cost"); // A1 20 + A2 400
+  close(r[1].cost, 144, "small cost"); // A1 4 + A3 140
+  close(r[0].share, 420 / 564, "big share"); // 74.5%
+});
+
+test("Lifecycle stage: boundaries", () => {
+  const stage = (start: string, renewal: string | null) => calcLifecycle(start, renewal, TODAY).stage;
+  assert.equal(stage("2026-09-01", "2027-09-01"), "Onboarding"); // 73 days in
+  assert.equal(stage("2026-08-15", "2027-08-15"), "First year"); // exactly 90 days in
+  assert.equal(stage("2025-11-14", "2026-11-14"), "Renewal due"); // renews tomorrow
+  assert.equal(stage("2025-11-13", "2027-11-13"), "Established"); // exactly 365 days in
+  assert.equal(stage("2024-06-01", "2027-02-11"), "Renewal due"); // renewal exactly 90 days away
+  assert.equal(stage("2024-06-01", "2027-02-12"), "Established"); // 91 days away: not due yet
+  assert.equal(stage("2026-01-01", "2027-01-01"), "Renewal due"); // first year, but renewal due wins
+});
+
+test("Lifecycle: tenure in whole months and days to renewal", () => {
+  assert.equal(calcLifecycle("2025-01-10", null, TODAY).tenureMonths, 22); // Jan 2025 -> Nov 2026
+  assert.equal(calcLifecycle("2026-09-14", null, TODAY).tenureMonths, 1); // 14 Nov not reached yet
+  assert.equal(calcLifecycle("2026-09-14", "2027-01-15", TODAY).daysToRenewal, 63);
+});
+
+test("Lifecycle mix: customers and MRR per stage, all stages listed", () => {
+  const r = calcLifecycleMix(calcAccountEconomics(SEGMENTED, USAGE, PRICES, TODAY));
+  // A3 started 2026-10-01 (Onboarding); A1 started 2025 (Established); A2 renews in 63 days (Renewal due)
+  assert.deepEqual(r.map((s) => [s.stage, s.customers, s.mrr]), [
+    ["Onboarding", 1, 200],
+    ["First year", 0, 0],
+    ["Established", 1, 1_000],
+    ["Renewal due", 1, 500],
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// Monthly revenue vs token cost
+// ---------------------------------------------------------------------------
+
+test("Monthly chart: only months the 90-day usage history fully covers", () => {
+  // History runs 2026-08-15 to 2026-11-12: August and November are partial.
+  assert.deepEqual(fullUsageMonths(TODAY), ["2026-09-01", "2026-10-01"]);
+});
+
+test("Monthly chart: invoices vs priced usage, all accounts, complete months only", () => {
+  const invoices: InvoiceRow[] = [
+    { account_id: "X", month: "2026-08-01", amount_usd: 900 }, // partial month: left out
+    { account_id: "X", month: "2026-09-01", amount_usd: 1_000 },
+    { account_id: "Y", month: "2026-09-01", amount_usd: 500 }, // churned later, still counts while paying
+    { account_id: "X", month: "2026-10-01", amount_usd: 1_000 },
+  ];
+  const usage: UsageRow[] = [
+    usageRow("X", "2026-08-20", "big", 50_000_000, 0), // partial month: left out
+    usageRow("X", "2026-09-10", "big", 10_000_000, 0), // 10M x $10 = $100
+    usageRow("X", "2026-10-05", "small", 100_000_000, 20_000_000), // 100M x $1 + 20M x $5 = $200
+    usageRow("X", "2026-11-01", "big", 50_000_000, 0), // partial month: left out
+  ];
+  const r = calcMonthlyRevenueVsTokenCost(invoices, usage, PRICES, TODAY);
+  assert.deepEqual(r.map((x) => [x.month, x.revenue, x.tokenCost]), [
+    ["2026-09-01", 1_500, 100],
+    ["2026-10-01", 1_000, 200],
+  ]);
+  close(r[0].grossMargin, 1_400 / 1_500, "Sep margin"); // 93.3%
+  close(r[1].grossMargin, 0.8, "Oct margin"); // (1,000 - 200) / 1,000
+});
+
 // ---------------------------------------------------------------------------
 // 7. NRR
 // ---------------------------------------------------------------------------
@@ -344,6 +475,7 @@ test("NRR: August -> November for accounts that were customers 90 days ago", () 
   assert.equal(r.endingMrr, 1_500); // 1,000 + 500 + 0
   assert.deepEqual([r.upgradedCount, r.downgradedCount, r.churnedCount], [1, 1, 1]);
   close(r.nrr, 15 / 17, "NRR"); // (1,700 + 200 - 100 - 300) / 1,700 = 88.2%
+  close(r.grr, 13 / 17, "GRR"); // (1,700 - 100 - 300) / 1,700 = 76.5%
 });
 
 test("NRR: a customer that churned in late August uses its last invoice as starting MRR", () => {
