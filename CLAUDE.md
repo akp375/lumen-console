@@ -37,7 +37,10 @@ Next.js App Router, TypeScript, Tailwind, Recharts, Supabase Postgres, Anthropic
 
 ## Build rules
 
-- All business math lives in `lib/metrics.ts`. Nothing else recomputes it.
+- All business math lives in `lib/metrics.ts` (in this project: `src/lib/metrics.ts`). Nothing else recomputes it.
+- "Today" is the as-of date in `src/lib/as-of-date.ts` (`AS_OF_DATE`). `lib/metrics.ts`, and anything else that needs today's date for a metric, uses it instead of the real clock (`new Date()`, `Date.now()`, or `now()` / `current_date` in SQL), so the numbers never drift. To move all data forward, change that one value and re-run `npm run seed`.
+- Customer metrics (ARR, margin, health, renewals) count accounts with status `customer` only, unless a metric specifically needs churned accounts, such as NRR. Prospects never count toward customer metrics.
+- Pipeline metrics count open opportunities only: stages Discovery, Demo, Proposal and Negotiation. Closed Won and Closed Lost are excluded.
 - Use CRM-standard names (accounts, opportunities, stages, renewal dates) that map cleanly to HubSpot or Salesforce.
 - Every Claude API call goes through one wrapper that logs model, tokens, cost and latency to the `llm_calls` table.
 - API keys are used server-side only. No secret ever uses the `NEXT_PUBLIC_` prefix.
