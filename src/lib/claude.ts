@@ -33,7 +33,12 @@ async function logCall(row: { feature: string; model: string; input_tokens: numb
 export type CallClaudeInput = {
   feature: string; // e.g. "renewal_risk"; stored in llm_calls.feature
   system: string;
-  prompt: string;
+  /** A single question. Use either prompt or messages. */
+  prompt?: string;
+  /** A whole conversation (user/assistant turns, ending with the user), for chat. */
+  messages?: Anthropic.Beta.BetaMessageParam[];
+  /** Cache the system prompt (worth it when a large, unchanging prompt is resent, e.g. chat). */
+  cacheSystem?: boolean;
   /** Optional JSON Schema: Claude's reply is constrained to it and returned parsed. */
   jsonSchema?: Record<string, unknown>;
   maxTokens?: number;
@@ -58,8 +63,8 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
     // If Claude declines on safety grounds, the API retries on a fallback model in the same call.
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
-    system: input.system,
-    messages: [{ role: "user", content: input.prompt }],
+    system: input.cacheSystem ? [{ type: "text", text: input.system, cache_control: { type: "ephemeral" } }] : input.system,
+    messages: input.messages ?? [{ role: "user", content: input.prompt ?? "" }],
     output_config: {
       effort: input.effort ?? "low",
       ...(input.jsonSchema ? { format: { type: "json_schema" as const, schema: input.jsonSchema } } : {}),
@@ -67,10 +72,14 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
   });
   const latencyMs = Math.round(performance.now() - started);
 
-  const inputTokens = response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
+  const cacheRead = response.usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = response.usage.cache_creation_input_tokens ?? 0;
+  const inputTokens = response.usage.input_tokens + cacheRead + cacheWrite;
   const outputTokens = response.usage.output_tokens;
   const price = PRICE_PER_MILLION[response.model] ?? PRICE_PER_MILLION[DEFAULT_MODEL];
-  const costUsd = (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
+  // Cached input is billed at 0.1x when read and 1.25x when first written.
+  const costUsd =
+    ((response.usage.input_tokens + cacheRead * 0.1 + cacheWrite * 1.25) * price.input + outputTokens * price.output) / 1_000_000;
 
   await logCall({ feature: input.feature, model: response.model, input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, latency_ms: latencyMs });
 

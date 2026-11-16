@@ -1273,17 +1273,14 @@ export async function getUpcomingDeals(asOf: string = AS_OF_DATE): Promise<Upcom
   return calcUpcomingDeals(opportunities, accounts, asOf);
 }
 
-export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskResult> {
-  const [accounts, rows] = await Promise.all([
-    loadAccounts(),
-    fetchAll(
+async function loadOpenDealsWithRiskFields(): Promise<DealRiskInput[]> {
+  const rows = await fetchAll(
       "opportunities",
       "id, account_id, type, source, stage, forecast_category, amount_usd, probability, created_date, close_date, executive_sponsor, stage_entered_date, last_activity_date, next_step",
       ["id"],
-      (q) => q.in("stage", [...OPEN_STAGES]),
-    ),
-  ]);
-  const opportunities: DealRiskInput[] = rows.map((r) => ({
+    (q) => q.in("stage", [...OPEN_STAGES]),
+  );
+  return rows.map((r) => ({
     id: str(r.id),
     account_id: str(r.account_id),
     type: str(r.type),
@@ -1299,7 +1296,118 @@ export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskRe
     last_activity_date: strOrNull(r.last_activity_date),
     next_step: strOrNull(r.next_step),
   }));
+}
+
+export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskResult> {
+  const [accounts, opportunities] = await Promise.all([loadAccounts(), loadOpenDealsWithRiskFields()]);
   return calcDealRisk(opportunities, accounts, asOf);
+}
+
+// ---------------------------------------------------------------------------
+// Workspace snapshot: one compact bundle of the numbers above, sent to Claude
+// as the only data the Workspace analyst may answer from. Numbers are rounded
+// for size; nothing new is calculated here.
+// ---------------------------------------------------------------------------
+
+const r0 = (n: number) => Math.round(n);
+const r3 = (n: number | null) => (n === null ? null : Math.round(n * 1000) / 1000);
+
+export async function getWorkspaceSnapshot(asOf: string = AS_OF_DATE) {
+  const [home, renewalRisk, openDeals, nps, upcomingRenewals, upcomingDeals] = await Promise.all([
+    getHomePageData(asOf),
+    getRenewalRisk(asOf),
+    loadOpenDealsWithRiskFields(),
+    getNpsTrend(asOf),
+    getUpcomingRenewals(asOf),
+    getUpcomingDeals(asOf),
+  ]);
+  const accounts = await loadAccounts();
+  const dealRisk = calcDealRisk(openDeals, accounts, asOf);
+  const npsById = new Map(nps.map((n) => [n.accountId, n]));
+  const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
+  const usage = new Map(renewalRisk.rows.map((r) => [r.accountId, r.usageChange]));
+
+  return {
+    as_of_date: asOf,
+    notes: {
+      money: "USD. ARR = MRR x 12. Token cost and gross margin are for the last 30 days.",
+      gross_margin: "(MRR - 30-day token cost) / MRR. Underwater = margin below 30%. Overage = 30-day tokens above included monthly tokens.",
+      quarters: "Calendar quarters. this_quarter = " + upcomingRenewals[0].quarter.label + ", next_quarter = " + upcomingRenewals[1].quarter.label + ".",
+      renewal_risk_rule: RENEWAL_RISK_RULES,
+      deal_risk_rule: DEAL_RISK_RULES,
+    },
+    kpis: {
+      arr: r0(home.arr.totalArr),
+      customers: home.arr.customerCount,
+      top10_arr_share: r3(home.arr.top10Share),
+      arr_by_segment: home.arr.bySegment.map((x) => ({ segment: x.segment, arr: r0(x.arr), customers: x.customers })),
+      open_pipeline: { value: r0(home.pipeline.total.value), weighted: r0(home.pipeline.total.weightedValue), deals: home.pipeline.total.count },
+      pipeline_by_stage: home.pipeline.byStage.map((x) => ({ stage: x.key, value: r0(x.value), deals: x.count })),
+      win_rate_last_6_months: { overall: r3(home.winRate.winRate), won: home.winRate.won, lost: home.winRate.lost, by_type: home.winRate.byType.map((t) => ({ type: t.type, win_rate: r3(t.winRate), won: t.won, lost: t.lost })) },
+      avg_sales_cycle_days: home.winRate.avgSalesCycleDays === null ? null : r0(home.winRate.avgSalesCycleDays),
+      token_cost_30d: r0(home.portfolio.totalTokenCost30d),
+      blended_gross_margin: r3(home.portfolio.blendedGrossMargin),
+      underwater_accounts: home.portfolio.underwaterCount,
+      overage_accounts: home.portfolio.overageCount,
+      margin_by_segment: home.bySegment.map((x) => ({ segment: x.segment, gross_margin: r3(x.grossMargin), customers: x.customers, underwater: x.underwaterCount })),
+      token_cost_by_model_30d: home.tokenCostByModel.map((m) => ({ model: m.model, cost: r0(m.cost), share: r3(m.share) })),
+      nrr_last_90_days: {
+        nrr: r3(home.nrr.nrr),
+        grr: r3(home.nrr.grr),
+        starting_mrr: r0(home.nrr.startingMrr),
+        upgrades: r0(home.nrr.upgrades),
+        upgraded_accounts: home.nrr.upgradedCount,
+        downgrades: r0(home.nrr.downgrades),
+        downgraded_accounts: home.nrr.downgradedCount,
+        churned_mrr: r0(home.nrr.churnedMrr),
+        churned_accounts: home.nrr.churnedCount,
+      },
+      monthly_revenue_vs_token_cost: home.monthly.map((m) => ({ month: m.month, revenue: r0(m.revenue), token_cost: r0(m.tokenCost), gross_margin: r3(m.grossMargin) })),
+    },
+    customer_accounts: home.accounts.map((a) => ({
+      id: a.accountId,
+      name: a.name,
+      segment: a.segment,
+      owner: a.owner,
+      customer_since: a.startDate,
+      lifecycle: a.lifecycleStage,
+      renewal_date: a.renewalDate,
+      mrr: r0(a.mrr),
+      token_cost_30d: r0(a.tokenCost30d),
+      gross_margin: r3(a.grossMargin),
+      capacity_used: r3(a.capacityUsed),
+      underwater: a.underwater,
+      overage: a.overage,
+      latest_nps: npsById.get(a.accountId)?.latestNps ?? null,
+      nps_change: npsById.get(a.accountId)?.npsChange ?? null,
+      usage_change_30d: r3(usage.get(a.accountId) ?? null),
+    })),
+    renewals_by_quarter: upcomingRenewals.map((q) => ({ quarter: q.quarter.label, renewals: q.count, arr: r0(q.totalArr) })),
+    renewal_risk_flags: {
+      window_days: RENEWAL_RISK_RULES.renewalWithinDays,
+      at_risk_arr: r0(renewalRisk.atRiskArr),
+      renewing_accounts: renewalRisk.renewingCount,
+      flagged: renewalRisk.rows.map((r) => ({ id: r.accountId, name: r.name, arr: r0(r.arr), renewal_date: r.renewalDate, days_to_renewal: r.daysToRenewal, latest_nps: r.latestNps, nps_change: r.npsChange, usage_change_30d: r3(r.usageChange), gross_margin: r3(r.grossMargin), signals: r.signals })),
+    },
+    deals_by_quarter: upcomingDeals.map((q) => ({ quarter: q.quarter.label, open_deals: q.count, value: r0(q.totalAmount), weighted: r0(q.weightedAmount) })),
+    open_deals: openDeals.map((o) => ({
+      id: o.id,
+      account: nameOf.get(o.account_id) ?? o.account_id,
+      type: o.type,
+      stage: o.stage,
+      amount: r0(o.amount_usd),
+      probability: o.probability,
+      close_date: o.close_date,
+      stage_entered: o.stage_entered_date,
+      last_activity: o.last_activity_date,
+      executive_sponsor: o.executive_sponsor,
+      next_step: o.next_step,
+    })),
+    deal_risk_flags: {
+      at_risk_pipeline: r0(dealRisk.atRiskPipeline),
+      flagged: dealRisk.rows.map((d) => ({ id: d.opportunityId, account: d.accountName, amount: r0(d.amount), stage: d.stage, days_in_stage: d.daysInStage, days_since_activity: d.daysSinceActivity, signals: d.signals })),
+    },
+  };
 }
 
 export async function getMonthlyRevenueVsTokenCost(asOf: string = AS_OF_DATE): Promise<MonthlyRevenueCostRow[]> {

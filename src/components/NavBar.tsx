@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/", label: "Overview" },
   { href: "/renewals", label: "Renewals" },
   { href: "/deal-risk", label: "Deal risk" },
+  { href: "/workspace", label: "Workspace" },
 ];
 
 export function NavBar() {
