@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 // Banner date is display text only, set by the owner. The app's calculations use AS_OF_DATE (src/lib/as-of-date.ts).
 import { NavBar } from "@/components/NavBar";
+import { PAGES, PRODUCT_NAME, tabTitle } from "@/lib/pages";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,8 +16,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cockpit · Lumen AI",
-  description: "Cockpit: the RevOps app built for Lumen AI. Revenue, pipeline, AI cost and account health.",
+  // Pages set their own title ("Deal Risk · Cockpit"); this is the Overview page and the fallback.
+  title: tabTitle(PAGES.overview.title),
+  description: `${PRODUCT_NAME}: the RevOps app built for Lumen AI. Revenue, pipeline, AI cost and account health.`,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

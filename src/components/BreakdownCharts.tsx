@@ -108,7 +108,7 @@ export function TokenCostByModelChart({ rows, total }: { rows: ModelCostRow[]; t
     label: modelLabel(r.model),
     value: r.cost,
     color: MODEL_COLORS[r.model] ?? OTHER_COLOR,
-    detail: `${usd(r.cost)} · ${pct(r.share, 0)}`,
+    detail: `${usd(r.cost)} · ${pct(r.share)}`,
   }));
   return <Donut slices={slices} centerValue={usdCompact(total)} centerLabel="30-day cost" format={usd} />;
 }

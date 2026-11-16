@@ -2,9 +2,14 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Markdown } from "./Markdown";
+import { PageHeader } from "./PageHeader";
+import { Spinner } from "./Spinner";
+import { PAGES } from "@/lib/pages";
+import { HISTORY_MESSAGES, MAX_QUESTION_CHARS, TIMEOUT_MS } from "@/lib/workspace-limits";
 
 // Chat for the Workspace page. The conversation lives in this page's memory
-// only (no database); the full history is sent with every question.
+// only (no database). Each question is sent with the last HISTORY_MESSAGES
+// messages so follow-ups work without resending the whole chat.
 
 type Message = { role: "user" | "assistant"; content: string; costUsd?: number; latencyMs?: number; error?: boolean };
 
@@ -21,6 +26,7 @@ export function WorkspaceChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [waiting, setWaiting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null); // a guardrail was hit: shown above the input, not as an error
   const chatId = useRef(0); // bumps on "New chat" so a late answer from the old chat is dropped
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -31,25 +37,42 @@ export function WorkspaceChat() {
   const send = async (question: string) => {
     const text = question.trim();
     if (!text || waiting) return;
+    if (text.length > MAX_QUESTION_CHARS) {
+      setNotice(`Questions are limited to ${MAX_QUESTION_CHARS.toLocaleString("en-US")} characters. Please shorten yours.`);
+      return;
+    }
     const id = chatId.current;
+    setNotice(null);
     // Only successful turns go to the server; a failed answer and its question are left out.
     const history: Message[] = [];
     for (let k = 0; k < messages.length; k++) {
       const m = messages[k];
       if (m.role === "user" && messages[k + 1] && !messages[k + 1].error) history.push(m, messages[k + 1]);
     }
+    const recent = history.slice(-HISTORY_MESSAGES);
     const next: Message[] = [...messages, { role: "user", content: text }];
+    // A limit notice puts the question back in the box and drops it from the chat.
+    const showNotice = (message: string) => {
+      setMessages(messages);
+      setDraft(text);
+      setNotice(message);
+    };
     setMessages(next);
     setDraft("");
     setWaiting(true);
+    // Safety net in case the server never answers; the server stops Claude at TIMEOUT_MS itself.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), TIMEOUT_MS + 10_000);
     try {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...history, { role: "user", content: text }].map(({ role, content }) => ({ role, content })) }),
+        body: JSON.stringify({ messages: [...recent, { role: "user", content: text }].map(({ role, content }) => ({ role, content })) }),
+        signal: abort.signal,
       });
-      const data = (await res.json()) as { text?: string; costUsd?: number; latencyMs?: number; error?: string };
+      const data = (await res.json()) as { text?: string; costUsd?: number; latencyMs?: number; error?: string; notice?: string };
       if (id !== chatId.current) return;
+      if (data.notice) return showNotice(data.notice);
       setMessages([
         ...next,
         res.ok && data.text
@@ -58,8 +81,10 @@ export function WorkspaceChat() {
       ]);
     } catch (e) {
       if (id !== chatId.current) return;
+      if (abort.signal.aborted) return showNotice("That took too long, so it was stopped. Try a shorter or more specific question.");
       setMessages([...next, { role: "assistant", content: e instanceof Error ? e.message : "Network error.", error: true }]);
     } finally {
+      clearTimeout(timer);
       if (id === chatId.current) setWaiting(false);
     }
   };
@@ -68,6 +93,7 @@ export function WorkspaceChat() {
     chatId.current++;
     setMessages([]);
     setDraft("");
+    setNotice(null);
     setWaiting(false);
   };
 
@@ -84,22 +110,25 @@ export function WorkspaceChat() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Workspace</h1>
-        <button
-          type="button"
-          onClick={newChat}
-          disabled={messages.length === 0 && !draft}
-          className="rounded-md border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        >
-          New chat
-        </button>
-      </div>
+      <PageHeader
+        title={PAGES.workspace.title}
+        description={PAGES.workspace.description}
+        actions={
+          <button
+            type="button"
+            onClick={newChat}
+            disabled={messages.length === 0 && !draft}
+            className="rounded-md border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            New chat
+          </button>
+        }
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950" aria-live="polite">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">Ask about Lumen AI&apos;s revenue, renewals, pipeline and margins.</p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">Try one of these to start:</p>
             <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
               {STARTERS.map((q) => (
                 <button
@@ -145,7 +174,8 @@ export function WorkspaceChat() {
             )}
             {waiting && (
               <div className="flex justify-start">
-                <div className="animate-pulse rounded-2xl rounded-bl-sm bg-zinc-100 px-4 py-2 text-sm text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                <div className="inline-flex items-center gap-2 rounded-2xl rounded-bl-sm bg-zinc-100 px-4 py-2 text-sm text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                  <Spinner className="h-3.5 w-3.5" />
                   Thinking...
                 </div>
               </div>
@@ -155,22 +185,40 @@ export function WorkspaceChat() {
         <div ref={bottom} />
       </div>
 
+      {notice && (
+        <div role="status" className="mt-3 flex items-start justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notice" className="shrink-0 text-amber-700 hover:text-amber-900 dark:text-amber-300">
+            ✕
+          </button>
+        </div>
+      )}
+
       <form onSubmit={onSubmit} className="mt-3 flex items-end gap-2">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={2}
-          maxLength={4000}
-          placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
-          aria-label="Your question"
-          className="min-h-[3rem] flex-1 resize-none rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-        />
+        <div className="relative flex-1">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={2}
+            maxLength={MAX_QUESTION_CHARS}
+            placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
+            aria-label="Your question"
+            className="block min-h-[3rem] w-full resize-none rounded-lg border border-zinc-300 bg-white px-3 py-2 pr-20 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+          {draft.length > MAX_QUESTION_CHARS * 0.8 && (
+            <span className="pointer-events-none absolute bottom-2 right-3 text-xs tabular-nums text-zinc-400">
+              {draft.length.toLocaleString("en-US")} / {MAX_QUESTION_CHARS.toLocaleString("en-US")}
+            </span>
+          )}
+        </div>
         <button
           type="submit"
           disabled={waiting || !draft.trim()}
-          className="rounded-lg bg-zinc-900 px-4 py-3 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          aria-busy={waiting}
+          className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-3 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
+          {waiting && <Spinner />}
           Send
         </button>
       </form>

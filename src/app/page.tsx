@@ -1,20 +1,20 @@
 import { Suspense, type ReactNode } from "react";
 import { connection } from "next/server";
 import { getHomePageData, usageHistory } from "@/lib/metrics";
-import { longDate, modelLabel, pct, segmentLabel, usd, usdCompact } from "@/lib/format";
+import { shortDate, modelLabel, pct, segmentLabel, usd, usdCompact } from "@/lib/format";
 import { KpiCard } from "@/components/KpiCard";
 import { RevenueCostChart } from "@/components/RevenueCostChart";
 import { AccountsTable } from "@/components/AccountsTable";
 import { LifecycleMixChart, PipelineByStageChart, SegmentEconomicsChart, TokenCostByModelChart } from "@/components/BreakdownCharts";
+import { PageHeader } from "@/components/PageHeader";
+import { BlockSkeleton, TableSkeleton } from "@/components/Skeleton";
+import { PAGES } from "@/lib/pages";
 
 export default function Home() {
   return (
     <div className="flex-1 bg-zinc-50 dark:bg-black">
       <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        <header className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Cockpit</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Lumen AI · revenue, pipeline and AI cost across its customers</p>
-        </header>
+        <PageHeader title={PAGES.overview.title} description={PAGES.overview.description} />
 
         <Suspense fallback={<DashboardSkeleton />}>
           <Dashboard />
@@ -53,8 +53,8 @@ async function Dashboard() {
           detail="Customers, MRR × 12"
           backTitle="ARR by segment"
           back={[
-            ...d.arr.bySegment.map((s) => ({ label: segmentLabel(s.segment), value: `${usdCompact(s.arr)} · ${pct(s.share, 0)}` })),
-            { label: "Top 10 customers", value: pct(d.arr.top10Share, 0) },
+            ...d.arr.bySegment.map((s) => ({ label: segmentLabel(s.segment), value: `${usdCompact(s.arr)} · ${pct(s.share)}` })),
+            { label: "Top 10 customers", value: pct(d.arr.top10Share) },
           ]}
         />
         <KpiCard
@@ -107,7 +107,7 @@ async function Dashboard() {
           value={usdCompact(d.portfolio.totalTokenCost30d)}
           detail="Customers' AI usage, priced per model"
           backTitle="Token cost by model"
-          back={d.tokenCostByModel.map((m) => ({ label: modelLabel(m.model), value: `${usdCompact(m.cost)} · ${pct(m.share, 0)}` }))}
+          back={d.tokenCostByModel.map((m) => ({ label: modelLabel(m.model), value: `${usdCompact(m.cost)} · ${pct(m.share)}` }))}
         />
         <KpiCard
           label="Blended gross margin"
@@ -125,8 +125,8 @@ async function Dashboard() {
           tone={d.portfolio.underwaterCount > 0 ? "alert" : "default"}
           backTitle="What's at stake"
           back={[
-            { label: "Their MRR", value: `${usd(d.portfolio.underwaterMrr)} · ${pct(d.portfolio.underwaterMrrShare, 0)}` },
-            { label: "Their share of token cost", value: pct(d.portfolio.underwaterTokenCostShare, 0) },
+            { label: "Their MRR", value: `${usd(d.portfolio.underwaterMrr)} · ${pct(d.portfolio.underwaterMrrShare)}` },
+            { label: "Their share of token cost", value: pct(d.portfolio.underwaterTokenCostShare) },
             { label: "Losing money (below 0%)", value: String(d.portfolio.negativeMarginCount) },
             { label: "Overage accounts", value: String(d.portfolio.overageCount) },
           ]}
@@ -147,29 +147,29 @@ async function Dashboard() {
       </section>
 
       <Panel
-        title="Monthly revenue vs token cost"
-        subtitle={`Whole company, including churned accounts while they were paying. Complete months only: usage history starts ${longDate(usageHistory(d.asOf).start)}, so partial months are left out.`}
+        title="Monthly Revenue vs Token Cost"
+        subtitle={`Whole company, including churned accounts while they were paying. Complete months only: usage history starts ${shortDate(usageHistory(d.asOf).start)}, so partial months are left out.`}
       >
         <RevenueCostChart rows={d.monthly} />
       </Panel>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="Open pipeline by stage" subtitle="Today · value and weighted value (amount × probability)">
+        <Panel title="Open Pipeline by Stage" subtitle="Today · value and weighted value (amount × probability)">
           <PipelineByStageChart rows={d.pipeline.byStage} />
         </Panel>
-        <Panel title="Revenue vs token cost by segment" subtitle="Customers · MRR today vs token cost, last 30 days">
+        <Panel title="Revenue vs Token Cost by Segment" subtitle="Customers · MRR today vs token cost, last 30 days">
           <SegmentEconomicsChart rows={d.bySegment} />
         </Panel>
-        <Panel title="Token cost by model" subtitle="Customers · last 30 days">
+        <Panel title="Token Cost by Model" subtitle="Customers · last 30 days">
           <TokenCostByModelChart rows={d.tokenCostByModel} total={d.portfolio.totalTokenCost30d} />
         </Panel>
-        <Panel title="Customers by lifecycle stage" subtitle="Today · renewal due = renewal date within 90 days">
+        <Panel title="Customers by Lifecycle Stage" subtitle="Today · renewal due = renewal date within 90 days">
           <LifecycleMixChart rows={d.lifecycleMix} total={d.arr.customerCount} />
         </Panel>
       </div>
 
       <section>
-        <h2 className="mb-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">Customer accounts</h2>
+        <h2 className="mb-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">Customer Accounts</h2>
         <AccountsTable rows={d.accounts} />
       </section>
     </div>
@@ -181,15 +181,16 @@ function DashboardSkeleton() {
     <div className="space-y-8" aria-busy="true" aria-label="Loading data">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
         {Array.from({ length: 9 }, (_, i) => (
-          <div key={i} className="h-40 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+          <BlockSkeleton key={i} className="h-40" />
         ))}
       </div>
-      <div className="h-80 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+      <BlockSkeleton className="h-80" />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="h-72 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+          <BlockSkeleton key={i} className="h-72" />
         ))}
       </div>
+      <TableSkeleton columns={9} rows={10} />
     </div>
   );
 }

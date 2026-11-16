@@ -1,18 +1,21 @@
 // Display formatting only. No business math here: numbers come from metrics.ts.
 
-const compactUsd = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  notation: "compact",
-  maximumSignificantDigits: 3,
-});
 const wholeUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-const longDateFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 const monthFmt = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 
-/** $3.07M, $401K, $96.5K */
+// House style (used everywhere):
+//   KPI cards and chart axes: compact money, $1.2M / $387K / $950
+//   Tables: full money, $13,500
+//   Percentages: one decimal, 62.3%
+//   Dates: 16 Dec 2026
+
+/** $1.2M, $387K, $950 */
 export function usdCompact(n: number): string {
-  return compactUsd.format(n);
+  const sign = n < 0 ? "-" : "";
+  const a = Math.abs(n);
+  if (a >= 999_500) return `${sign}$${(a / 1_000_000).toFixed(1)}M`;
+  if (a >= 1_000) return `${sign}$${Math.round(a / 1_000)}K`;
+  return `${sign}$${Math.round(a)}`;
 }
 
 /** $13,500 */
@@ -21,13 +24,21 @@ export function usd(n: number): string {
 }
 
 /** 0.623 -> 62.3%; null -> n/a */
-export function pct(n: number | null, digits = 1): string {
-  return n === null ? "n/a" : `${(n * 100).toFixed(digits)}%`;
+export function pct(n: number | null): string {
+  return n === null ? "n/a" : `${(n * 100).toFixed(1)}%`;
 }
 
-/** 2026-11-13 -> 13 November 2026 */
-export function longDate(isoDate: string): string {
-  return longDateFmt.format(new Date(`${isoDate.slice(0, 10)}T00:00:00Z`));
+/** Change as a signed percentage: -0.352 -> -35.2%, 0.05 -> +5.0% */
+export function pctChange(n: number | null): string {
+  if (n === null) return "n/a";
+  const v = (n * 100).toFixed(1);
+  return n > 0 ? `+${v}%` : `${v}%`;
+}
+
+/** Signed whole number: -3, +2, 0 */
+export function signedInt(n: number | null): string {
+  if (n === null) return "n/a";
+  return n > 0 ? `+${n}` : String(n);
 }
 
 /** 2026-09-01 -> Sep 2026 */

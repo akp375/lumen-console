@@ -1,20 +1,34 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Spinner } from "./Spinner";
 
-// Shared building blocks for the /renewals and /deal-risk pages. Display only.
+// Shared building blocks for the Renewals and Deal Risk pages. Display only.
 
-// Stays disabled until the whole run (rules + Claude notes) finishes, so a second
-// click can never start a second, paid Claude call.
+// Stays disabled, with a spinner, until the whole run (rules + Claude notes)
+// finishes, so a second click can never start a second, paid Claude call.
 export function FlagButton({ onClick, busy, busyLabel = "Checking…", label }: { onClick: () => void; busy: boolean; busyLabel?: string; label: string }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={busy}
-      className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+      className="inline-flex items-center gap-2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-wait disabled:opacity-70 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
     >
+      {busy && <Spinner />}
       {busy ? busyLabel : label}
+    </button>
+  );
+}
+
+export function BackButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
+    >
+      ← {label}
     </button>
   );
 }
@@ -46,7 +60,12 @@ export function SignalChips({ signals }: { signals: string[] }) {
 export type AiState = "idle" | "loading" | "done" | "error";
 
 export function AiCell({ state, note }: { state: AiState; note?: { reason: string; nextAction: string } }) {
-  if (state === "loading") return <span className="text-xs text-zinc-400">Claude is writing…</span>;
+  if (state === "loading")
+    return (
+      <span className="inline-flex items-center gap-2 text-xs text-zinc-400">
+        <Spinner className="h-3 w-3" /> Claude is writing…
+      </span>
+    );
   if (!note) return <span className="text-xs text-zinc-400">{state === "error" ? "Not available" : ""}</span>;
   return (
     <div className="min-w-[280px] space-y-1 text-xs">
@@ -59,46 +78,8 @@ export function AiCell({ state, note }: { state: AiState; note?: { reason: strin
   );
 }
 
-export function TableShell({
-  headers,
-  children,
-  minWidth = "min-w-[1100px]",
-}: {
-  headers: { label: string; numeric?: boolean }[];
-  children: ReactNode;
-  minWidth?: string;
-}) {
-  return (
-    <div className="overflow-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <table className={`w-full ${minWidth} text-sm`}>
-        <thead className="bg-zinc-50 dark:bg-zinc-900">
-          <tr className="border-b border-zinc-200 dark:border-zinc-800">
-            {headers.map((h) => (
-              <th key={h.label} scope="col" className={`whitespace-nowrap px-3 py-2 font-medium text-zinc-600 dark:text-zinc-300 ${h.numeric ? "text-right" : "text-left"}`}>
-                {h.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="align-top">{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-export function BackButton({ onClick, label }: { onClick: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-md border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-    >
-      ← {label}
-    </button>
-  );
-}
-
-export function QuarterHeading({ title, detail }: { title: string; detail: string }) {
+/** Title Case section heading with a one-line detail. */
+export function SectionHeading({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="mb-2">
       <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{title}</h2>
@@ -107,15 +88,19 @@ export function QuarterHeading({ title, detail }: { title: string; detail: strin
   );
 }
 
-export const rowClass = "border-b border-zinc-100 last:border-0 dark:border-zinc-800/60";
-export const cellClass = "px-3 py-2";
+export function RuleNote({ children }: { children: ReactNode }) {
+  return <p className="text-xs text-zinc-500 dark:text-zinc-400">{children}</p>;
+}
+
+/** A guardrail was hit (e.g. daily AI budget): informational, not an error. */
+export function LimitNotice({ message }: { message: string }) {
+  return (
+    <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      {message}
+    </p>
+  );
+}
 
 export function ErrorNote({ message }: { message: string }) {
   return <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{message}</p>;
-}
-
-/** +2 / -3 / 0; n/a for null */
-export function signed(n: number | null, suffix = ""): string {
-  if (n === null) return "n/a";
-  return `${n > 0 ? "+" : ""}${n}${suffix}`;
 }

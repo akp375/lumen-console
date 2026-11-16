@@ -23,6 +23,7 @@
  *     fields (sponsor, stage entered, last activity, next step), and every
  *     customer gets at least 2 NPS responses in the last 6 months; both are
  *     added on their own random streams, so existing rows and IDs stay the same.
+ *   - seed_runs: one row added per run (when it was seeded, for the Integrations page).
  *   - health_scores, expansion_plays, briefings, llm_calls: never touched.
  *
  * The cost and revenue arithmetic below exists only to shape realistic data and
@@ -1332,6 +1333,10 @@ async function writeToSupabase(d: Dataset): Promise<void> {
   await insertAll(db, "usage_daily", d.usage);
   await insertAll(db, "support_tickets", d.tickets);
   await insertAll(db, "nps_responses", d.nps);
+
+  // Record the run for the Integrations page. Optional: older databases may not have the table yet.
+  const { error: runError } = await db.from("seed_runs").insert({ as_of_date: AS_OF_DATE });
+  if (runError) console.warn(`  (Could not record this run in seed_runs: ${runError.message}. Run the seed_runs migration to enable it.)`);
   console.log("Done.");
 }
 
