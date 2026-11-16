@@ -19,7 +19,10 @@
  *   - accounts:     updated in place by id (never deleted), so rows in
  *                   health_scores and expansion_plays stay linked to them.
  *   - model_prices, opportunities, invoices, usage_daily, support_tickets,
- *     nps_responses: cleared, then refilled.
+ *     nps_responses: cleared, then refilled. Opportunities also get deal-risk
+ *     fields (sponsor, stage entered, last activity, next step), and every
+ *     customer gets at least 2 NPS responses in the last 6 months; both are
+ *     added on their own random streams, so existing rows and IDs stay the same.
  *   - health_scores, expansion_plays, briefings, llm_calls: never touched.
  *
  * The cost and revenue arithmetic below exists only to shape realistic data and
@@ -933,6 +936,131 @@ function buildNps(accounts: AccountPlan[]): NpsRow[] {
   return rows.map((n, i) => ({ id: `nps_${pad(i + 1, 5)}`, ...n }));
 }
 
+// Top-up: every customer gets at least 2 responses in the last 6 months, and
+// declining-usage customers trend down (latest score below the previous one).
+// Runs after buildNps on its own random streams and only ADDS rows, with IDs
+// after the existing ones, so every original response keeps its ID and score.
+function topUpNps(accounts: AccountPlan[], base: NpsRow[]): NpsRow[] {
+  const windowStart = addMonths(AS_OF, -6).getTime();
+  const lastMoment = AS_OF.getTime() - 3_600_000; // responses stay before today
+  const extra: Omit<NpsRow, "id">[] = [];
+  for (const acc of accounts) {
+    if (acc.row.status !== "customer") continue;
+    const r = makeRng(`nps-topup:${acc.index}`);
+    const add = (fromMs: number, toMs: number, score: number) => {
+      const at = new Date(Math.round(fromMs + r.next() * (toMs - fromMs)));
+      const pool = score >= 9 ? COMMENTS_PROMOTER : score >= 7 ? COMMENTS_PASSIVE : COMMENTS_DETRACTOR;
+      const comment = r.pick(pool);
+      extra.push({ account_id: acc.row.id, responded_at: at.toISOString(), score, comment: r.chance(0.7) ? comment : null });
+    };
+    const mine = base
+      .filter((n) => n.account_id === acc.row.id && Date.parse(n.responded_at) >= windowStart)
+      .sort((x, y) => x.responded_at.localeCompare(y.responded_at));
+
+    if (acc.group === "declining") {
+      // buildNps always gives these accounts a response in the last 60 days.
+      const latest = mine[mine.length - 1];
+      const prev = mine[mine.length - 2];
+      const latestMs = Date.parse(latest.responded_at);
+      if (!prev || prev.score <= latest.score) {
+        if (latest.score <= 8) {
+          // An earlier, happier response just before the latest one.
+          const from = prev ? Date.parse(prev.responded_at) + 3_600_000 : Math.max(windowStart, latestMs - 120 * DAY_MS);
+          add(from, latestMs - 3_600_000, Math.min(10, latest.score + r.int(2, 3)));
+        } else {
+          // Latest was high: add a newer, lower response after it.
+          add(latestMs + 3_600_000, lastMoment, latest.score - r.int(3, 4));
+        }
+      }
+    } else {
+      for (let k = mine.length; k < 2; k++) add(windowStart, lastMoment, r.weighted(NPS_NORMAL));
+    }
+  }
+  extra.sort((x, y) => x.responded_at.localeCompare(y.responded_at));
+  return [...base, ...extra.map((n, i) => ({ id: `nps_${pad(base.length + i + 1, 5)}`, ...n }))];
+}
+
+// ---------------------------------------------------------------------------
+// Deal-risk fields on opportunities (added after the deals are built, on their
+// own random stream, so no existing deal, amount, date or ID changes)
+// ---------------------------------------------------------------------------
+
+type DealRiskFields = {
+  executive_sponsor: string | null;
+  stage_entered_date: string;
+  last_activity_date: string;
+  next_step: string | null;
+};
+
+// Normal time a deal spends in each open stage. "Far too long" = over 2x this.
+const STAGE_TYPICAL_DAYS: Record<string, number> = { Discovery: 14, Demo: 14, Proposal: 21, Negotiation: 21 };
+const NO_SPONSOR_DEALS = 15;
+const STALE_STAGE_DEALS = 12;
+const NO_ACTIVITY_DEALS = 10; // 21+ days since last activity
+const NO_ACTIVITY_DAYS = 21;
+
+const SPONSORS = [
+  "Priya Raman, VP Engineering",
+  "Marcus Holt, CTO",
+  "Elena Vasquez, COO",
+  "Daniel Okafor, VP Operations",
+  "Hannah Lindqvist, Chief Data Officer",
+  "Samuel Brooks, VP Product",
+  "Aiko Tanaka, Head of Legal Ops",
+  "Victor Mensah, CFO",
+  "Rachel Kim, VP Customer Support",
+  "Tomás Rivera, Head of Platform",
+];
+const NEXT_STEPS: Record<string, string[]> = {
+  Discovery: ["Book demo with the wider team", "Confirm use cases and success criteria", "Identify the budget owner"],
+  Demo: ["Run follow-up demo for engineering", "Share sandbox access", "Agree pilot scope"],
+  Proposal: ["Review proposal with procurement", "Send revised pricing", "Security review call"],
+  Negotiation: ["Redline MSA with legal", "Final pricing sign-off", "Schedule signature call"],
+};
+
+function addDealRiskFields(opps: OpportunityRow[]): (OpportunityRow & DealRiskFields)[] {
+  const r = makeRng("deal-risk");
+  const isOpenStage = (o: OpportunityRow) => o.stage in STAGE_TYPICAL_DAYS;
+  const open = opps.filter(isOpenStage);
+  const age = (o: OpportunityRow) => daysBetween(parseDate(o.created_date), AS_OF);
+  const typical = (o: OpportunityRow) => STAGE_TYPICAL_DAYS[o.stage];
+
+  const noSponsor = new Set(r.shuffle(open).slice(0, NO_SPONSOR_DEALS).map((o) => o.id));
+  // Stale: in the current stage 3-5x the normal time (only deals old enough).
+  const stale = new Set(r.shuffle(open.filter((o) => age(o) >= 3 * typical(o))).slice(0, STALE_STAGE_DEALS).map((o) => o.id));
+  // Quiet: half from the stale deals (overlap), half from deals old enough to have gone 21+ days without activity.
+  const quietFromStale = r.shuffle([...stale]).slice(0, Math.floor(NO_ACTIVITY_DEALS / 2));
+  const quietOthers = r
+    .shuffle(open.filter((o) => !stale.has(o.id) && age(o) > NO_ACTIVITY_DAYS && 2 * typical(o) > NO_ACTIVITY_DAYS))
+    .slice(0, NO_ACTIVITY_DEALS - quietFromStale.length)
+    .map((o) => o.id);
+  const quiet = new Set([...quietFromStale, ...quietOthers]);
+
+  return opps.map((o) => {
+    if (!isOpenStage(o)) {
+      // Closed deals: the stage was entered, and last touched, on the close date.
+      const sponsor = o.stage === "Closed Won" || r.chance(0.6) ? r.pick(SPONSORS) : null;
+      return { ...o, executive_sponsor: sponsor, stage_entered_date: o.close_date, last_activity_date: o.close_date, next_step: null };
+    }
+    const t = typical(o);
+    let daysInStage: number;
+    if (stale.has(o.id)) daysInStage = r.int(3 * t, Math.min(age(o), 5 * t));
+    else if (quiet.has(o.id)) daysInStage = r.int(NO_ACTIVITY_DAYS + 1, Math.min(age(o), 2 * t));
+    else daysInStage = r.int(0, Math.min(age(o), t));
+    const daysSinceActivity = quiet.has(o.id)
+      ? r.int(NO_ACTIVITY_DAYS + 1, Math.min(daysInStage, 45))
+      : r.int(0, Math.min(daysInStage, 14));
+    const nextStep = quiet.has(o.id) && r.chance(0.5) ? null : r.pick(NEXT_STEPS[o.stage]);
+    return {
+      ...o,
+      executive_sponsor: noSponsor.has(o.id) ? null : r.pick(SPONSORS),
+      stage_entered_date: isoDate(addDays(AS_OF, -daysInStage)),
+      last_activity_date: isoDate(addDays(AS_OF, -daysSinceActivity)),
+      next_step: nextStep,
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Self-check: prints the numbers so the owner can confirm the data is right
 // ---------------------------------------------------------------------------
@@ -940,7 +1068,7 @@ function buildNps(accounts: AccountPlan[]): NpsRow[] {
 type Dataset = {
   accounts: AccountPlan[];
   modelPrices: ModelPriceRow[];
-  opportunities: OpportunityRow[];
+  opportunities: (OpportunityRow & DealRiskFields)[];
   invoices: InvoiceRow[];
   usage: UsageRow[];
   tickets: TicketRow[];
@@ -1118,6 +1246,34 @@ function printCheck(d: Dataset): void {
   console.log(`  every Closed Lost deal has forecast category Omitted: ${yesNo(lostForecastOk)}`);
   console.log("\nCustomer signals");
   console.log(`  average NPS score: declining and churned accounts ${npsUnhappy.toFixed(1)}, others ${npsOther.toFixed(1)}`);
+
+  // NPS coverage and trend (last 6 months, customers).
+  const sixMonthsAgoMs = addMonths(AS_OF, -6).getTime();
+  const byAcc = new Map<string, NpsRow[]>();
+  for (const n of d.nps) byAcc.set(n.account_id, [...(byAcc.get(n.account_id) ?? []), n]);
+  const sorted = (id: string) => (byAcc.get(id) ?? []).slice().sort((x, y) => x.responded_at.localeCompare(y.responded_at));
+  const fewNps = customers.filter((a) => sorted(a.id).filter((n) => Date.parse(n.responded_at) >= sixMonthsAgoMs).length < 2).length;
+  const decliningCustomers = d.accounts.filter((a) => a.group === "declining");
+  const trendingDown = decliningCustomers.filter((a) => {
+    const s = sorted(a.row.id);
+    return s.length >= 2 && s[s.length - 1].score < s[s.length - 2].score;
+  }).length;
+  console.log(`  NPS: customers with fewer than 2 responses in last 6 months = ${fewNps}`);
+  console.log(`  NPS: declining-usage customers trending down = ${trendingDown} of ${decliningCustomers.length}`);
+
+  // Deal risk (open deals).
+  const asOfIso = isoDate(AS_OF);
+  const noSponsor = open.filter((o) => o.executive_sponsor === null);
+  const stale = open.filter((o) => daysBetween(parseDate(o.stage_entered_date), AS_OF) > 2 * STAGE_TYPICAL_DAYS[o.stage]);
+  const quiet = open.filter((o) => daysBetween(parseDate(o.last_activity_date), AS_OF) >= NO_ACTIVITY_DAYS);
+  const ids2 = (xs: { id: string }[]) => new Set(xs.map((o) => o.id));
+  const [ns, st, qu] = [ids2(noSponsor), ids2(stale), ids2(quiet)];
+  const anyTwo = open.filter((o) => [ns.has(o.id), st.has(o.id), qu.has(o.id)].filter(Boolean).length >= 2).length;
+  const datesOk = d.opportunities.every(
+    (o) => o.stage_entered_date >= o.created_date && o.last_activity_date >= o.stage_entered_date && o.last_activity_date <= (isOpen(o) ? asOfIso : o.close_date),
+  );
+  console.log(`  deal risk (open deals): no exec sponsor ${noSponsor.length}, too long in stage ${stale.length}, no activity 21+ days ${quiet.length}`);
+  console.log(`  deal risk: open deals with 2+ of these flags ${anyTwo}; dates in order (created <= stage entered <= last activity) ${yesNo(datesOk)}`);
   console.log(`  tickets per account (6 months): declining and churned ${ticketsUnhappy.toFixed(1)}, others ${ticketsOther.toFixed(1)}`);
   console.log(`\nData fingerprint: ${fingerprint} (same value on every run = identical data)\n`);
 }
@@ -1188,10 +1344,10 @@ async function main(): Promise<void> {
 
   const accounts = buildAccounts();
   const usage = buildUsage(accounts);
-  const opportunities = buildOpportunitiesAndChanges(accounts); // also records MRR changes used by invoices
+  const opportunities = addDealRiskFields(buildOpportunitiesAndChanges(accounts)); // also records MRR changes used by invoices
   const invoices = buildInvoices(accounts);
   const tickets = buildTickets(accounts);
-  const nps = buildNps(accounts);
+  const nps = topUpNps(accounts, buildNps(accounts));
   const modelPrices: ModelPriceRow[] = MODEL_PRICES.map((p) => ({
     model: p.model,
     provider: p.provider,

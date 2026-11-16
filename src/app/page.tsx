@@ -1,6 +1,5 @@
 import { Suspense, type ReactNode } from "react";
 import { connection } from "next/server";
-import { AS_OF_DATE } from "@/lib/as-of-date";
 import { getHomePageData, usageHistory } from "@/lib/metrics";
 import { longDate, modelLabel, pct, segmentLabel, usd, usdCompact } from "@/lib/format";
 import { KpiCard } from "@/components/KpiCard";
@@ -11,10 +10,6 @@ import { LifecycleMixChart, PipelineByStageChart, SegmentEconomicsChart, TokenCo
 export default function Home() {
   return (
     <div className="flex-1 bg-zinc-50 dark:bg-black">
-      <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-        Demo data: Lumen AI is a fictional company. As of {longDate(AS_OF_DATE)}.
-      </div>
-
       <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
         <header className="mb-6">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Cockpit</h1>

@@ -719,6 +719,267 @@ export function calcNrr90d(accounts: AccountRow[], invoices: InvoiceRow[], asOf:
 }
 
 // ---------------------------------------------------------------------------
+// NPS trend per customer
+// ---------------------------------------------------------------------------
+
+export type NpsResponseRow = { account_id: string; responded_at: string; score: number };
+
+export type NpsTrendRow = {
+  accountId: string;
+  name: string;
+  latestNps: number | null;
+  latestNpsAt: string | null;
+  previousNps: number | null;
+  previousNpsAt: string | null;
+  /** latest minus previous; null unless both exist. Negative = sentiment falling. */
+  npsChange: number | null;
+};
+
+/**
+ * Latest and previous NPS score per customer, from responses on or before
+ * today (asOf). npsChange = latest - previous, computed here, never stored.
+ */
+export function calcNpsTrend(accounts: AccountRow[], responses: NpsResponseRow[], asOf: string): NpsTrendRow[] {
+  const byAccount = new Map<string, NpsResponseRow[]>();
+  for (const n of responses) {
+    if (n.responded_at.slice(0, 10) > asOf) continue;
+    byAccount.set(n.account_id, [...(byAccount.get(n.account_id) ?? []), n]);
+  }
+  return accounts
+    .filter((a) => a.status === "customer")
+    .map((a) => {
+      const list = (byAccount.get(a.id) ?? []).sort((x, y) => Date.parse(y.responded_at) - Date.parse(x.responded_at));
+      const [latest, previous] = list;
+      return {
+        accountId: a.id,
+        name: a.name,
+        latestNps: latest?.score ?? null,
+        latestNpsAt: latest?.responded_at ?? null,
+        previousNps: previous?.score ?? null,
+        previousNpsAt: previous?.responded_at ?? null,
+        npsChange: latest && previous ? latest.score - previous.score : null,
+      };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Usage trend per customer: last 30 days vs the 30 days before
+// ---------------------------------------------------------------------------
+
+export type UsageTrendRow = {
+  accountId: string;
+  tokensLast30d: number;
+  tokensPrior30d: number;
+  /** (last - prior) / prior; null when there was no prior usage. -0.25 = down 25%. */
+  usageChange: number | null;
+};
+
+export function priorUsageWindow(asOf: string): { start: string; end: string } {
+  const last = usageWindow(asOf);
+  return { start: addDays(last.start, -USAGE_WINDOW_DAYS), end: addDays(last.start, -1) };
+}
+
+export function calcUsageTrend(accounts: AccountRow[], usage: UsageRow[], asOf: string): UsageTrendRow[] {
+  const last = usageWindow(asOf);
+  const prior = priorUsageWindow(asOf);
+  const totals = new Map<string, { last: number; prior: number }>();
+  for (const u of usage) {
+    const d = day(u.date);
+    const t = totals.get(u.account_id) ?? { last: 0, prior: 0 };
+    const tokens = u.input_tokens + u.output_tokens;
+    if (d >= last.start && d <= last.end) t.last += tokens;
+    else if (d >= prior.start && d <= prior.end) t.prior += tokens;
+    totals.set(u.account_id, t);
+  }
+  return customersOnly(accounts).map((a) => {
+    const t = totals.get(a.id) ?? { last: 0, prior: 0 };
+    return {
+      accountId: a.id,
+      tokensLast30d: t.last,
+      tokensPrior30d: t.prior,
+      usageChange: t.prior > 0 ? (t.last - t.prior) / t.prior : null,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Renewal risk
+// ---------------------------------------------------------------------------
+
+/** Renewal-risk rule settings. A customer is flagged when its renewal is
+ *  within `renewalWithinDays` AND at least one of the signals fires. */
+export const RENEWAL_RISK_RULES = {
+  renewalWithinDays: 120,
+  npsBelow: 7, // latest NPS below 7
+  npsDropOf: -2, // nps_change of -2 or worse
+  usageDropBelow: -0.2, // usage down more than 20%, last 30 days vs prior 30
+} as const;
+
+export const RENEWAL_RISK_SIGNALS = ["Low NPS", "NPS dropping", "Usage declining", "Underwater margin"] as const;
+export type RenewalRiskSignal = (typeof RENEWAL_RISK_SIGNALS)[number];
+
+export type RenewalRiskRow = {
+  accountId: string;
+  name: string;
+  segment: string;
+  owner: string;
+  arr: number;
+  renewalDate: string;
+  daysToRenewal: number;
+  latestNps: number | null;
+  npsChange: number | null;
+  usageChange: number | null;
+  grossMargin: number | null;
+  signals: RenewalRiskSignal[];
+};
+
+export type RenewalRiskResult = {
+  rows: RenewalRiskRow[]; // soonest renewal first
+  atRiskArr: number;
+  renewingCount: number; // customers renewing within the window, flagged or not
+  renewingArr: number;
+};
+
+export function calcRenewalRisk(
+  accounts: AccountRow[],
+  usage: UsageRow[],
+  prices: ModelPriceRow[],
+  nps: NpsResponseRow[],
+  asOf: string,
+): RenewalRiskResult {
+  const R = RENEWAL_RISK_RULES;
+  const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r]));
+  const trend = new Map(calcUsageTrend(accounts, usage, asOf).map((r) => [r.accountId, r]));
+  const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
+
+  const renewing = customersOnly(accounts)
+    .filter((a) => a.renewal_date !== null)
+    .map((a) => ({ a, days: daysBetween(asOf, a.renewal_date!) }))
+    .filter(({ days }) => days >= 0 && days <= R.renewalWithinDays);
+
+  const rows: RenewalRiskRow[] = [];
+  for (const { a, days } of renewing) {
+    const m = margin.get(a.id)!;
+    const t = trend.get(a.id)!;
+    const s = sentiment.get(a.id)!;
+    const signals: RenewalRiskSignal[] = [];
+    if (s.latestNps !== null && s.latestNps < R.npsBelow) signals.push("Low NPS");
+    if (s.npsChange !== null && s.npsChange <= R.npsDropOf) signals.push("NPS dropping");
+    if (t.usageChange !== null && t.usageChange < R.usageDropBelow) signals.push("Usage declining");
+    if (m.underwater) signals.push("Underwater margin");
+    if (signals.length === 0) continue;
+    rows.push({
+      accountId: a.id,
+      name: a.name,
+      segment: a.segment,
+      owner: a.owner,
+      arr: a.mrr_usd * 12,
+      renewalDate: a.renewal_date!,
+      daysToRenewal: days,
+      latestNps: s.latestNps,
+      npsChange: s.npsChange,
+      usageChange: t.usageChange,
+      grossMargin: m.grossMargin,
+      signals,
+    });
+  }
+  rows.sort((x, y) => x.daysToRenewal - y.daysToRenewal || y.arr - x.arr);
+  return {
+    rows,
+    atRiskArr: rows.reduce((s, r) => s + r.arr, 0),
+    renewingCount: renewing.length,
+    renewingArr: renewing.reduce((s, { a }) => s + a.mrr_usd * 12, 0),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Deal risk (open deals only)
+// ---------------------------------------------------------------------------
+
+/** Deal-risk rule settings, all in one place. */
+export const DEAL_RISK_RULES = {
+  /** Max days a deal should sit in each stage before it counts as stuck. */
+  maxDaysInStage: { Discovery: 28, Demo: 28, Proposal: 42, Negotiation: 42 } as Record<string, number>,
+  /** Stages where a missing executive sponsor is a risk. */
+  sponsorRequiredStages: ["Proposal", "Negotiation"],
+  noActivityDays: 21, // no activity in 21+ days
+} as const;
+
+export const DEAL_RISK_SIGNALS = ["No exec sponsor", "Stuck in stage", "No recent activity", "Close date passed", "No next step"] as const;
+export type DealRiskSignal = (typeof DEAL_RISK_SIGNALS)[number];
+
+export type DealRiskInput = OpportunityRow & {
+  executive_sponsor: string | null;
+  stage_entered_date: string | null;
+  last_activity_date: string | null;
+  next_step: string | null;
+};
+
+export type DealRiskRow = {
+  opportunityId: string;
+  accountId: string;
+  accountName: string;
+  type: string;
+  stage: string;
+  amount: number;
+  closeDate: string;
+  daysInStage: number | null;
+  maxDaysInStage: number;
+  daysSinceActivity: number | null;
+  executiveSponsor: string | null;
+  nextStep: string | null;
+  signals: DealRiskSignal[];
+};
+
+export type DealRiskResult = {
+  rows: DealRiskRow[]; // largest deal first
+  atRiskPipeline: number;
+  openCount: number;
+  openPipeline: number;
+};
+
+export function calcDealRisk(opportunities: DealRiskInput[], accounts: AccountRow[], asOf: string): DealRiskResult {
+  const R = DEAL_RISK_RULES;
+  const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
+  const open = opportunities.filter(isOpen);
+  const rows: DealRiskRow[] = [];
+  for (const o of open) {
+    const daysInStage = o.stage_entered_date ? daysBetween(o.stage_entered_date, asOf) : null;
+    const daysSinceActivity = o.last_activity_date ? daysBetween(o.last_activity_date, asOf) : null;
+    const maxDays = R.maxDaysInStage[o.stage];
+    const signals: DealRiskSignal[] = [];
+    if (!o.executive_sponsor && (R.sponsorRequiredStages as readonly string[]).includes(o.stage)) signals.push("No exec sponsor");
+    if (daysInStage !== null && daysInStage > maxDays) signals.push("Stuck in stage");
+    if (daysSinceActivity === null || daysSinceActivity >= R.noActivityDays) signals.push("No recent activity");
+    if (o.close_date < asOf) signals.push("Close date passed");
+    if (!o.next_step) signals.push("No next step");
+    if (signals.length === 0) continue;
+    rows.push({
+      opportunityId: o.id,
+      accountId: o.account_id,
+      accountName: nameOf.get(o.account_id) ?? o.account_id,
+      type: o.type,
+      stage: o.stage,
+      amount: o.amount_usd,
+      closeDate: o.close_date,
+      daysInStage,
+      maxDaysInStage: maxDays,
+      daysSinceActivity,
+      executiveSponsor: o.executive_sponsor,
+      nextStep: o.next_step,
+      signals,
+    });
+  }
+  rows.sort((x, y) => y.amount - x.amount);
+  return {
+    rows,
+    atRiskPipeline: rows.reduce((s, r) => s + r.amount, 0),
+    openCount: open.length,
+    openPipeline: open.reduce((s, o) => s + o.amount_usd, 0),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Loaders: read from Supabase (server-side only) and run the calculators
 // ---------------------------------------------------------------------------
 
@@ -891,6 +1152,54 @@ async function loadInvoices(upToMonth: string): Promise<InvoiceRow[]> {
 export async function getNrr90d(asOf: string = AS_OF_DATE): Promise<NrrResult> {
   const [accounts, invoices] = await Promise.all([loadAccounts((q) => q.neq("status", "prospect")), loadInvoices(monthStart(asOf))]);
   return calcNrr90d(accounts, invoices, asOf);
+}
+
+async function loadNps(): Promise<NpsResponseRow[]> {
+  const rows = await fetchAll("nps_responses", "account_id, responded_at, score", ["id"]);
+  return rows.map((r) => ({ account_id: str(r.account_id), responded_at: str(r.responded_at), score: num(r.score) }));
+}
+
+export async function getNpsTrend(asOf: string = AS_OF_DATE): Promise<NpsTrendRow[]> {
+  const [accounts, responses] = await Promise.all([loadAccounts(customerFilter), loadNps()]);
+  return calcNpsTrend(accounts, responses, asOf);
+}
+
+export async function getRenewalRisk(asOf: string = AS_OF_DATE): Promise<RenewalRiskResult> {
+  const [accounts, { usage, prices }, nps] = await Promise.all([
+    loadAccounts(customerFilter),
+    loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
+    loadNps(),
+  ]);
+  return calcRenewalRisk(accounts, usage, prices, nps, asOf);
+}
+
+export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskResult> {
+  const [accounts, rows] = await Promise.all([
+    loadAccounts(),
+    fetchAll(
+      "opportunities",
+      "id, account_id, type, source, stage, forecast_category, amount_usd, probability, created_date, close_date, executive_sponsor, stage_entered_date, last_activity_date, next_step",
+      ["id"],
+      (q) => q.in("stage", [...OPEN_STAGES]),
+    ),
+  ]);
+  const opportunities: DealRiskInput[] = rows.map((r) => ({
+    id: str(r.id),
+    account_id: str(r.account_id),
+    type: str(r.type),
+    source: str(r.source),
+    stage: str(r.stage),
+    forecast_category: str(r.forecast_category),
+    amount_usd: num(r.amount_usd),
+    probability: num(r.probability),
+    created_date: str(r.created_date),
+    close_date: str(r.close_date),
+    executive_sponsor: strOrNull(r.executive_sponsor),
+    stage_entered_date: strOrNull(r.stage_entered_date),
+    last_activity_date: strOrNull(r.last_activity_date),
+    next_step: strOrNull(r.next_step),
+  }));
+  return calcDealRisk(opportunities, accounts, asOf);
 }
 
 export async function getMonthlyRevenueVsTokenCost(asOf: string = AS_OF_DATE): Promise<MonthlyRevenueCostRow[]> {

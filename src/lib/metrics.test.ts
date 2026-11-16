@@ -25,6 +25,11 @@ import {
   calcMonthlyRevenueVsTokenCost,
   fullUsageMonths,
   calcNrr90d,
+  calcNpsTrend,
+  calcUsageTrend,
+  calcRenewalRisk,
+  calcDealRisk,
+  type DealRiskInput,
   usageWindow,
   type AccountRow,
   type OpportunityRow,
@@ -490,4 +495,108 @@ test("NRR: a customer that churned in late August uses its last invoice as start
 
 test("NRR: null when nobody was a customer 90 days ago", () => {
   assert.equal(calcNrr90d([], [], TODAY).nrr, null);
+});
+
+test("NPS trend: latest, previous and change per customer, up to today only", () => {
+  const nps = [
+    { account_id: "A1", responded_at: "2026-06-01T10:00:00Z", score: 9 },
+    { account_id: "A1", responded_at: "2026-10-01T10:00:00Z", score: 6 }, // latest for A1
+    { account_id: "A1", responded_at: "2026-08-01T10:00:00Z", score: 8 }, // previous for A1
+    { account_id: "A1", responded_at: "2026-11-20T10:00:00Z", score: 0 }, // after today: ignored
+    { account_id: "A2", responded_at: "2026-09-15T10:00:00Z", score: 7 }, // only one response
+    { account_id: "C1", responded_at: "2026-09-15T10:00:00Z", score: 2 }, // churned: not a customer
+    { account_id: "P1", responded_at: "2026-09-15T10:00:00Z", score: 10 }, // prospect: not a customer
+  ];
+  const rows = Object.fromEntries(calcNpsTrend(ACCOUNTS, nps, TODAY).map((r) => [r.accountId, r]));
+  assert.deepEqual(Object.keys(rows).sort(), ["A1", "A2", "A3"]);
+  assert.equal(rows.A1.latestNps, 6);
+  assert.equal(rows.A1.previousNps, 8);
+  assert.equal(rows.A1.npsChange, -2);
+  assert.equal(rows.A2.latestNps, 7);
+  assert.equal(rows.A2.previousNps, null);
+  assert.equal(rows.A2.npsChange, null);
+  assert.equal(rows.A3.latestNps, null);
+  assert.equal(rows.A3.npsChange, null);
+});
+
+// Renewal and deal risk: small, separate datasets so each rule is easy to check.
+// Windows for TODAY = 2026-11-13: last 30 days = 2026-10-14..2026-11-12, prior 30 = 2026-09-14..2026-10-13.
+
+test("Usage trend: last 30 days vs the 30 before", () => {
+  const accounts = [acc({ id: "U1", status: "customer" }), acc({ id: "U2", status: "customer" })];
+  const usage = [
+    usageRow("U1", "2026-10-14", "small", 600, 0), // last window
+    usageRow("U1", "2026-10-13", "small", 1000, 0), // prior window
+    usageRow("U1", "2026-09-13", "small", 9999, 0), // before both: ignored
+    usageRow("U2", "2026-11-01", "small", 500, 0), // no prior usage
+  ];
+  const rows = Object.fromEntries(calcUsageTrend(accounts, usage, TODAY).map((r) => [r.accountId, r]));
+  close(rows.U1.usageChange, -0.4, "U1 down 40%");
+  assert.equal(rows.U2.usageChange, null);
+});
+
+test("Renewal risk: renewal within 120 days AND at least one signal", () => {
+  const base = { status: "customer" as const, mrr_usd: 1000 };
+  const accounts = [
+    acc({ id: "R1", ...base, renewal_date: "2027-01-01" }), // low NPS
+    acc({ id: "R2", ...base, renewal_date: "2027-02-01" }), // NPS 9 -> 7: change -2
+    acc({ id: "R3", ...base, renewal_date: "2026-12-01" }), // usage down 50%
+    acc({ id: "R4", ...base, renewal_date: "2026-12-15" }), // underwater: $800 cost on $1,000 MRR
+    acc({ id: "R5", ...base, renewal_date: "2027-06-01" }), // low NPS but renews in 200 days: not flagged
+    acc({ id: "R6", ...base, renewal_date: "2027-01-10" }), // healthy: not flagged
+  ];
+  const nps = [
+    { account_id: "R1", responded_at: "2026-10-01T10:00:00Z", score: 6 },
+    { account_id: "R2", responded_at: "2026-08-01T10:00:00Z", score: 9 },
+    { account_id: "R2", responded_at: "2026-10-01T10:00:00Z", score: 7 },
+    { account_id: "R5", responded_at: "2026-10-01T10:00:00Z", score: 3 },
+    { account_id: "R6", responded_at: "2026-10-01T10:00:00Z", score: 9 },
+  ];
+  const usage = [
+    usageRow("R3", "2026-10-01", "small", 1000, 0),
+    usageRow("R3", "2026-11-01", "small", 500, 0),
+    usageRow("R4", "2026-11-01", "big", 80_000_000, 0), // 80M x $10/M = $800
+    usageRow("R6", "2026-10-01", "small", 1000, 0),
+    usageRow("R6", "2026-11-01", "small", 1000, 0),
+  ];
+  const result = calcRenewalRisk(accounts, usage, PRICES, nps, TODAY);
+  const byId = Object.fromEntries(result.rows.map((r) => [r.accountId, r]));
+  assert.deepEqual(result.rows.map((r) => r.accountId), ["R3", "R4", "R1", "R2"]); // soonest renewal first
+  assert.deepEqual(byId.R1.signals, ["Low NPS"]);
+  assert.deepEqual(byId.R2.signals, ["NPS dropping"]);
+  assert.deepEqual(byId.R3.signals, ["Usage declining"]);
+  assert.deepEqual(byId.R4.signals, ["Underwater margin"]);
+  assert.equal(result.atRiskArr, 4 * 12_000);
+  assert.equal(result.renewingCount, 5); // R1-R4 and R6
+});
+
+test("Deal risk: open deals only, each rule fires on its own", () => {
+  const accounts = [acc({ id: "A1", status: "customer", name: "Acme" })];
+  const healthy = { executive_sponsor: "Pat, CTO", stage_entered_date: "2026-11-01", last_activity_date: "2026-11-10", next_step: "Send proposal" };
+  const deal = (o: Partial<DealRiskInput> & Pick<DealRiskInput, "id" | "stage">): DealRiskInput => ({
+    ...opp({ close_date: "2026-12-31", amount_usd: 1000, ...o }),
+    ...healthy,
+    ...o,
+  });
+  const opps = [
+    deal({ id: "D1", stage: "Proposal", executive_sponsor: null }), // no sponsor in Proposal
+    deal({ id: "D2", stage: "Discovery", executive_sponsor: null }), // no sponsor, but Discovery: fine
+    deal({ id: "D3", stage: "Demo", stage_entered_date: "2026-10-15" }), // 29 days in Demo > 28
+    deal({ id: "D4", stage: "Demo", stage_entered_date: "2026-10-16" }), // 28 days: fine
+    deal({ id: "D5", stage: "Negotiation", last_activity_date: "2026-10-23" }), // 21 days: no recent activity
+    deal({ id: "D6", stage: "Negotiation", close_date: "2026-11-12" }), // close date passed
+    deal({ id: "D7", stage: "Negotiation", next_step: null }), // no next step
+    deal({ id: "D8", stage: "Closed Lost", executive_sponsor: null, next_step: null }), // closed: ignored
+  ];
+  const result = calcDealRisk(opps, accounts, TODAY);
+  const byId = Object.fromEntries(result.rows.map((r) => [r.opportunityId, r.signals]));
+  assert.deepEqual(Object.keys(byId).sort(), ["D1", "D3", "D5", "D6", "D7"]);
+  assert.deepEqual(byId.D1, ["No exec sponsor"]);
+  assert.deepEqual(byId.D3, ["Stuck in stage"]);
+  assert.deepEqual(byId.D5, ["No recent activity"]);
+  assert.deepEqual(byId.D6, ["Close date passed"]);
+  assert.deepEqual(byId.D7, ["No next step"]);
+  assert.equal(result.atRiskPipeline, 5000);
+  assert.equal(result.openCount, 7);
+  assert.equal(result.rows[0].accountName, "Acme");
 });
