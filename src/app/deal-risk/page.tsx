@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
-import { DEAL_RISK_RULES } from "@/lib/metrics";
+import { connection } from "next/server";
+import { DEAL_RISK_RULES, getUpcomingDeals } from "@/lib/metrics";
 import { DealRiskPanel } from "@/components/DealRiskPanel";
 
 export const metadata: Metadata = { title: "Deal risk · Cockpit · Lumen AI" };
@@ -19,7 +21,27 @@ export default function DealRiskPage() {
           step for each deal.
         </p>
       </header>
-      <DealRiskPanel />
+      <Suspense fallback={<UpcomingSkeleton />}>
+        <DealRiskContent />
+      </Suspense>
     </main>
   );
 }
+
+// Reads live data on each request (server-side only).
+async function DealRiskContent() {
+  await connection();
+  const upcoming = await getUpcomingDeals();
+  return <DealRiskPanel upcoming={upcoming} />;
+}
+
+function UpcomingSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading">
+      <div className="h-9 w-40 animate-pulse rounded-md bg-zinc-200 dark:bg-zinc-800" />
+      <div className="h-80 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+      <div className="h-80 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+    </div>
+  );
+}
+

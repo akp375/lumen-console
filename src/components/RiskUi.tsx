@@ -57,10 +57,18 @@ export function AiCell({ state, note }: { state: AiState; note?: { reason: strin
   );
 }
 
-export function TableShell({ headers, children }: { headers: { label: string; numeric?: boolean }[]; children: ReactNode }) {
+export function TableShell({
+  headers,
+  children,
+  minWidth = "min-w-[1100px]",
+}: {
+  headers: { label: string; numeric?: boolean }[];
+  children: ReactNode;
+  minWidth?: string;
+}) {
   return (
     <div className="overflow-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <table className="w-full min-w-[1100px] text-sm">
+      <table className={`w-full ${minWidth} text-sm`}>
         <thead className="bg-zinc-50 dark:bg-zinc-900">
           <tr className="border-b border-zinc-200 dark:border-zinc-800">
             {headers.map((h) => (
@@ -72,6 +80,27 @@ export function TableShell({ headers, children }: { headers: { label: string; nu
         </thead>
         <tbody className="align-top">{children}</tbody>
       </table>
+    </div>
+  );
+}
+
+export function BackButton({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
+    >
+      ← {label}
+    </button>
+  );
+}
+
+export function QuarterHeading({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="mb-2">
+      <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{title}</h2>
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">{detail}</p>
     </div>
   );
 }

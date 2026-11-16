@@ -980,6 +980,97 @@ export function calcDealRisk(opportunities: DealRiskInput[], accounts: AccountRo
 }
 
 // ---------------------------------------------------------------------------
+// Upcoming renewals and deals by calendar quarter (this quarter and next)
+// ---------------------------------------------------------------------------
+
+export const UPCOMING_TOP_N = 10;
+
+export type Quarter = { label: string; start: string; end: string }; // e.g. Q4 2026, 2026-10-01..2026-12-31
+
+/** Calendar quarter containing asOf, shifted by `offset` quarters (0 = this quarter, 1 = next). */
+export function calendarQuarter(asOf: string, offset = 0): Quarter {
+  const d = parseDate(asOf);
+  const index = d.getUTCFullYear() * 4 + Math.floor(d.getUTCMonth() / 3) + offset;
+  const year = Math.floor(index / 4);
+  const q = index % 4;
+  const start = isoDate(new Date(Date.UTC(year, q * 3, 1)));
+  const end = isoDate(new Date(Date.UTC(year, q * 3 + 3, 0)));
+  return { label: `Q${q + 1} ${year}`, start, end };
+}
+
+export type UpcomingRenewalRow = {
+  accountId: string;
+  name: string;
+  segment: string;
+  owner: string;
+  arr: number;
+  renewalDate: string;
+  daysToRenewal: number;
+};
+export type UpcomingRenewalsQuarter = { quarter: Quarter; count: number; totalArr: number; top: UpcomingRenewalRow[] };
+
+/** Customers renewing in this and next calendar quarter (from today on), largest ARR first. */
+export function calcUpcomingRenewals(accounts: AccountRow[], asOf: string, topN = UPCOMING_TOP_N): UpcomingRenewalsQuarter[] {
+  return [0, 1].map((offset) => {
+    const quarter = calendarQuarter(asOf, offset);
+    const from = offset === 0 ? asOf : quarter.start;
+    const rows = customersOnly(accounts)
+      .filter((a) => a.renewal_date !== null && a.renewal_date >= from && a.renewal_date <= quarter.end)
+      .map((a) => ({
+        accountId: a.id,
+        name: a.name,
+        segment: a.segment,
+        owner: a.owner,
+        arr: a.mrr_usd * 12,
+        renewalDate: a.renewal_date!,
+        daysToRenewal: daysBetween(asOf, a.renewal_date!),
+      }))
+      .sort((x, y) => y.arr - x.arr || x.renewalDate.localeCompare(y.renewalDate));
+    return { quarter, count: rows.length, totalArr: rows.reduce((s, r) => s + r.arr, 0), top: rows.slice(0, topN) };
+  });
+}
+
+export type UpcomingDealRow = {
+  opportunityId: string;
+  accountId: string;
+  accountName: string;
+  type: string;
+  stage: string;
+  amount: number;
+  probability: number;
+  closeDate: string;
+};
+export type UpcomingDealsQuarter = { quarter: Quarter; count: number; totalAmount: number; weightedAmount: number; top: UpcomingDealRow[] };
+
+/** Open deals with a close date in this and next calendar quarter, largest amount first. */
+export function calcUpcomingDeals(opportunities: OpportunityRow[], accounts: AccountRow[], asOf: string, topN = UPCOMING_TOP_N): UpcomingDealsQuarter[] {
+  const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
+  const open = opportunities.filter(isOpen);
+  return [0, 1].map((offset) => {
+    const quarter = calendarQuarter(asOf, offset);
+    const deals = open
+      .filter((o) => o.close_date >= quarter.start && o.close_date <= quarter.end)
+      .sort((x, y) => y.amount_usd - x.amount_usd || x.close_date.localeCompare(y.close_date));
+    return {
+      quarter,
+      count: deals.length,
+      totalAmount: deals.reduce((s, o) => s + o.amount_usd, 0),
+      weightedAmount: deals.reduce((s, o) => s + weighted(o), 0),
+      top: deals.slice(0, topN).map((o) => ({
+        opportunityId: o.id,
+        accountId: o.account_id,
+        accountName: nameOf.get(o.account_id) ?? o.account_id,
+        type: o.type,
+        stage: o.stage,
+        amount: o.amount_usd,
+        probability: o.probability,
+        closeDate: o.close_date,
+      })),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Loaders: read from Supabase (server-side only) and run the calculators
 // ---------------------------------------------------------------------------
 
@@ -1171,6 +1262,15 @@ export async function getRenewalRisk(asOf: string = AS_OF_DATE): Promise<Renewal
     loadNps(),
   ]);
   return calcRenewalRisk(accounts, usage, prices, nps, asOf);
+}
+
+export async function getUpcomingRenewals(asOf: string = AS_OF_DATE): Promise<UpcomingRenewalsQuarter[]> {
+  return calcUpcomingRenewals(await loadAccounts(customerFilter), asOf);
+}
+
+export async function getUpcomingDeals(asOf: string = AS_OF_DATE): Promise<UpcomingDealsQuarter[]> {
+  const [accounts, opportunities] = await Promise.all([loadAccounts(), loadOpportunities((q) => q.in("stage", [...OPEN_STAGES]))]);
+  return calcUpcomingDeals(opportunities, accounts, asOf);
 }
 
 export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskResult> {

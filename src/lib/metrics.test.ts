@@ -29,6 +29,9 @@ import {
   calcUsageTrend,
   calcRenewalRisk,
   calcDealRisk,
+  calendarQuarter,
+  calcUpcomingRenewals,
+  calcUpcomingDeals,
   type DealRiskInput,
   usageWindow,
   type AccountRow,
@@ -599,4 +602,45 @@ test("Deal risk: open deals only, each rule fires on its own", () => {
   assert.equal(result.atRiskPipeline, 5000);
   assert.equal(result.openCount, 7);
   assert.equal(result.rows[0].accountName, "Acme");
+});
+
+test("Calendar quarters: this and next, across a year end", () => {
+  assert.deepEqual(calendarQuarter(TODAY), { label: "Q4 2026", start: "2026-10-01", end: "2026-12-31" });
+  assert.deepEqual(calendarQuarter(TODAY, 1), { label: "Q1 2027", start: "2027-01-01", end: "2027-03-31" });
+  assert.deepEqual(calendarQuarter("2026-03-31", 0), { label: "Q1 2026", start: "2026-01-01", end: "2026-03-31" });
+});
+
+test("Upcoming renewals: customers renewing this quarter (from today) and next, largest ARR first, top N", () => {
+  const accounts = [
+    acc({ id: "R1", status: "customer", mrr_usd: 100, renewal_date: "2026-12-01" }),
+    acc({ id: "R2", status: "customer", mrr_usd: 300, renewal_date: "2026-11-20" }),
+    acc({ id: "R3", status: "customer", mrr_usd: 200, renewal_date: "2026-12-31" }),
+    acc({ id: "R4", status: "customer", mrr_usd: 500, renewal_date: "2026-11-01" }), // already past today: not upcoming
+    acc({ id: "R5", status: "customer", mrr_usd: 400, renewal_date: "2027-02-01" }), // next quarter
+    acc({ id: "R6", status: "customer", mrr_usd: 900, renewal_date: "2027-04-01" }), // two quarters out: excluded
+    acc({ id: "C1", status: "churned", mrr_usd: 999, renewal_date: "2026-12-01" }), // not a customer
+  ];
+  const [thisQ, nextQ] = calcUpcomingRenewals(accounts, TODAY, 2);
+  assert.equal(thisQ.count, 3);
+  assert.equal(thisQ.totalArr, (100 + 300 + 200) * 12);
+  assert.deepEqual(thisQ.top.map((r) => r.accountId), ["R2", "R3"]); // top 2 only
+  assert.equal(thisQ.top[0].daysToRenewal, 7);
+  assert.deepEqual(nextQ.top.map((r) => r.accountId), ["R5"]);
+});
+
+test("Upcoming deals: open deals closing this and next quarter, largest first", () => {
+  const accounts = [acc({ id: "A1", status: "customer", name: "Acme" })];
+  const opps = [
+    opp({ id: "D1", stage: "Proposal", amount_usd: 1000, probability: 50, close_date: "2026-12-15" }),
+    opp({ id: "D2", stage: "Demo", amount_usd: 3000, probability: 25, close_date: "2026-10-05" }), // this quarter, date passed: still counted
+    opp({ id: "D3", stage: "Negotiation", amount_usd: 2000, probability: 70, close_date: "2027-03-01" }), // next quarter
+    opp({ id: "D4", stage: "Closed Won", amount_usd: 9000, probability: 100, close_date: "2026-11-01" }), // closed: excluded
+    opp({ id: "D5", stage: "Discovery", amount_usd: 9000, probability: 10, close_date: "2027-05-01" }), // too far out
+  ];
+  const [thisQ, nextQ] = calcUpcomingDeals(opps, accounts, TODAY);
+  assert.deepEqual(thisQ.top.map((r) => r.opportunityId), ["D2", "D1"]);
+  assert.equal(thisQ.totalAmount, 4000);
+  assert.equal(thisQ.weightedAmount, 3000 * 0.25 + 1000 * 0.5);
+  assert.deepEqual(nextQ.top.map((r) => r.opportunityId), ["D3"]);
+  assert.equal(nextQ.top[0].accountName, "Acme");
 });

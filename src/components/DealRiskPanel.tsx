@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { DealRiskResult } from "@/lib/metrics";
+import type { DealRiskResult, UpcomingDealsQuarter } from "@/lib/metrics";
 import { explainDealRisk, flagDealRisk, type AiNote } from "@/app/deal-risk/actions";
 import { pct, shortDate, usd, usdCompact } from "@/lib/format";
-import { AiCell, type AiState, cellClass, ErrorNote, FlagButton, rowClass, SignalChips, Stat, TableShell } from "./RiskUi";
+import { AiCell, type AiState, BackButton, cellClass, ErrorNote, FlagButton, QuarterHeading, rowClass, SignalChips, Stat, TableShell } from "./RiskUi";
 
 const HEADERS = [
   { label: "Deal" },
@@ -19,7 +19,50 @@ const HEADERS = [
 
 const TYPE_LABEL: Record<string, string> = { new: "New business", expansion: "Expansion", renewal: "Renewal" };
 
-export function DealRiskPanel() {
+const UPCOMING_HEADERS = [
+  { label: "Deal" },
+  { label: "Account" },
+  { label: "Stage" },
+  { label: "Amount", numeric: true },
+  { label: "Probability", numeric: true },
+  { label: "Close date" },
+];
+
+function UpcomingDeals({ quarters }: { quarters: UpcomingDealsQuarter[] }) {
+  return (
+    <div className="space-y-8">
+      {quarters.map((q, i) => (
+        <section key={q.quarter.label}>
+          <QuarterHeading
+            title={`Top ${q.top.length} deals closing ${i === 0 ? "this quarter" : "next quarter"} (${q.quarter.label})`}
+            detail={`${q.count} open deals · ${usd(q.totalAmount)} pipeline · ${usd(q.weightedAmount)} weighted`}
+          />
+          {q.top.length === 0 ? (
+            <p className="text-sm text-zinc-500">No open deals closing in {q.quarter.label}.</p>
+          ) : (
+            <TableShell headers={UPCOMING_HEADERS} minWidth="min-w-[760px]">
+              {q.top.map((r) => (
+                <tr key={r.opportunityId} className={rowClass}>
+                  <td className={`${cellClass} whitespace-nowrap`}>
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">{r.opportunityId}</span>
+                    <span className="ml-2 text-xs text-zinc-500">{TYPE_LABEL[r.type] ?? r.type}</span>
+                  </td>
+                  <td className={`${cellClass} whitespace-nowrap`}>{r.accountName}</td>
+                  <td className={`${cellClass} whitespace-nowrap`}>{r.stage}</td>
+                  <td className={`${cellClass} text-right tabular-nums`}>{usd(r.amount)}</td>
+                  <td className={`${cellClass} text-right tabular-nums`}>{r.probability}%</td>
+                  <td className={`${cellClass} whitespace-nowrap tabular-nums`}>{shortDate(r.closeDate)}</td>
+                </tr>
+              ))}
+            </TableShell>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export function DealRiskPanel({ upcoming }: { upcoming: UpcomingDealsQuarter[] }) {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<DealRiskResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +93,12 @@ export function DealRiskPanel() {
 
   return (
     <div className="space-y-6">
-      <FlagButton onClick={run} busy={busy} label="Flag deal risk" />
+      <div className="flex flex-wrap items-center gap-3">
+        <FlagButton onClick={run} busy={busy} label="Flag deal risk" />
+        {data && <BackButton onClick={() => setData(null)} label="Back to upcoming deals" />}
+      </div>
       {error && <ErrorNote message={error} />}
+      {!data && <UpcomingDeals quarters={upcoming} />}
 
       {data && (
         <>

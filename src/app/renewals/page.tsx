@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
-import { RENEWAL_RISK_RULES } from "@/lib/metrics";
+import { connection } from "next/server";
+import { getUpcomingRenewals, RENEWAL_RISK_RULES } from "@/lib/metrics";
 import { RenewalRiskPanel } from "@/components/RenewalRiskPanel";
 
 export const metadata: Metadata = { title: "Renewals · Cockpit · Lumen AI" };
@@ -16,7 +18,27 @@ export default function RenewalsPage() {
           before), or an underwater margin (below 30%). Claude then writes a reason and next action for each account.
         </p>
       </header>
-      <RenewalRiskPanel windowDays={R.renewalWithinDays} />
+      <Suspense fallback={<UpcomingSkeleton />}>
+        <RenewalsContent />
+      </Suspense>
     </main>
   );
 }
+
+// Reads live data on each request (server-side only).
+async function RenewalsContent() {
+  await connection();
+  const upcoming = await getUpcomingRenewals();
+  return <RenewalRiskPanel windowDays={RENEWAL_RISK_RULES.renewalWithinDays} upcoming={upcoming} />;
+}
+
+function UpcomingSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading">
+      <div className="h-9 w-40 animate-pulse rounded-md bg-zinc-200 dark:bg-zinc-800" />
+      <div className="h-80 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+      <div className="h-80 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+    </div>
+  );
+}
+

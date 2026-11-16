@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { RenewalRiskResult } from "@/lib/metrics";
+import type { RenewalRiskResult, UpcomingRenewalsQuarter } from "@/lib/metrics";
 import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/renewals/actions";
-import { pct, shortDate, usd, usdCompact } from "@/lib/format";
-import { AiCell, type AiState, cellClass, ErrorNote, FlagButton, rowClass, SignalChips, signed, Stat, TableShell } from "./RiskUi";
+import { pct, segmentLabel, shortDate, usd, usdCompact } from "@/lib/format";
+import { AiCell, type AiState, BackButton, cellClass, ErrorNote, FlagButton, QuarterHeading, rowClass, SignalChips, signed, Stat, TableShell } from "./RiskUi";
 
 const HEADERS = [
   { label: "Account" },
@@ -18,7 +18,42 @@ const HEADERS = [
   { label: "Claude: reason and next action" },
 ];
 
-export function RenewalRiskPanel({ windowDays }: { windowDays: number }) {
+const UPCOMING_HEADERS = [{ label: "Account" }, { label: "Segment" }, { label: "Account owner" }, { label: "ARR", numeric: true }, { label: "Renewal" }];
+
+function UpcomingRenewals({ quarters }: { quarters: UpcomingRenewalsQuarter[] }) {
+  return (
+    <div className="space-y-8">
+      {quarters.map((q, i) => (
+        <section key={q.quarter.label}>
+          <QuarterHeading
+            title={`Top ${q.top.length} renewals ${i === 0 ? "this quarter" : "next quarter"} (${q.quarter.label})`}
+            detail={`${q.count} renewals · ${usd(q.totalArr)} ARR${i === 0 ? " · from today to " + shortDate(q.quarter.end) : ""}`}
+          />
+          {q.top.length === 0 ? (
+            <p className="text-sm text-zinc-500">No renewals in {q.quarter.label}.</p>
+          ) : (
+            <TableShell headers={UPCOMING_HEADERS} minWidth="min-w-[720px]">
+              {q.top.map((r) => (
+                <tr key={r.accountId} className={rowClass}>
+                  <td className={`${cellClass} whitespace-nowrap font-medium text-zinc-900 dark:text-zinc-100`}>{r.name}</td>
+                  <td className={cellClass}>{segmentLabel(r.segment)}</td>
+                  <td className={`${cellClass} whitespace-nowrap`}>{r.owner}</td>
+                  <td className={`${cellClass} text-right tabular-nums`}>{usd(r.arr)}</td>
+                  <td className={`${cellClass} whitespace-nowrap`}>
+                    <span className="tabular-nums">{shortDate(r.renewalDate)}</span>
+                    <span className="ml-2 text-xs text-zinc-500">in {r.daysToRenewal} days</span>
+                  </td>
+                </tr>
+              ))}
+            </TableShell>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export function RenewalRiskPanel({ windowDays, upcoming }: { windowDays: number; upcoming: UpcomingRenewalsQuarter[] }) {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<RenewalRiskResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,8 +84,12 @@ export function RenewalRiskPanel({ windowDays }: { windowDays: number }) {
 
   return (
     <div className="space-y-6">
-      <FlagButton onClick={run} busy={busy} label="Flag renewal risk" />
+      <div className="flex flex-wrap items-center gap-3">
+        <FlagButton onClick={run} busy={busy} label="Flag renewal risk" />
+        {data && <BackButton onClick={() => setData(null)} label="Back to upcoming renewals" />}
+      </div>
       {error && <ErrorNote message={error} />}
+      {!data && <UpcomingRenewals quarters={upcoming} />}
 
       {data && (
         <>
