@@ -4,6 +4,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
+// Hard ceiling on each reply (thinking + answer). Bounds the worst-case cost of one call
+// to about 4,000 x $10/M = $0.04 of output. Raise per call with maxTokens if a feature needs more.
+export const DEFAULT_MAX_TOKENS = 4000;
 
 // $ per million tokens (Anthropic list prices). Used only to log cost_usd.
 const PRICE_PER_MILLION: Record<string, { input: number; output: number }> = {
@@ -51,7 +54,7 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
   const started = performance.now();
   const response = await client().beta.messages.create({
     model: DEFAULT_MODEL,
-    max_tokens: input.maxTokens ?? 16000,
+    max_tokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
     // If Claude declines on safety grounds, the API retries on a fallback model in the same call.
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",

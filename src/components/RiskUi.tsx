@@ -4,7 +4,9 @@ import type { ReactNode } from "react";
 
 // Shared building blocks for the /renewals and /deal-risk pages. Display only.
 
-export function FlagButton({ onClick, busy, label }: { onClick: () => void; busy: boolean; label: string }) {
+// Stays disabled until the whole run (rules + Claude notes) finishes, so a second
+// click can never start a second, paid Claude call.
+export function FlagButton({ onClick, busy, busyLabel = "Checking…", label }: { onClick: () => void; busy: boolean; busyLabel?: string; label: string }) {
   return (
     <button
       type="button"
@@ -12,7 +14,7 @@ export function FlagButton({ onClick, busy, label }: { onClick: () => void; busy
       disabled={busy}
       className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
     >
-      {busy ? "Checking…" : label}
+      {busy ? busyLabel : label}
     </button>
   );
 }

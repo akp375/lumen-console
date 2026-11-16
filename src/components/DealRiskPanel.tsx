@@ -71,6 +71,7 @@ export function DealRiskPanel({ upcoming }: { upcoming: UpcomingDealsQuarter[] }
   const [aiError, setAiError] = useState<string | null>(null);
 
   const run = async () => {
+    if (busy || ai === "loading") return; // one run at a time
     setBusy(true);
     setError(null);
     setAiError(null);
@@ -94,7 +95,7 @@ export function DealRiskPanel({ upcoming }: { upcoming: UpcomingDealsQuarter[] }
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
-        <FlagButton onClick={run} busy={busy} label="Flag deal risk" />
+        <FlagButton onClick={run} busy={busy || ai === "loading"} busyLabel={ai === "loading" ? "Claude is writing…" : "Checking…"} label="Flag deal risk" />
         {data && <BackButton onClick={() => setData(null)} label="Back to upcoming deals" />}
       </div>
       {error && <ErrorNote message={error} />}
