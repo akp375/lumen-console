@@ -18,6 +18,7 @@ The owner is a RevOps and strategy lead acting as product owner. The tool is als
 
 - All work happens on the `dev` branch.
 - Never commit to, merge into or push `main` unless the owner explicitly says so.
+- GitHub's default branch is `dev`, so work pushed to `dev` already counts on GitHub (including the contribution graph). Never suggest merging into `main` for that reason; merge only when the owner asks.
 
 ## Product
 

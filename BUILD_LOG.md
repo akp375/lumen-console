@@ -219,3 +219,56 @@
 - Renewals older than 6 months still have no deal. No metric looks back that far today.
 
 The live results table in section 1 shows the figures from before this fix. Overall win rate is now 60.5%, and the renewal data-gap note there is resolved.
+
+## 2026-11-19 (Thursday)
+
+## Highlights
+
+### 1. Connecting to HubSpot with a project-based app
+
+**The challenge.** Cockpit will later sync account and deal data into HubSpot, and agents will write notes and tasks there. That needs an access token for the HubSpot developer test account. HubSpot no longer lets you create "legacy private apps", so the old way of getting a token is gone.
+
+**How we solved it.**
+
+1. **Read HubSpot's current developer docs first** (developer platform 2025.2) instead of relying on memory.
+2. **Defined the app as a small project in the repo**, in `hubspot/app/`. Its settings file (`src/app/app-hsmeta.json`) lists the scopes: read and write for companies, contacts and deals, plus their property schemas. Keeping it in git means the app's permissions are recorded and reviewable.
+3. **Chose a static token.** The app uses "static" auth and "private" distribution, so it installs into one account and gives one token. There is no sign-in flow to build.
+4. **The owner ran the HubSpot steps.** They signed the CLI in with a personal access key, uploaded the project, installed it in the test account and pasted the token into `.env.local` as `HUBSPOT_ACCESS_TOKEN`. The token never went into chat. The CLI runs through `npx`, with nothing installed globally.
+5. **Wrote the guide down** in `hubspot/README.md`, so ops leads can repeat it.
+6. **Tested the connection** with `npm run hubspot:test`. HubSpot accepted the token, and the test account (248054539) has no companies yet.
+
+**Lessons.**
+
+- The CLI keeps its sign-in key in the home folder (`~/.hscli/config.yml`), not in the project, so it can't be committed by accident.
+- HubSpot's scope list has no separate notes or tasks scope. They are expected to be covered by the company, contact and deal scopes. **Test one note and one task before relying on this.**
+- To change scopes later: edit `app-hsmeta.json`, upload again, and reinstall from the app's Distribution tab.
+
+### 2. Creating the Lumen Console properties by script
+
+**The challenge.** Cockpit's numbers need fields to land in on HubSpot companies and deals. The fields had to be created repeatably, without duplicates, and without touching anything already in the account.
+
+**How we solved it.**
+
+1. **Listed every property in one file**, `hubspot/properties.json`, all in a property group called **Lumen Console**:
+   - Company: ARR, Renewal date, Gross margin, Capacity used, Latest NPS, NPS change, Health score, Renewal risk (Low / Medium / High)
+   - Deal: Executive sponsor, Days in stage, Deal risk (None / Amber / Red)
+2. **Wrote `npm run hubspot:setup`.** It creates the group and any missing properties, skips ones that exist, and never changes or deletes a property. It uses Node's built-in `fetch`, so there are no new packages.
+3. **Ran a dry run first.** `npm run hubspot:setup -- --dry-run` showed that the three properties the owner had made by hand were not in this account. They had been made in a different account, which we left alone.
+4. **Reused HubSpot's built-in "Next Renewal Date"** (`hs_next_renewal_date`) for Renewal date instead of creating a duplicate. Built-in properties are marked `"builtIn": true` in `properties.json` and stay in HubSpot's own group.
+5. **Created the other 10** as `lumen_` properties, such as `lumen_arr` and `lumen_deal_risk`. A second dry run skipped all 11 with no warnings, so the script is safe to run again.
+
+**Lessons.**
+
+- Always do a dry run against the real account. It showed the hand-made properties were in another account before anything was created.
+- Reuse a HubSpot built-in property where one exists. Duplicates confuse reports and anyone syncing to HubSpot later.
+
+### 3. Percent decision: send 0.42, not 42
+
+**The challenge.** The plan was to send 42 to HubSpot for 42%. HubSpot's help centre says percentage properties are stored as decimals, so 42 would display as **4200%**.
+
+**Decision (owner).** Send our fractions unchanged, for example a 42% gross margin goes as `0.42`. Cockpit already stores percentages that way. Before the full data sync, push **one record** and confirm HubSpot shows "42%", not "4200%" or "0.42%".
+
+## Other work today
+
+- **Integrations page:** the Anthropic Claude card now shows **Spend to date** and **Calls to date** across all of `llm_calls`, on the real clock. Supabase returns 1,000 rows at a time, so the total reads in pages.
+- **GitHub:** the default branch is `dev`, so work on `dev` counts on GitHub without merging into `main`. This is now a rule in `CLAUDE.md`.
