@@ -61,19 +61,23 @@ function startOfTodayUtc(): string {
 
 /** Real Claude spend so far today (UTC), from llm_calls. */
 export async function getTodaySpend(): Promise<{ costUsd: number; calls: number }> {
-  const { data, error } = await db().from("llm_calls").select("cost_usd").gte("created_at", startOfTodayUtc());
-  if (error) throw new Error(`Reading llm_calls failed: ${error.message}`);
-  const rows = data ?? [];
-  return { costUsd: rows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0), calls: rows.length };
+  return sumCalls(startOfTodayUtc());
 }
 
 /** All-time spend and call count across every llm_calls row (real API spend, not the demo date). */
 export async function getSpendToDate(): Promise<{ costUsd: number; calls: number }> {
+  return sumCalls();
+}
+
+/** Adds up llm_calls cost and count, optionally from a moment onwards. */
+async function sumCalls(sinceIso?: string): Promise<{ costUsd: number; calls: number }> {
   const PAGE = 1000; // Supabase returns at most 1,000 rows per request, so read in pages
   let costUsd = 0;
   let calls = 0;
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db().from("llm_calls").select("cost_usd").order("id").range(from, from + PAGE - 1);
+    let query = db().from("llm_calls").select("cost_usd");
+    if (sinceIso) query = query.gte("created_at", sinceIso);
+    const { data, error } = await query.order("id").range(from, from + PAGE - 1);
     if (error) throw new Error(`Reading llm_calls failed: ${error.message}`);
     const rows = data ?? [];
     costUsd += rows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0);
