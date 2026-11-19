@@ -102,6 +102,6 @@ The first command only shows what would change; the second makes the changes.
 
 [`properties.json`](properties.json) lists the Lumen Console properties, all in the property group **Lumen Console**. `npm run hubspot:setup` creates any that are missing and skips any that exist. It never deletes or changes a property. Properties made by hand in HubSpot are matched by their label, and their internal names are saved back into `properties.json`.
 
-### Percent values (decide before the data sync)
+### Percent values
 
-HubSpot stores percentage properties as decimals: 0.42 displays as **42%**, and 42 would display as **4200%**. Before the full sync, test one record and confirm HubSpot shows "42%", not "4200%" or "0.42%".
+HubSpot stores percentage properties as decimals: 0.42 displays as **42%**, and 42 would display as **4200%**. **Decision (19 Nov 2026):** the sync sends our fractions unchanged (0.42 for 42%). Before the full sync, test one record and confirm HubSpot shows "42%", not "4200%" or "0.42%".
