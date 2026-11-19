@@ -272,3 +272,28 @@ The live results table in section 1 shows the figures from before this fix. Over
 
 - **Integrations page:** the Anthropic Claude card now shows **Spend to date** and **Calls to date** across all of `llm_calls`, on the real clock. Supabase returns 1,000 rows at a time, so the total reads in pages.
 - **GitHub:** the default branch is `dev`, so work on `dev` counts on GitHub without merging into `main`. This is now a rule in `CLAUDE.md`.
+
+### 4. Security and cost audit
+
+**The challenge.** Before going further, check that secrets stay server-side, the AI budget can't be bypassed, the database is locked down and nothing secret has ever been committed.
+
+**What passed (read-only checks).**
+
+- **Secrets:** `.env.local` holds `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY` and `HUBSPOT_ACCESS_TOKEN`. None uses `NEXT_PUBLIC_`, and each is read only in server code or scripts. `SUPABASE_ANON_KEY` is not used.
+- **Database:** Row Level Security is on for all 12 tables. The public (anon) key gets "permission denied" on every table.
+- **Git history:** no `.env` file and no API key, token or HubSpot CLI config has ever been committed.
+- **Budget and Workspace limits:** the $2 daily budget, the 4,000-token reply cap, 6 messages of history, 1,000-character questions, 20 questions per hour and the 30-second timeout are all in place.
+
+**What we fixed.**
+
+1. **Dev server listened on the whole network.** `npm run dev` showed a Wi-Fi address (`192.168.1.117:3000`), so anyone on the same Wi-Fi could open Cockpit and spend the AI budget. It now runs `next dev -H 127.0.0.1`: localhost works, and the Wi-Fi address is refused.
+2. **Today's spend could undercount after 1,000 calls.** Supabase returns at most 1,000 rows per request. Today's spend is now read page by page, like spend to date.
+3. **Timed-out calls were not counted.** Anthropic may still bill a call we stop at its timeout. These calls are now logged as `<feature>:timeout` (for example `workspace:timeout`) at a worst-case estimate: input from the text length at full price, plus a full-length reply. The cost math moved to `src/lib/claude-cost.ts`, with 4 new tests (43 in total).
+4. **HubSpot card on the Integrations page** now shows Connected, the account number (248054539), the account type and the last check time.
+
+## To do before deploying
+
+- **Login.** Cockpit has no sign-in. Once it is on the internet, anyone with the link could see the data and use the AI budget.
+- **Budget overshoot from simultaneous calls (2c).** Two calls started at the same moment can both pass the $2 check, so the budget can be exceeded by a few cents. Fix: reserve the cost before the call, or check again just before sending.
+- **Questions-per-hour limit is per browser cookie (2d).** Clearing cookies resets it, and each server instance on Vercel keeps its own count. Fix: limit per signed-in user, stored in the database.
+- **Pause AI if cost logging fails.** If a call's cost can't be saved to `llm_calls`, the app only prints an error, so that cost is missing from the budget. Fix: pause AI features for the day when logging fails.
