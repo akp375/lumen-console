@@ -67,6 +67,22 @@ export async function getTodaySpend(): Promise<{ costUsd: number; calls: number 
   return { costUsd: rows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0), calls: rows.length };
 }
 
+/** All-time spend and call count across every llm_calls row (real API spend, not the demo date). */
+export async function getSpendToDate(): Promise<{ costUsd: number; calls: number }> {
+  const PAGE = 1000; // Supabase returns at most 1,000 rows per request, so read in pages
+  let costUsd = 0;
+  let calls = 0;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db().from("llm_calls").select("cost_usd").order("id").range(from, from + PAGE - 1);
+    if (error) throw new Error(`Reading llm_calls failed: ${error.message}`);
+    const rows = data ?? [];
+    costUsd += rows.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0);
+    calls += rows.length;
+    if (rows.length < PAGE) break;
+  }
+  return { costUsd, calls };
+}
+
 async function logCall(row: { feature: string; model: string; input_tokens: number; output_tokens: number; cost_usd: number; latency_ms: number }) {
   const { error } = await db().from("llm_calls").insert(row);
   if (error) console.error(`Logging to llm_calls failed: ${error.message}`);

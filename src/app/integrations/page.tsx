@@ -105,6 +105,8 @@ async function ClaudeCard() {
         <>
           <Detail label="Spend today (UTC)" value={`$${c.spendTodayUsd.toFixed(2)}`} />
           <Detail label="Calls today" value={c.callsToday.toLocaleString("en-US")} />
+          <Detail label="Spend to date" value={`$${c.spendToDateUsd.toFixed(2)}`} />
+          <Detail label="Calls to date" value={c.callsToDate.toLocaleString("en-US")} />
           <div>
             <div className="mb-1 flex justify-between text-xs">
               <span>Daily budget</span>
