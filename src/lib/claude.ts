@@ -5,26 +5,22 @@
 //   - Daily budget: once today's llm_calls cost reaches DAILY_BUDGET_USD, every
 //     call is refused with a ClaudeLimitError until midnight UTC.
 //   - Output cap: no call may ask for more than MAX_OUTPUT_TOKENS.
+//   - Timeouts: a call stopped at its timeout is still logged, at a worst-case estimated cost.
 //   - Tool loops: any future agent loop must stop after MAX_TOOL_CALLS_PER_QUESTION.
 //
 // Note: "today" here is the real calendar day (UTC), because it is real money.
 // Business metrics use AS_OF_DATE instead (see src/lib/as-of-date.ts).
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { callCostUsd, DEFAULT_MODEL, estimateTimedOutCall } from "./claude-cost";
 
-export const DEFAULT_MODEL = "claude-sonnet-5-5";
+export { DEFAULT_MODEL };
 export const DAILY_BUDGET_USD = 2;
 /** Hard ceiling on each reply (thinking + answer): at most 4,000 x $10/M = $0.04 of output per call. */
 export const MAX_OUTPUT_TOKENS = 4000;
 /** No route runs a tool loop today. Any future agent loop must stop after this many tool calls. */
 export const MAX_TOOL_CALLS_PER_QUESTION = 6;
 
-// $ per million tokens (Anthropic list prices). Used only to log cost_usd.
-const PRICE_PER_MILLION: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-5-5": { input: 2, output: 10 },
-  "claude-sonnet-5": { input: 2, output: 10 },
-  "claude-opus-5-5": { input: 4, output: 20 },
-};
 
 /** A guardrail stopped the call. The message is safe to show to users as a notice. */
 export class ClaudeLimitError extends Error {
@@ -129,18 +125,20 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
     );
   }
 
+  const maxTokens = Math.min(input.maxTokens ?? MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS);
+  const messages = input.messages ?? [{ role: "user" as const, content: input.prompt ?? "" }];
   const started = performance.now();
   let response;
   try {
     response = await client().beta.messages.create(
       {
         model: DEFAULT_MODEL,
-        max_tokens: Math.min(input.maxTokens ?? MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS),
+        max_tokens: maxTokens,
         // If Claude declines on safety grounds, the API retries on a fallback model in the same call.
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
         system: input.cacheSystem ? [{ type: "text", text: input.system, cache_control: { type: "ephemeral" } }] : input.system,
-        messages: input.messages ?? [{ role: "user", content: input.prompt ?? "" }],
+        messages,
         output_config: {
           effort: input.effort ?? "low",
           ...(input.jsonSchema ? { format: { type: "json_schema" as const, schema: input.jsonSchema } } : {}),
@@ -150,6 +148,17 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
     );
   } catch (e) {
     if (e instanceof Anthropic.APIConnectionTimeoutError) {
+      // Anthropic may still bill a call we stopped, so it counts toward the budget at a worst-case
+      // estimate. Logged as "<feature>:timeout" so estimated rows are easy to tell apart.
+      const est = estimateTimedOutCall({ model: DEFAULT_MODEL, system: input.system, messages, maxTokens });
+      await logCall({
+        feature: `${input.feature}:timeout`,
+        model: DEFAULT_MODEL,
+        input_tokens: est.inputTokens,
+        output_tokens: est.outputTokens,
+        cost_usd: est.costUsd,
+        latency_ms: Math.round(performance.now() - started),
+      });
       throw new ClaudeLimitError("timeout", "That took too long, so it was stopped. Try a shorter or more specific question.");
     }
     throw e;
@@ -160,10 +169,13 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
   const cacheWrite = response.usage.cache_creation_input_tokens ?? 0;
   const inputTokens = response.usage.input_tokens + cacheRead + cacheWrite;
   const outputTokens = response.usage.output_tokens;
-  const price = PRICE_PER_MILLION[response.model] ?? PRICE_PER_MILLION[DEFAULT_MODEL];
-  // Cached input is billed at 0.1x when read and 1.25x when first written.
-  const costUsd =
-    ((response.usage.input_tokens + cacheRead * 0.1 + cacheWrite * 1.25) * price.input + outputTokens * price.output) / 1_000_000;
+  const costUsd = callCostUsd({
+    model: response.model,
+    inputTokens: response.usage.input_tokens,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+    outputTokens,
+  });
 
   await logCall({ feature: input.feature, model: response.model, input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, latency_ms: latencyMs });
 
