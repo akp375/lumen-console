@@ -1,0 +1,31 @@
+{
+  "group": { "name": "lumen_console", "label": "Lumen Console" },
+  "properties": [
+    { "object": "companies", "label": "ARR", "name": "lumen_arr", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
+    { "object": "companies", "label": "Renewal date", "name": null, "madeByHand": true, "type": "date", "fieldType": "date" },
+    { "object": "companies", "label": "Gross margin", "name": "lumen_gross_margin", "type": "number", "fieldType": "number", "numberDisplayHint": "percentage" },
+    { "object": "companies", "label": "Capacity used", "name": "lumen_capacity_used", "type": "number", "fieldType": "number", "numberDisplayHint": "percentage" },
+    { "object": "companies", "label": "Latest NPS", "name": "lumen_latest_nps", "type": "number", "fieldType": "number" },
+    { "object": "companies", "label": "NPS change", "name": "lumen_nps_change", "type": "number", "fieldType": "number" },
+    { "object": "companies", "label": "Health score", "name": "lumen_health_score", "type": "number", "fieldType": "number" },
+    {
+      "object": "companies",
+      "label": "Renewal risk",
+      "name": null,
+      "madeByHand": true,
+      "type": "enumeration",
+      "fieldType": "select",
+      "options": ["Low", "Medium", "High"]
+    },
+    { "object": "deals", "label": "Executive sponsor", "name": null, "madeByHand": true, "type": "string", "fieldType": "text" },
+    { "object": "deals", "label": "Days in stage", "name": "lumen_days_in_stage", "type": "number", "fieldType": "number" },
+    {
+      "object": "deals",
+      "label": "Deal risk",
+      "name": "lumen_deal_risk",
+      "type": "enumeration",
+      "fieldType": "select",
+      "options": ["None", "Amber", "Red"]
+    }
+  ]
+}
