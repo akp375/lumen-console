@@ -1,7 +1,7 @@
 import { Suspense, type ReactNode } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { getClaudeStatus, getSupabaseStatus } from "@/lib/integrations";
+import { getClaudeStatus, getHubSpotStatus, getSupabaseStatus } from "@/lib/integrations";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { shortDate, usd } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
@@ -20,7 +20,9 @@ export default function IntegrationsPage() {
         <Suspense fallback={<CardSkeleton />}>
           <ClaudeCard />
         </Suspense>
-        <PlannedCard name="HubSpot" initial="H" color="bg-orange-500" kind="CRM" note="Planned: sync accounts and deals as HubSpot companies and deals." />
+        <Suspense fallback={<CardSkeleton />}>
+          <HubSpotCard />
+        </Suspense>
         <PlannedCard
           name="Salesforce"
           initial="S"
@@ -128,6 +130,28 @@ async function ClaudeCard() {
               />
             </div>
           </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+async function HubSpotCard() {
+  await connection();
+  const h = await getHubSpotStatus();
+  return (
+    <Card name="HubSpot" initial="H" color="bg-orange-500" kind="CRM" connected={h.connected}>
+      {h.connected ? (
+        <>
+          <Detail label="Account" value={h.portalId} />
+          <Detail label="Account type" value={h.accountType} />
+          <Detail label="Last checked" value={dateTime(h.checkedAt)} />
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">Lumen Console properties are set up. Data sync is planned.</p>
+        </>
+      ) : (
+        <>
+          <p className="text-red-700 dark:text-red-300">Can&apos;t reach HubSpot: {h.error}</p>
+          <Detail label="Last checked" value={dateTime(h.checkedAt)} />
         </>
       )}
     </Card>

@@ -6,7 +6,7 @@
 //           npm run hubspot:setup -- --dry-run (only shows what it would do)
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { hubspot } from "./hubspot-client.ts";
+import { hubspot } from "../src/lib/hubspot.ts";
 
 const FILE = new URL("../hubspot/properties.json", import.meta.url);
 const DRY_RUN = process.argv.includes("--dry-run");

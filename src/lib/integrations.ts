@@ -1,6 +1,20 @@
 // Status of Cockpit's data sources for the Integrations page. Server-side only.
 import { createClient } from "@supabase/supabase-js";
 import { DAILY_BUDGET_USD, getSpendToDate, getTodaySpend } from "./claude";
+import { accountTypeLabel, getHubSpotAccount } from "./hubspot";
+
+export type HubSpotStatus = { connected: boolean; portalId: number | null; accountType: string | null; checkedAt: string; error?: string };
+
+/** Live check: asks HubSpot which account the token belongs to. checkedAt is the real time of this check. */
+export async function getHubSpotStatus(): Promise<HubSpotStatus> {
+  const checkedAt = new Date().toISOString();
+  try {
+    const a = await getHubSpotAccount();
+    return { connected: true, portalId: a.portalId, accountType: accountTypeLabel(a.accountType), checkedAt };
+  } catch (e) {
+    return { connected: false, portalId: null, accountType: null, checkedAt, error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 export type SupabaseStatus = { connected: boolean; lastSeededAt: string | null; asOfDate: string | null; error?: string };
 export type ClaudeStatus = { connected: boolean; spendTodayUsd: number; callsToday: number; spendToDateUsd: number; callsToDate: number; budgetUsd: number; error?: string };

@@ -1,7 +1,7 @@
 // Connection test: reads 5 companies from HubSpot and prints their names.
 // Run with: npm run hubspot:test
 
-import { hubspot } from "./hubspot-client.ts";
+import { hubspot } from "../src/lib/hubspot.ts";
 
 type CompaniesPage = { results: { id: string; properties: { name?: string | null } }[] };
 
