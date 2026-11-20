@@ -938,13 +938,18 @@ export type DealRiskResult = {
   openPipeline: number;
 };
 
+/** Days an open deal has been in its current stage; null when the stage entry date is unknown. */
+export function dealDaysInStage(o: Pick<DealRiskInput, "stage_entered_date">, asOf: string): number | null {
+  return o.stage_entered_date ? daysBetween(o.stage_entered_date, asOf) : null;
+}
+
 export function calcDealRisk(opportunities: DealRiskInput[], accounts: AccountRow[], asOf: string): DealRiskResult {
   const R = DEAL_RISK_RULES;
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
   const open = opportunities.filter(isOpen);
   const rows: DealRiskRow[] = [];
   for (const o of open) {
-    const daysInStage = o.stage_entered_date ? daysBetween(o.stage_entered_date, asOf) : null;
+    const daysInStage = dealDaysInStage(o, asOf);
     const daysSinceActivity = o.last_activity_date ? daysBetween(o.last_activity_date, asOf) : null;
     const maxDays = R.maxDaysInStage[o.stage];
     const signals: DealRiskSignal[] = [];
@@ -1068,6 +1073,115 @@ export function calcUpcomingDeals(opportunities: OpportunityRow[], accounts: Acc
       })),
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// CRM sync: one set of values per account and per deal, for HubSpot
+// Reuses the calculators above; the sync script only reformats these values.
+// ---------------------------------------------------------------------------
+
+export const RENEWAL_RISK_LEVELS = ["Low", "Medium", "High"] as const;
+export type RenewalRiskLevel = (typeof RENEWAL_RISK_LEVELS)[number];
+export const DEAL_RISK_LEVELS = ["None", "Amber", "Red"] as const;
+export type DealRiskLevel = (typeof DEAL_RISK_LEVELS)[number];
+
+/** Renewal risk level from the number of renewal-risk signals: 0 = Low, 1 = Medium, 2+ = High.
+ *  Customers not flagged (including renewals beyond the 120-day window) are Low. */
+export function renewalRiskLevel(signalCount: number): RenewalRiskLevel {
+  return signalCount >= 2 ? "High" : signalCount === 1 ? "Medium" : "Low";
+}
+
+/** Deal risk level from the number of deal-risk signals: 0 = None, 1 = Amber, 2+ = Red. */
+export function dealRiskLevel(signalCount: number): DealRiskLevel {
+  return signalCount >= 2 ? "Red" : signalCount === 1 ? "Amber" : "None";
+}
+
+export type CrmAccountRow = {
+  accountId: string;
+  name: string;
+  status: AccountRow["status"];
+  segment: string;
+  /** Customer-only values; null for prospects and churned accounts. */
+  arr: number | null;
+  renewalDate: string | null;
+  grossMargin: number | null; // decimal, 0.42 = 42%
+  capacityUsed: number | null; // decimal, 0.42 = 42%
+  latestNps: number | null;
+  npsChange: number | null;
+  renewalRisk: RenewalRiskLevel | null;
+  hasOpenDeal: boolean;
+};
+
+export type CrmDealRow = {
+  opportunityId: string;
+  accountId: string;
+  accountName: string;
+  type: string; // new, expansion, renewal
+  stage: string;
+  forecastCategory: string; // Pipeline, Best Case, Commit, Closed, Omitted
+  amount: number;
+  closeDate: string;
+  executiveSponsor: string | null;
+  /** Open deals only; null for closed deals. */
+  daysInStage: number | null;
+  dealRisk: DealRiskLevel | null;
+};
+
+export type CrmSyncData = { accounts: CrmAccountRow[]; deals: CrmDealRow[] };
+
+/** Every account and every deal, with the values the CRM sync sends. Uses AS_OF_DATE-style asOf, never the real clock. */
+export function calcCrmSyncData(
+  accounts: AccountRow[],
+  deals: DealRiskInput[],
+  usage: UsageRow[],
+  prices: ModelPriceRow[],
+  nps: NpsResponseRow[],
+  asOf: string,
+): CrmSyncData {
+  const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r.grossMargin]));
+  const capacity = new Map(calcCapacity(accounts, usage, prices, asOf).map((r) => [r.accountId, r.capacityUsed]));
+  const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
+  const renewalSignals = new Map(calcRenewalRisk(accounts, usage, prices, nps, asOf).rows.map((r) => [r.accountId, r.signals.length]));
+  const dealSignals = new Map(calcDealRisk(deals, accounts, asOf).rows.map((r) => [r.opportunityId, r.signals.length]));
+  const withOpenDeal = new Set(deals.filter(isOpen).map((o) => o.account_id));
+  const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
+
+  return {
+    accounts: accounts.map((a) => {
+      const isCustomer = a.status === "customer";
+      const s = sentiment.get(a.id);
+      return {
+        accountId: a.id,
+        name: a.name,
+        status: a.status,
+        segment: a.segment,
+        arr: isCustomer ? a.mrr_usd * 12 : null,
+        renewalDate: isCustomer ? a.renewal_date : null,
+        grossMargin: isCustomer ? (margin.get(a.id) ?? null) : null,
+        capacityUsed: isCustomer ? (capacity.get(a.id) ?? null) : null,
+        latestNps: isCustomer ? (s?.latestNps ?? null) : null,
+        npsChange: isCustomer ? (s?.npsChange ?? null) : null,
+        renewalRisk: isCustomer ? renewalRiskLevel(renewalSignals.get(a.id) ?? 0) : null,
+        hasOpenDeal: withOpenDeal.has(a.id),
+      };
+    }),
+    deals: deals.map((o) => {
+      const open = isOpen(o);
+      return {
+        opportunityId: o.id,
+        accountId: o.account_id,
+        accountName: nameOf.get(o.account_id) ?? o.account_id,
+        type: o.type,
+        stage: o.stage,
+        forecastCategory: o.forecast_category,
+        amount: o.amount_usd,
+        closeDate: o.close_date,
+        executiveSponsor: o.executive_sponsor,
+        daysInStage: open ? dealDaysInStage(o, asOf) : null,
+        dealRisk: open ? dealRiskLevel(dealSignals.get(o.id) ?? 0) : null,
+      };
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,11 +1388,15 @@ export async function getUpcomingDeals(asOf: string = AS_OF_DATE): Promise<Upcom
 }
 
 async function loadOpenDealsWithRiskFields(): Promise<DealRiskInput[]> {
+  return loadDealsWithRiskFields((q) => q.in("stage", [...OPEN_STAGES]));
+}
+
+async function loadDealsWithRiskFields(filter?: (q: Query) => Query): Promise<DealRiskInput[]> {
   const rows = await fetchAll(
-      "opportunities",
-      "id, account_id, type, source, stage, forecast_category, amount_usd, probability, created_date, close_date, executive_sponsor, stage_entered_date, last_activity_date, next_step",
-      ["id"],
-    (q) => q.in("stage", [...OPEN_STAGES]),
+    "opportunities",
+    "id, account_id, type, source, stage, forecast_category, amount_usd, probability, created_date, close_date, executive_sponsor, stage_entered_date, last_activity_date, next_step",
+    ["id"],
+    filter,
   );
   return rows.map((r) => ({
     id: str(r.id),
@@ -1301,6 +1419,17 @@ async function loadOpenDealsWithRiskFields(): Promise<DealRiskInput[]> {
 export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskResult> {
   const [accounts, opportunities] = await Promise.all([loadAccounts(), loadOpenDealsWithRiskFields()]);
   return calcDealRisk(opportunities, accounts, asOf);
+}
+
+/** All accounts and all deals with the values the HubSpot sync sends. */
+export async function getCrmSyncData(asOf: string = AS_OF_DATE): Promise<CrmSyncData> {
+  const [accounts, deals, { usage, prices }, nps] = await Promise.all([
+    loadAccounts(),
+    loadDealsWithRiskFields(),
+    loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
+    loadNps(),
+  ]);
+  return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf);
 }
 
 // ---------------------------------------------------------------------------

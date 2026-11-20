@@ -32,6 +32,9 @@ import {
   calendarQuarter,
   calcUpcomingRenewals,
   calcUpcomingDeals,
+  calcCrmSyncData,
+  renewalRiskLevel,
+  dealRiskLevel,
   type DealRiskInput,
   usageWindow,
   type AccountRow,
@@ -643,4 +646,78 @@ test("Upcoming deals: open deals closing this and next quarter, largest first", 
   assert.equal(thisQ.weightedAmount, 3000 * 0.25 + 1000 * 0.5);
   assert.deepEqual(nextQ.top.map((r) => r.opportunityId), ["D3"]);
   assert.equal(nextQ.top[0].accountName, "Acme");
+});
+
+// ---------------------------------------------------------------------------
+// CRM sync values (HubSpot)
+// ---------------------------------------------------------------------------
+
+test("Risk levels: renewal 0 = Low, 1 = Medium, 2+ = High; deal 0 = None, 1 = Amber, 2+ = Red", () => {
+  assert.deepEqual([0, 1, 2, 4].map(renewalRiskLevel), ["Low", "Medium", "High", "High"]);
+  assert.deepEqual([0, 1, 2, 5].map(dealRiskLevel), ["None", "Amber", "Red", "Red"]);
+});
+
+test("CRM sync: customer-only values, risk levels for every customer and open deal", () => {
+  const accounts = [
+    // K1: renews in 49 days, NPS 9 -> 6 (low NPS and dropping): 2 signals = High
+    acc({ id: "K1", name: "Kilo", status: "customer", segment: "enterprise", mrr_usd: 1000, included_tokens_monthly: 10_000_000, renewal_date: "2027-01-01" }),
+    // K2: low NPS but renews in 200 days, so not flagged: Low
+    acc({ id: "K2", status: "customer", mrr_usd: 500, renewal_date: "2027-06-01" }),
+    // K3: renews in 32 days, latest NPS 6 only: 1 signal = Medium
+    acc({ id: "K3", status: "customer", mrr_usd: 200, renewal_date: "2026-12-15" }),
+    acc({ id: "P1", status: "prospect" }), // has an open deal
+    acc({ id: "P2", status: "prospect" }), // closed deal only
+    acc({ id: "C1", status: "churned", churn_date: "2026-09-01" }),
+  ];
+  const nps = [
+    { account_id: "K1", responded_at: "2026-08-01T10:00:00Z", score: 9 },
+    { account_id: "K1", responded_at: "2026-10-01T10:00:00Z", score: 6 },
+    { account_id: "K2", responded_at: "2026-10-01T10:00:00Z", score: 3 },
+    { account_id: "K3", responded_at: "2026-10-01T10:00:00Z", score: 6 },
+  ];
+  // K1: 1M input tokens on "big" = $10 in the 30-day window -> margin (1000 - 10) / 1000 = 0.99; capacity 1M / 10M = 0.1
+  const usage = [usageRow("K1", "2026-11-01", "big", 1_000_000, 0)];
+  const healthy = { executive_sponsor: "Pat, CTO", stage_entered_date: "2026-11-01", last_activity_date: "2026-11-10", next_step: "Send proposal" };
+  const deal = (o: Partial<DealRiskInput> & Pick<DealRiskInput, "id" | "stage" | "account_id">): DealRiskInput => ({
+    ...opp({ close_date: "2026-12-31", amount_usd: 1000, ...o }),
+    ...healthy,
+    ...o,
+  });
+  const deals = [
+    deal({ id: "E1", account_id: "P1", stage: "Proposal", executive_sponsor: null, next_step: null }), // 2 signals: Red
+    deal({ id: "E2", account_id: "K1", stage: "Negotiation", forecast_category: "Commit" }), // healthy: None
+    deal({ id: "E3", account_id: "K2", stage: "Demo", next_step: null }), // 1 signal: Amber
+    deal({ id: "E4", account_id: "P2", stage: "Closed Lost", forecast_category: "Omitted", executive_sponsor: null }), // closed: no risk, no days
+  ];
+
+  const { accounts: a, deals: d } = calcCrmSyncData(accounts, deals, usage, PRICES, nps, TODAY);
+  const A = Object.fromEntries(a.map((r) => [r.accountId, r]));
+  const D = Object.fromEntries(d.map((r) => [r.opportunityId, r]));
+
+  assert.equal(a.length, 6);
+  assert.equal(A.K1.arr, 12_000);
+  assert.equal(A.K1.renewalDate, "2027-01-01");
+  close(A.K1.grossMargin, 0.99, "K1 margin as a decimal");
+  close(A.K1.capacityUsed, 0.1, "K1 capacity as a decimal");
+  assert.equal(A.K1.latestNps, 6);
+  assert.equal(A.K1.npsChange, -3);
+  assert.equal(A.K1.segment, "enterprise");
+  assert.deepEqual([A.K1.renewalRisk, A.K2.renewalRisk, A.K3.renewalRisk], ["High", "Low", "Medium"]);
+  assert.equal(A.K1.hasOpenDeal, true);
+
+  // Prospects and churned accounts: no customer values
+  for (const id of ["P1", "P2", "C1"]) {
+    assert.equal(A[id].arr, null);
+    assert.equal(A[id].grossMargin, null);
+    assert.equal(A[id].renewalRisk, null);
+  }
+  assert.equal(A.P1.hasOpenDeal, true);
+  assert.equal(A.P2.hasOpenDeal, false);
+
+  assert.equal(d.length, 4);
+  assert.deepEqual([D.E1.dealRisk, D.E2.dealRisk, D.E3.dealRisk, D.E4.dealRisk], ["Red", "None", "Amber", null]);
+  assert.equal(D.E2.daysInStage, 12); // 2026-11-01 -> 2026-11-13
+  assert.equal(D.E4.daysInStage, null);
+  assert.equal(D.E2.forecastCategory, "Commit");
+  assert.equal(D.E1.accountName, "P1");
 });
