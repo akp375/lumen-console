@@ -94,7 +94,7 @@ The first command only shows what would change; the second makes the changes.
 | Contacts | `crm.objects.contacts.read`, `crm.objects.contacts.write` |
 | Deals | `crm.objects.deals.read`, `crm.objects.deals.write` |
 | Custom properties and groups | `crm.schemas.companies.read/write`, `crm.schemas.contacts.read/write`, `crm.schemas.deals.read/write` |
-| Notes and tasks | No separate scope is listed in HubSpot's scope reference; notes and tasks are attached to companies, contacts and deals, and are expected to be covered by the scopes above. **Check with a test note and task before relying on this.** |
+| Notes and tasks | No separate scope is needed. **Confirmed 20 Nov 2026** with `npm run hubspot:test-activity`: the app created a note and a task on a company with only the scopes above. |
 
 **Changing scopes later:** edit `app-hsmeta.json`, run `hs project upload` again, then reinstall from the **Reinstall URL** on the Distribution tab. The token stays the same; rotate it about every 6 months (same tab).
 
