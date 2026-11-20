@@ -60,16 +60,20 @@ export function pickTestAccount(data: CrmSyncData): CrmAccountRow | undefined {
     .sort((x, y) => (y.arr ?? 0) - (x.arr ?? 0) || x.accountId.localeCompare(y.accountId))[0];
 }
 
-// Made-up contacts: one per prospect, the same every run. Emails use the reserved .example top-level domain,
-// so they can never reach a real inbox.
+// Made-up contacts: one per prospect, the same every run. Emails are subdomains of example.com, which is
+// reserved for examples and can't receive mail. (HubSpot rejects the bare .example top-level domain as invalid.)
 const FIRST = ["Alex", "Bailey", "Casey", "Devon", "Emery", "Finley", "Harper", "Jordan", "Kai", "Logan", "Morgan", "Noor", "Parker", "Quinn", "Riley", "Sage", "Taylor", "Uma", "Vic", "Wren"];
 const LAST = ["Abara", "Brandt", "Castillo", "Dunmore", "Ellery", "Fairweather", "Gallo", "Hartigan", "Ivers", "Jansen", "Kowal", "Lindqvist", "Mbeki", "Novak", "Okafor", "Pereira", "Quill", "Rasmussen", "Sato", "Thorne"];
 const TITLES = ["Head of Operations", "VP Engineering", "Director of Data", "CTO", "Head of AI", "VP Product", "Chief Operating Officer", "Director of IT"];
 
+/** FNV-1a with a final mix, so similar inputs give unrelated numbers. */
 function hash(s: string): number {
-  let h = 0;
-  for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return h;
+  let h = 0x811c9dc5;
+  for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 12;
+  return h >>> 0;
 }
 
 function slug(s: string): string {
@@ -77,9 +81,9 @@ function slug(s: string): string {
 }
 
 export function fictionalContact(a: Pick<CrmAccountRow, "accountId" | "name">): { firstname: string; lastname: string; jobtitle: string; email: string } {
-  const h = hash(a.accountId);
-  const firstname = FIRST[h % FIRST.length];
-  const lastname = LAST[Math.floor(h / FIRST.length) % LAST.length];
-  const jobtitle = TITLES[Math.floor(h / (FIRST.length * LAST.length)) % TITLES.length];
-  return { firstname, lastname, jobtitle, email: `${firstname}.${lastname}@${slug(a.name)}.example`.toLowerCase() };
+  // Separate hashes per field, so first names, last names and titles vary independently.
+  const firstname = FIRST[hash(`first:${a.accountId}`) % FIRST.length];
+  const lastname = LAST[hash(`last:${a.accountId}`) % LAST.length];
+  const jobtitle = TITLES[hash(`title:${a.accountId}`) % TITLES.length];
+  return { firstname, lastname, jobtitle, email: `${firstname}.${lastname}@${slug(a.name)}.example.com`.toLowerCase() };
 }

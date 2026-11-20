@@ -115,4 +115,36 @@ The other properties are ours: their internal names start with `lumen_` and they
 
 ### Percent values
 
-HubSpot stores percentage properties as decimals: 0.42 displays as **42%**, and 42 would display as **4200%**. **Decision (19 Nov 2026):** the sync sends our fractions unchanged (0.42 for 42%). Before the full sync, test one record and confirm HubSpot shows "42%", not "4200%" or "0.42%".
+HubSpot stores percentage properties as decimals: 0.42 displays as **42%**, and 42 would display as **4200%**. **Decision (19 Nov 2026):** the sync sends our fractions unchanged (0.42 for 42%). **Checked 20 Nov 2026** on one record before the full sync: 0.7186 showed as 71.86%.
+
+## Syncing data into HubSpot
+
+`npm run hubspot:sync` copies Cockpit's data into HubSpot. Run it again any time; it updates the same records instead of creating duplicates. It never deletes anything in HubSpot.
+
+```bash
+npm run hubspot:sync -- --dry-run
+```
+
+```bash
+npm run hubspot:sync
+```
+
+The first command shows what would be sent, with nothing sent; the second sends it. Add `--one` to either to sync a single customer and its deals (useful for checking a change on one record first).
+
+**What goes where**
+
+| Cockpit | HubSpot | Matched on |
+|---|---|---|
+| Every account (customers, prospects, churned) | Company | Lumen account ID |
+| Every deal | Deal, in **New business** (new deals) or **Renewals & expansion** (renewals and expansions), attached to its company | Lumen opportunity ID |
+| One made-up contact per prospect | Contact, attached to its company | Email |
+
+- **All numbers come from `metrics.ts`**: ARR, margin, capacity, NPS, renewal and deal risk, days in stage. Customer-only values are left blank on prospects and churned accounts; days in stage and deal risk are blank on closed deals.
+- **Risk levels:** renewal risk is High (2+ warning signs), Medium (1) or Low (none, including renewals more than 120 days away). Deal risk is Red (2+), Amber (1) or None.
+- **Lifecycle stage:** customer → Customer; prospect with an open deal → Opportunity, otherwise Lead; churned → Other. HubSpot won't move a stage backwards, so the sync clears it first when needed. After the first sync, HubSpot's own automation moved 12 Lead companies to Opportunity when their (closed) deals were attached; the next run set them back. Expect this once whenever deals are first attached.
+- **Forecast category** uses HubSpot's built-in field. Ours → HubSpot: Pipeline → Pipeline, Best Case → Best case, Commit → Commit, Closed → Closed won, Omitted → Not forecasted. The sync reads HubSpot's options each run and stops if one is missing.
+- **Made-up contacts** have fictional names and emails at `<company>.example.com`. example.com is reserved for examples, so these can never reach a real inbox. (HubSpot rejects the bare `.example` domain.)
+
+**First full sync (20 Nov 2026):** 190 companies, 207 deals (62 New business, 145 Renewals & expansion) and 30 contacts. A re-run created nothing new. Counts and risk levels in HubSpot matched Cockpit's Renewals and Deal Risk pages.
+
+**Notes and tasks test:** `npm run hubspot:test-activity` adds one labelled note and task to the `--one` test company, to check the app may write them.

@@ -70,9 +70,16 @@ test("--one picks the largest-ARR customer with an open deal and margin and capa
   assert.equal(picked?.accountId, "mid");
 });
 
-test("Fictional contacts: same every run, reserved .example domain", () => {
+test("Fictional contacts: same every run, reserved example.com subdomain", () => {
   const a = fictionalContact({ accountId: "acc_0001", name: "Northwind Labs, Inc." });
   assert.deepEqual(a, fictionalContact({ accountId: "acc_0001", name: "Northwind Labs, Inc." }));
-  assert.match(a.email, /^[a-z]+\.[a-z]+@northwind-labs-inc\.example$/);
+  assert.match(a.email, /^[a-z]+\.[a-z]+@northwind-labs-inc\.example\.com$/);
   assert.ok(a.firstname && a.lastname && a.jobtitle);
+});
+
+test("Fictional contacts: names vary across accounts", () => {
+  const ids = Array.from({ length: 30 }, (_, i) => `acc_${String(i + 1).padStart(4, "0")}`);
+  const people = ids.map((accountId) => fictionalContact({ accountId, name: accountId }));
+  assert.ok(new Set(people.map((p) => p.lastname)).size >= 10, "at least 10 different last names in 30");
+  assert.ok(new Set(people.map((p) => `${p.firstname} ${p.lastname}`)).size >= 25, "mostly unique full names");
 });
