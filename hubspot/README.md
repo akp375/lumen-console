@@ -102,13 +102,16 @@ The first command only shows what would change; the second makes the changes.
 
 [`properties.json`](properties.json) lists the Lumen Console properties, all in the property group **Lumen Console**. `npm run hubspot:setup` creates any that are missing and skips any that exist. It never deletes or changes a property. Properties made by hand in HubSpot are matched by their label, and their internal names are saved back into `properties.json`.
 
-**We reuse HubSpot's built-in properties where one exists**, instead of creating a duplicate. These are marked `"builtIn": true` in `properties.json`, keep HubSpot's internal name and stay in HubSpot's own property group. Today that is:
+**We reuse HubSpot's built-in properties where one exists and the sync can write to it**, instead of creating a duplicate. These are marked `"builtIn": true` in `properties.json`, keep HubSpot's internal name and stay in HubSpot's own property group. `npm run hubspot:setup` warns if a built-in turns out to be read-only. Today that is:
 
 | Our field | HubSpot built-in | Internal name |
 |---|---|---|
-| Renewal date (company) | Next Renewal Date | `hs_next_renewal_date` |
+| Forecast category (deal) | Forecast category | `hs_manual_forecast_category` |
+| Deal type (deal) | Deal Type | `dealtype` |
 
 The other properties are ours: their internal names start with `lumen_` and they live in the **Lumen Console** group.
+
+**Why Renewal date is our own field (`lumen_renewal_date`).** We first mapped it to HubSpot's built-in **Next Renewal Date** (`hs_next_renewal_date`). On 20 Nov 2026 the first sync was refused: that field is **read-only**. HubSpot fills it itself with the earliest renewal date across the company's active **Contracts** records, so apps can't set it. Filling it would mean creating a HubSpot Contract per customer, which is a bigger job. So the sync writes our renewal date to `lumen_renewal_date` instead. Nothing had been written when the sync was refused.
 
 ### Percent values
 

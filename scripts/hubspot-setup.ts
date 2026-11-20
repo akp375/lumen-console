@@ -42,6 +42,8 @@ type HsProperty = {
   groupName: string;
   hubspotDefined?: boolean;
   hasUniqueValue?: boolean;
+  calculated?: boolean;
+  modificationMetadata?: { readOnlyValue?: boolean };
   numberDisplayHint?: string;
   options?: HsOption[];
 };
@@ -116,6 +118,9 @@ try {
         if (byName) {
           console.log(`  - "${p.label}" uses HubSpot built-in "${byName.label}" (${byName.name}), skipped`);
           if (byName.type !== p.type) warn(`built-in ${byName.name} is ${byName.type}, planned ${p.type}.`);
+          // HubSpot fills some built-ins itself (e.g. Next Renewal Date, from contracts); the sync can't write those.
+          if (byName.modificationMetadata?.readOnlyValue || byName.calculated)
+            warn(`built-in ${byName.name} is read-only in HubSpot, so the sync can't write it. Use a lumen_ property instead.`);
           counts.skipped++;
         } else {
           warn(`built-in ${p.name} for "${p.label}" was not found in this account. Not created; check properties.json.`);

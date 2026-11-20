@@ -139,7 +139,7 @@ try {
       lumen_segment: ownOption(segmentOpts, segmentLabel[a.segment] ?? fail(`Unknown segment "${a.segment}"`), "Segment"),
       lifecyclestage: valueFor(lifecycleOpts, lifecycleLabel(a), "Lifecycle stage"),
       lumen_arr: str(a.arr),
-      hs_next_renewal_date: str(a.renewalDate),
+      lumen_renewal_date: str(a.renewalDate),
       lumen_gross_margin: decimal(a.grossMargin),
       lumen_capacity_used: decimal(a.capacityUsed),
       lumen_latest_nps: str(a.latestNps),

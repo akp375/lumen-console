@@ -19,7 +19,7 @@
       "options": ["Enterprise", "Mid-market", "SMB"]
     },
     { "object": "companies", "label": "ARR", "name": "lumen_arr", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
-    { "object": "companies", "label": "Renewal date", "name": "hs_next_renewal_date", "builtIn": true, "type": "date", "fieldType": "date" },
+    { "object": "companies", "label": "Renewal date", "name": "lumen_renewal_date", "type": "date", "fieldType": "date" },
     { "object": "companies", "label": "Gross margin", "name": "lumen_gross_margin", "type": "number", "fieldType": "number", "numberDisplayHint": "percentage" },
     { "object": "companies", "label": "Capacity used", "name": "lumen_capacity_used", "type": "number", "fieldType": "number", "numberDisplayHint": "percentage" },
     { "object": "companies", "label": "Latest NPS", "name": "lumen_latest_nps", "type": "number", "fieldType": "number" },
