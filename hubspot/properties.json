@@ -1,6 +1,23 @@
 {
   "group": { "name": "lumen_console", "label": "Lumen Console" },
   "properties": [
+    { "object": "companies", "label": "Lumen account ID", "name": "lumen_account_id", "unique": true, "type": "string", "fieldType": "text" },
+    {
+      "object": "companies",
+      "label": "Account status",
+      "name": "lumen_account_status",
+      "type": "enumeration",
+      "fieldType": "select",
+      "options": ["Customer", "Prospect", "Churned"]
+    },
+    {
+      "object": "companies",
+      "label": "Segment",
+      "name": "lumen_segment",
+      "type": "enumeration",
+      "fieldType": "select",
+      "options": ["Enterprise", "Mid-market", "SMB"]
+    },
     { "object": "companies", "label": "ARR", "name": "lumen_arr", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
     { "object": "companies", "label": "Renewal date", "name": "hs_next_renewal_date", "builtIn": true, "type": "date", "fieldType": "date" },
     { "object": "companies", "label": "Gross margin", "name": "lumen_gross_margin", "type": "number", "fieldType": "number", "numberDisplayHint": "percentage" },
@@ -16,6 +33,9 @@
       "fieldType": "select",
       "options": ["Low", "Medium", "High"]
     },
+    { "object": "deals", "label": "Lumen opportunity ID", "name": "lumen_opportunity_id", "unique": true, "type": "string", "fieldType": "text" },
+    { "object": "deals", "label": "Forecast category", "name": "hs_manual_forecast_category", "builtIn": true, "type": "enumeration", "fieldType": "select" },
+    { "object": "deals", "label": "Deal type", "name": "dealtype", "builtIn": true, "type": "enumeration", "fieldType": "radio" },
     { "object": "deals", "label": "Executive sponsor", "name": "lumen_executive_sponsor", "type": "string", "fieldType": "text" },
     { "object": "deals", "label": "Days in stage", "name": "lumen_days_in_stage", "type": "number", "fieldType": "number" },
     {

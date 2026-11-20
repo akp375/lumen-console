@@ -1,7 +1,8 @@
-// Creates the Lumen Console custom properties listed in hubspot/properties.json.
+// Creates the Lumen Console custom properties (hubspot/properties.json) and deal pipelines (hubspot/pipelines.json).
 // - Creates the "Lumen Console" property group on each object if it is missing.
-// - Skips properties that already exist. Never deletes or changes an existing property.
+// - Skips properties and pipelines that already exist. Never deletes or changes anything that exists.
 // - Properties made by hand in HubSpot are matched by label; their internal names are saved back to properties.json.
+// - "unique" properties (e.g. lumen_account_id) are created with hasUniqueValue, so the sync can upsert on them.
 // Run with: npm run hubspot:setup             (makes changes)
 //           npm run hubspot:setup -- --dry-run (only shows what it would do)
 
@@ -9,6 +10,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { hubspot } from "../src/lib/hubspot.ts";
 
 const FILE = new URL("../hubspot/properties.json", import.meta.url);
+const PIPELINES_FILE = new URL("../hubspot/pipelines.json", import.meta.url);
 const DRY_RUN = process.argv.includes("--dry-run");
 
 type Spec = {
@@ -18,12 +20,19 @@ type Spec = {
   madeByHand?: boolean;
   /** A HubSpot built-in property we reuse instead of creating our own (e.g. hs_next_renewal_date). */
   builtIn?: boolean;
+  /** Each value may appear on only one record (needed to upsert on it). Can only be set at creation. */
+  unique?: boolean;
   type: string;
   fieldType: string;
   numberDisplayHint?: string;
   options?: string[];
 };
 type SpecFile = { group: { name: string; label: string }; properties: Spec[] };
+type PipelineSpec = {
+  pipelines: { label: string; dealTypes: string[] }[];
+  stages: { label: string; probability: number; isClosed: boolean }[];
+};
+type HsPipeline = { id: string; label: string; stages: { id: string; label: string; metadata: { probability?: string; isClosed?: string } }[] };
 type HsOption = { label: string; value: string };
 type HsProperty = {
   name: string;
@@ -32,6 +41,7 @@ type HsProperty = {
   fieldType: string;
   groupName: string;
   hubspotDefined?: boolean;
+  hasUniqueValue?: boolean;
   numberDisplayHint?: string;
   options?: HsOption[];
 };
@@ -50,6 +60,8 @@ const warn = (msg: string) => {
 function compare(want: Spec, have: HsProperty) {
   if (have.type !== want.type || have.fieldType !== want.fieldType)
     warn(`"${have.label}" is ${have.type}/${have.fieldType} in HubSpot, planned ${want.type}/${want.fieldType}. Left as is.`);
+  if (want.unique && !have.hasUniqueValue)
+    warn(`"${have.label}" is not set to unique values in HubSpot, so the sync can't match records on it. Left as is.`);
   if (want.numberDisplayHint && have.numberDisplayHint && have.numberDisplayHint !== want.numberDisplayHint)
     warn(`"${have.label}" displays as ${have.numberDisplayHint}, planned ${want.numberDisplayHint}. Left as is.`);
   if (want.options) {
@@ -69,6 +81,7 @@ function createBody(p: Spec, name: string) {
     groupName: spec.group.name,
     type: p.type,
     fieldType: p.fieldType,
+    ...(p.unique ? { hasUniqueValue: true } : {}),
     ...(p.numberDisplayHint ? { numberDisplayHint: p.numberDisplayHint } : {}),
     ...(p.numberDisplayHint === "currency" ? { showCurrencySymbol: true } : {}),
     ...(p.options
@@ -150,6 +163,40 @@ try {
       }
       counts.created++;
     }
+  }
+
+  // 3. Deal pipelines
+  const pipeSpec = JSON.parse(readFileSync(PIPELINES_FILE, "utf8")) as PipelineSpec;
+  console.log("deal pipelines:");
+  const pipelines = (await hubspot<{ results: HsPipeline[] }>("GET", "/crm/v3/pipelines/deals")).results;
+  for (const [i, want] of pipeSpec.pipelines.entries()) {
+    const have = pipelines.find((p) => p.label.trim().toLowerCase() === want.label.toLowerCase());
+    if (have) {
+      console.log(`  - pipeline "${want.label}" exists (${have.id}), skipped`);
+      for (const s of pipeSpec.stages) {
+        const st = have.stages.find((x) => x.label.trim().toLowerCase() === s.label.toLowerCase());
+        if (!st) warn(`pipeline "${want.label}" has no "${s.label}" stage. Left as is.`);
+        else if (Number(st.metadata.probability) !== s.probability)
+          warn(`"${want.label}" → "${s.label}" probability is ${st.metadata.probability} in HubSpot, planned ${s.probability}. Left as is.`);
+      }
+      counts.skipped++;
+      continue;
+    }
+    if (DRY_RUN) {
+      console.log(`  + would create pipeline "${want.label}" with stages ${pipeSpec.stages.map((s) => `${s.label} ${Math.round(s.probability * 100)}%`).join(", ")}`);
+    } else {
+      const created = await hubspot<HsPipeline>("POST", "/crm/v3/pipelines/deals", {
+        label: want.label,
+        displayOrder: pipelines.length + i + 1,
+        stages: pipeSpec.stages.map((s, j) => ({
+          label: s.label,
+          displayOrder: j,
+          metadata: { probability: s.probability.toFixed(2), isClosed: String(s.isClosed) },
+        })),
+      });
+      console.log(`  + created pipeline "${want.label}" (${created.id})`);
+    }
+    counts.created++;
   }
 
   if (namesChanged && !DRY_RUN) {
