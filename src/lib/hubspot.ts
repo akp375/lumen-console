@@ -14,8 +14,34 @@ export class HubSpotError extends Error {
   }
 }
 
-/** Calls the HubSpot API and returns the parsed JSON, or throws a readable HubSpotError. */
+const MAX_RETRIES = 5; // for HubSpot's "too many requests" (429) answers
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Calls the HubSpot API and returns the parsed JSON, or throws a readable HubSpotError.
+ *  On a rate limit (429) it waits as long as HubSpot asks (Retry-After), or 1, 2, 4, 8, 16 seconds, and retries. */
 export async function hubspot<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await request<T>(method, path, body);
+    } catch (e) {
+      if (!(e instanceof RateLimited) || attempt >= MAX_RETRIES) throw e instanceof RateLimited ? e.error : e;
+      await sleep(e.retryAfterMs ?? 1000 * 2 ** attempt);
+    }
+  }
+}
+
+class RateLimited extends Error {
+  retryAfterMs: number | null;
+  error: HubSpotError;
+  constructor(retryAfterMs: number | null, error: HubSpotError) {
+    super(error.message);
+    this.retryAfterMs = retryAfterMs;
+    this.error = error;
+  }
+}
+
+async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
   const token = process.env.HUBSPOT_ACCESS_TOKEN;
   if (!token) throw new HubSpotError(0, "HUBSPOT_ACCESS_TOKEN is not set. Add it to .env.local (see hubspot/README.md, step 6).");
 
@@ -41,6 +67,10 @@ export async function hubspot<T>(method: "GET" | "POST", path: string, body?: un
       if (j.message) detail = j.message;
     } catch {
       // not JSON; keep the raw text
+    }
+    if (res.status === 429) {
+      const seconds = Number(res.headers.get("retry-after"));
+      throw new RateLimited(Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null, new HubSpotError(429, `HubSpot rate limit: ${detail}`));
     }
     const hint =
       res.status === 401
