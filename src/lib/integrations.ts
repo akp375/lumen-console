@@ -16,6 +16,27 @@ export async function getHubSpotStatus(): Promise<HubSpotStatus> {
   }
 }
 
+export type HubSpotLastSync = { syncedAt: string; companies: number; deals: number; contacts: number };
+
+/** Latest full HubSpot sync, from sync_runs (written by `npm run hubspot:sync`). Null if none is recorded,
+ *  or the sync_runs migration hasn't been run yet. Operational figure: read here, not in metrics.ts. */
+export async function getHubSpotLastSync(): Promise<HubSpotLastSync | null> {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await db
+    .from("sync_runs")
+    .select("synced_at, companies, deals, contacts")
+    .eq("target", "hubspot")
+    .eq("scope", "full")
+    .order("synced_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { syncedAt: String(data.synced_at), companies: Number(data.companies), deals: Number(data.deals), contacts: Number(data.contacts) };
+}
+
 export type SupabaseStatus = { connected: boolean; lastSeededAt: string | null; asOfDate: string | null; error?: string };
 export type ClaudeStatus = { connected: boolean; spendTodayUsd: number; callsToday: number; spendToDateUsd: number; callsToDate: number; budgetUsd: number; error?: string };
 

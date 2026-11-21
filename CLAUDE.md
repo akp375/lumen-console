@@ -39,6 +39,7 @@ Next.js App Router, TypeScript, Tailwind, Recharts, Supabase Postgres, Anthropic
 ## Build rules
 
 - All business math lives in `lib/metrics.ts` (in this project: `src/lib/metrics.ts`). Nothing else recomputes it.
+- Business numbers (revenue, pipeline, usage, margin, health, risk) always come from lib/metrics.ts (Supabase). Operational figures about running the app, such as Claude spend and seed dates, may be read directly by claude.ts and integrations.ts. HubSpot is the source only for work state such as tasks, notes, owners and lead status. Never read a number from HubSpot to show in the app.
 - "Today" is the as-of date in `src/lib/as-of-date.ts` (`AS_OF_DATE`). `lib/metrics.ts`, and anything else that needs today's date for a metric, uses it instead of the real clock (`new Date()`, `Date.now()`, or `now()` / `current_date` in SQL), so the numbers never drift. To move all data forward, change that one value and re-run `npm run seed`.
 - Customer metrics (ARR, margin, health, renewals) count accounts with status `customer` only, unless a metric specifically needs churned accounts, such as NRR. Prospects never count toward customer metrics.
 - Pipeline metrics count open opportunities only: stages Discovery, Demo, Proposal and Negotiation. Closed Won and Closed Lost are excluded.
