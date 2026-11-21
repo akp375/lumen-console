@@ -1,7 +1,7 @@
 import { Suspense, type ReactNode } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { getClaudeStatus, getHubSpotLastSync, getHubSpotStatus, getSupabaseStatus, type HubSpotLastSync } from "@/lib/integrations";
+import { getClaudeStatus, getHubSpotStatus, getSupabaseStatus } from "@/lib/integrations";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { shortDate, usd } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
@@ -138,7 +138,7 @@ async function ClaudeCard() {
 
 async function HubSpotCard() {
   await connection();
-  const [h, sync] = await Promise.all([getHubSpotStatus(), getHubSpotLastSync()]);
+  const h = await getHubSpotStatus();
   return (
     <Card name="HubSpot" initial="H" color="bg-orange-500" kind="CRM" connected={h.connected}>
       {h.connected ? (
@@ -153,28 +153,9 @@ async function HubSpotCard() {
           <Detail label="Last checked" value={dateTime(h.checkedAt)} />
         </>
       )}
-      <LastSync sync={sync} />
+      {/* Sync runs aren't recorded yet (sync_runs is on the BUILD_LOG.md to-do list). */}
+      <Detail label="Last sync" value="Synced manually; see BUILD_LOG.md" />
     </Card>
-  );
-}
-
-/** Last full `npm run hubspot:sync`, from the sync_runs table in Supabase (not read from HubSpot). */
-function LastSync({ sync }: { sync: HubSpotLastSync | null }) {
-  if (!sync)
-    return (
-      <>
-        <Detail label="Last sync" value="Not recorded yet" />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Syncs are recorded from the next full <code>npm run hubspot:sync</code>, once the sync_runs migration has been run.
-        </p>
-      </>
-    );
-  const n = (count: number, one: string, many: string) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
-  return (
-    <>
-      <Detail label="Last sync" value={dateTime(sync.syncedAt)} />
-      <Detail label="Synced" value={`${n(sync.companies, "company", "companies")} · ${n(sync.deals, "deal", "deals")} · ${n(sync.contacts, "contact", "contacts")}`} />
-    </>
   );
 }
 

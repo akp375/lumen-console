@@ -131,7 +131,7 @@ npm run hubspot:sync
 
 The first command shows what would be sent, with nothing sent; the second sends it. Add `--one` to either to sync a single customer and its deals (useful for checking a change on one record first).
 
-Each real run (not a dry run) saves one row to the `sync_runs` table in Supabase: when it ran, full or `--one`, and how many companies, deals and contacts were sent. The HubSpot card on the Integrations page shows the latest full sync from that table. Create the table once by pasting `supabase/migrations/20261120000000_add_sync_runs.sql` into Supabase's SQL Editor and clicking Run. Until then the sync still works and only prints a warning.
+Sync runs are not recorded anywhere yet, so the HubSpot card on the Integrations page says "Synced manually; see BUILD_LOG.md". A `sync_runs` table is on the to-do list in `BUILD_LOG.md`; its migration file (`supabase/migrations/20261120000000_add_sync_runs.sql`) is in the repo but has not been run.
 
 **What goes where**
 

@@ -21,7 +21,6 @@ import {
   pickTestAccount,
 } from "../src/lib/hubspot-sync.ts";
 import { readFileSync } from "node:fs";
-import { createClient } from "@supabase/supabase-js";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const ONE = process.argv.includes("--one");
@@ -38,17 +37,6 @@ const str = (v: string | number | null | undefined) => (v === null || v === unde
 
 function fail(msg: string): never {
   throw new Error(msg);
-}
-
-/** Saves one row to sync_runs for the Integrations page. Never fails the sync: if it can't be saved, it only warns. */
-async function recordRun(counts: { companies: number; deals: number; contacts: number }) {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return console.warn("  (Could not record this run in sync_runs: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set.)");
-  const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { error } = await db.from("sync_runs").insert({ target: "hubspot", scope: ONE ? "one" : "full", ...counts });
-  if (error) console.warn(`  (Could not record this run in sync_runs: ${error.message}. Run the sync_runs migration to enable it.)`);
-  else console.log(`Recorded this run in sync_runs (${ONE ? "one-record test" : "full sync"}).`);
 }
 
 function checkBatch(what: string, r: BatchResult) {
@@ -238,10 +226,8 @@ try {
   );
   console.log(`Deals attached to their companies: ${deals.length}.`);
 
-  let contactsSynced = 0;
   if (contactInputs.length) {
     const contactIds = await upsert("contacts", contactInputs);
-    contactsSynced = contactIds.size;
     console.log(`Contacts: ${contactIds.size} synced (${countNew(contactIds)} new, ${contactIds.size - countNew(contactIds)} updated).`);
     await associate(
       "contacts",
@@ -255,7 +241,6 @@ try {
     const a = accounts[0];
     console.log(`\nSynced ${a.name}. Open it in HubSpot (company id ${companyIds.get(a.accountId)!.id}) and check Gross margin shows ${Math.round((a.grossMargin ?? 0) * 100)}%.`);
   }
-  await recordRun({ companies: companyIds.size, deals: dealIds.size, contacts: contactsSynced });
   console.log("\nSync finished.");
 } catch (e) {
   console.error(e instanceof Error ? e.message : String(e));

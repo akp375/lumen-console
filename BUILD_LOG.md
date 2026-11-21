@@ -304,6 +304,7 @@ The live results table in section 1 shows the figures from before this fix. Over
 - **Budget overshoot from simultaneous calls (2c).** Two calls started at the same moment can both pass the $2 check, so the budget can be exceeded by a few cents. Fix: reserve the cost before the call, or check again just before sending.
 - **Questions-per-hour limit is per browser cookie (2d).** Clearing cookies resets it, and each server instance on Vercel keeps its own count. Fix: limit per signed-in user, stored in the database.
 - **Pause AI if cost logging fails.** If a call's cost can't be saved to `llm_calls`, the app only prints an error, so that cost is missing from the budget. Fix: pause AI features for the day when logging fails.
+- **sync_runs table and last-sync display.** Nothing records HubSpot sync runs, so the Integrations page's HubSpot card says "Synced manually; see BUILD_LOG.md". Plan: run `supabase/migrations/20261120000000_add_sync_runs.sql` (in the repo, not yet run; on 21 Nov the app couldn't see the table after a first attempt, so check it's the right project), have `npm run hubspot:sync` save one row per run, and show the last full sync's time and counts on the card.
 
 ## 2026-11-20 (Friday)
 
