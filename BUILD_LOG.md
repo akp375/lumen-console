@@ -247,7 +247,7 @@ The live results table in section 1 shows the figures from before this fix. Over
 **Lessons.**
 
 - The CLI keeps its sign-in key in the home folder (`~/.hscli/config.yml`), not in the project, so it can't be committed by accident.
-- HubSpot's scope list has no separate notes or tasks scope. They are expected to be covered by the company, contact and deal scopes. **Test one note and one task before relying on this.**
+- HubSpot's scope list has no separate notes or tasks scope. They are expected to be covered by the company, contact and deal scopes. ~~Test one note and one task before relying on this.~~ **Resolved 20 Nov:** one note and one task were created and attached with the existing scopes (see 20 Nov).
 - To change scopes later: edit `app-hsmeta.json`, upload again, and reinstall from the app's Distribution tab.
 
 ### 2. Creating the Lumen Console properties by script
