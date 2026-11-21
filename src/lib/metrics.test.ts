@@ -574,6 +574,8 @@ test("Renewal risk: renewal within 120 days AND at least one signal", () => {
   assert.deepEqual(byId.R4.signals, ["Underwater margin"]);
   assert.equal(result.atRiskArr, 4 * 12_000);
   assert.equal(result.renewingCount, 5); // R1-R4 and R6
+  assert.ok(result.rows.every((r) => r.level === "Medium")); // one signal each
+  assert.deepEqual(result.byLevel, { High: { count: 0, arr: 0 }, Medium: { count: 4, arr: 4 * 12_000 } });
 });
 
 test("Deal risk: open deals only, each rule fires on its own", () => {
@@ -704,6 +706,12 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
   assert.equal(A.K1.segment, "enterprise");
   assert.deepEqual([A.K1.renewalRisk, A.K2.renewalRisk, A.K3.renewalRisk], ["High", "Low", "Medium"]);
   assert.equal(A.K1.hasOpenDeal, true);
+
+  // The Renewals page and the sync must never disagree: every flagged row's level is what the sync sends.
+  const page = calcRenewalRisk(accounts, usage, PRICES, nps, TODAY);
+  assert.deepEqual(page.rows.map((r) => [r.accountId, r.level]), [["K3", "Medium"], ["K1", "High"]]);
+  for (const r of page.rows) assert.equal(A[r.accountId].renewalRisk, r.level);
+  assert.deepEqual(page.byLevel, { High: { count: 1, arr: 12_000 }, Medium: { count: 1, arr: 2_400 } });
 
   // Prospects and churned accounts: no customer values
   for (const id of ["P1", "P2", "C1"]) {

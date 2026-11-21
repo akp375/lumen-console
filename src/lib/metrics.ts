@@ -831,6 +831,8 @@ export type RenewalRiskRow = {
   usageChange: number | null;
   grossMargin: number | null;
   signals: RenewalRiskSignal[];
+  /** From renewalRiskLevel(); the HubSpot sync sends this same value. Flagged rows are Medium or High. */
+  level: RenewalRiskLevel;
 };
 
 export type RenewalRiskResult = {
@@ -838,6 +840,7 @@ export type RenewalRiskResult = {
   atRiskArr: number;
   renewingCount: number; // customers renewing within the window, flagged or not
   renewingArr: number;
+  byLevel: Record<"High" | "Medium", { count: number; arr: number }>;
 };
 
 export function calcRenewalRisk(
@@ -881,14 +884,20 @@ export function calcRenewalRisk(
       usageChange: t.usageChange,
       grossMargin: m.grossMargin,
       signals,
+      level: renewalRiskLevel(signals.length),
     });
   }
   rows.sort((x, y) => x.daysToRenewal - y.daysToRenewal || y.arr - x.arr);
+  const levelTotals = (level: RenewalRiskLevel) => {
+    const at = rows.filter((r) => r.level === level);
+    return { count: at.length, arr: at.reduce((s, r) => s + r.arr, 0) };
+  };
   return {
     rows,
     atRiskArr: rows.reduce((s, r) => s + r.arr, 0),
     renewingCount: renewing.length,
     renewingArr: renewing.reduce((s, { a }) => s + a.mrr_usd * 12, 0),
+    byLevel: { High: levelTotals("High"), Medium: levelTotals("Medium") },
   };
 }
 
@@ -1141,7 +1150,8 @@ export function calcCrmSyncData(
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r.grossMargin]));
   const capacity = new Map(calcCapacity(accounts, usage, prices, asOf).map((r) => [r.accountId, r.capacityUsed]));
   const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
-  const renewalSignals = new Map(calcRenewalRisk(accounts, usage, prices, nps, asOf).rows.map((r) => [r.accountId, r.signals.length]));
+  // Same level the Renewals page shows: both read RenewalRiskRow.level.
+  const renewalLevels = new Map(calcRenewalRisk(accounts, usage, prices, nps, asOf).rows.map((r) => [r.accountId, r.level]));
   const dealSignals = new Map(calcDealRisk(deals, accounts, asOf).rows.map((r) => [r.opportunityId, r.signals.length]));
   const withOpenDeal = new Set(deals.filter(isOpen).map((o) => o.account_id));
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
@@ -1161,7 +1171,7 @@ export function calcCrmSyncData(
         capacityUsed: isCustomer ? (capacity.get(a.id) ?? null) : null,
         latestNps: isCustomer ? (s?.latestNps ?? null) : null,
         npsChange: isCustomer ? (s?.npsChange ?? null) : null,
-        renewalRisk: isCustomer ? renewalRiskLevel(renewalSignals.get(a.id) ?? 0) : null,
+        renewalRisk: isCustomer ? (renewalLevels.get(a.id) ?? renewalRiskLevel(0)) : null,
         hasOpenDeal: withOpenDeal.has(a.id),
       };
     }),

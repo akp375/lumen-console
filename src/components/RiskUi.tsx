@@ -33,11 +33,17 @@ export function BackButton({ onClick, label }: { onClick: () => void; label: str
   );
 }
 
-export function Stat({ label, value, detail, tone = "default" }: { label: string; value: string; detail: string; tone?: "default" | "alert" }) {
+const STAT_TONE = {
+  default: "text-zinc-900 dark:text-zinc-50",
+  alert: "text-red-600 dark:text-red-400",
+  warn: "text-amber-600 dark:text-amber-400",
+} as const;
+
+export function Stat({ label, value, detail, tone = "default" }: { label: string; value: string; detail: string; tone?: keyof typeof STAT_TONE }) {
   return (
     <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="text-sm text-zinc-500 dark:text-zinc-400">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "alert" ? "text-red-600 dark:text-red-400" : "text-zinc-900 dark:text-zinc-50"}`}>
+      <div className={`mt-1 text-2xl font-semibold tabular-nums ${STAT_TONE[tone]}`}>
         {value}
       </div>
       <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{detail}</div>
@@ -55,6 +61,17 @@ export function SignalChips({ signals }: { signals: string[] }) {
       ))}
     </div>
   );
+}
+
+const RISK_BADGE = {
+  High: "bg-red-600 text-white dark:bg-red-500",
+  Medium: "bg-amber-400 text-amber-950 dark:bg-amber-500",
+  Low: "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200",
+} as const;
+
+/** Renewal risk level badge: High red, Medium amber, Low grey. Same levels the HubSpot sync sends. */
+export function RiskBadge({ level }: { level: keyof typeof RISK_BADGE }) {
+  return <span className={`inline-block whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-semibold ${RISK_BADGE[level]}`}>{level}</span>;
 }
 
 export type AiState = "idle" | "loading" | "done" | "error";

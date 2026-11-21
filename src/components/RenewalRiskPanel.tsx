@@ -8,8 +8,11 @@ import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";
 import { PageHeader } from "./PageHeader";
 import { SectionSkeleton } from "./Skeleton";
-import { AiCell, type AiState, BackButton, ErrorNote, FlagButton, LimitNotice, RuleNote, SectionHeading, SignalChips, Stat } from "./RiskUi";
+import { AiCell, type AiState, BackButton, ErrorNote, FlagButton, LimitNotice, RiskBadge, RuleNote, SectionHeading, SignalChips, Stat } from "./RiskUi";
 
+// Default order: High first, then Medium, then Low; within a level, soonest renewal first.
+const LEVEL_RANK = { High: 0, Medium: 1, Low: 2 } as const;
+const riskOrder = (r: RenewalRiskRow) => LEVEL_RANK[r.level] * 10_000 + r.daysToRenewal;
 
 const account = (r: { name: string; owner: string }) => (
   <>
@@ -91,6 +94,7 @@ export function RenewalRiskPanel({ windowDays, rules, upcoming }: { windowDays: 
 
   const riskColumns: Column<RenewalRiskRow>[] = [
     { key: "name", label: "Account", render: account, sortValue: (r) => r.name.toLowerCase() },
+    { key: "risk", label: "Renewal Risk", render: (r) => <RiskBadge level={r.level} />, sortValue: riskOrder, firstDir: "asc" },
     { key: "arr", label: "ARR", numeric: true, render: (r) => usd(r.arr), sortValue: (r) => r.arr },
     { key: "renewal", label: "Renewal", render: renewal, sortValue: (r) => r.renewalDate },
     { key: "nps", label: "NPS", numeric: true, render: (r) => r.latestNps ?? "n/a", sortValue: (r) => r.latestNps, firstDir: "asc" },
@@ -120,29 +124,44 @@ export function RenewalRiskPanel({ windowDays, rules, upcoming }: { windowDays: 
 
         {!busy && data && (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Stat label="At-risk ARR" value={usdCompact(data.atRiskArr)} detail={`${usd(data.atRiskArr)} across ${data.rows.length} accounts`} tone={data.rows.length ? "alert" : "default"} />
-              <Stat label={`Renewing in next ${windowDays} days`} value={String(data.renewingCount)} detail={`${usd(data.renewingArr)} ARR up for renewal`} />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
-                label="Share of renewing ARR at risk"
-                value={pct(data.renewingArr > 0 ? data.atRiskArr / data.renewingArr : null)}
-                detail={`${data.rows.length} of ${data.renewingCount} renewing accounts flagged`}
+                label="High risk"
+                value={`${data.byLevel.High.count} ${data.byLevel.High.count === 1 ? "account" : "accounts"}`}
+                detail={`${usd(data.byLevel.High.arr)} ARR at risk · 2+ rules fired`}
+                tone={data.byLevel.High.count ? "alert" : "default"}
               />
+              <Stat
+                label="Medium risk"
+                value={`${data.byLevel.Medium.count} ${data.byLevel.Medium.count === 1 ? "account" : "accounts"}`}
+                detail={`${usd(data.byLevel.Medium.arr)} ARR at risk · 1 rule fired`}
+                tone={data.byLevel.Medium.count ? "warn" : "default"}
+              />
+              <Stat
+                label="Total at-risk ARR"
+                value={usdCompact(data.atRiskArr)}
+                detail={`${pct(data.renewingArr > 0 ? data.atRiskArr / data.renewingArr : null)} of renewing ARR · ${data.rows.length} of ${data.renewingCount} accounts`}
+              />
+              <Stat label={`Renewing in next ${windowDays} days`} value={String(data.renewingCount)} detail={`${usd(data.renewingArr)} ARR up for renewal`} />
             </div>
             {aiNotice && <LimitNotice message={aiNotice} />}
             {aiError && <ErrorNote message={aiError} />}
             <section>
-              <SectionHeading title="At-Risk Renewals" detail={`Renewing within ${windowDays} days, soonest first`} />
+              <SectionHeading title="At-Risk Renewals" detail={`Renewing within ${windowDays} days · High first, then soonest renewal`} />
               <DataTable
                 columns={riskColumns}
                 rows={data.rows}
                 rowKey={(r) => r.accountId}
-                defaultSort={{ key: "renewal", dir: "asc" }}
+                defaultSort={{ key: "risk", dir: "asc" }}
                 empty={{ title: "No renewals at risk", detail: `No customer renewing in the next ${windowDays} days matches the risk rules.` }}
-                minWidth="min-w-[1100px]"
+                minWidth="min-w-[1180px]"
               />
-              <div className="mt-2">
+              <div className="mt-2 space-y-1">
                 <RuleNote>{rules}</RuleNote>
+                <RuleNote>
+                  Risk level (the same value synced to HubSpot): 2 or more rules = High, 1 rule = Medium. Customers with no rules fired, or renewing
+                  later than {windowDays} days, are Low and aren&apos;t listed here.
+                </RuleNote>
               </div>
             </section>
           </>
