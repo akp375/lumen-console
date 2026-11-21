@@ -220,6 +220,13 @@
 
 The live results table in section 1 shows the figures from before this fix. Overall win rate is now 60.5%, and the renewal data-gap note there is resolved.
 
+## 2026-11-15 to 2026-11-18
+
+- **Risk pages (Renewals, Deal Risk).** Rules in `src/lib/metrics.ts` flag at-risk renewals (for example falling NPS or usage) and deals (for example stuck in stage, no activity for 21+ days, no executive sponsor). Claude then writes a reason and next step for each flagged row. Decision: each page first shows the top 10 renewals or deals for this quarter and next. Claude only runs when you click Flag, so you pay only when you ask.
+- **Workspace.** A chat page for questions about the business. Decision: Claude answers only from a snapshot of Cockpit's own figures, sent with each question, so its answers match the dashboard. The conversation is kept only in the page and is gone after a refresh.
+- **Cost guardrails.** Claude is limited to $2 a day, counted from `llm_calls`, and each reply is capped at 4,000 tokens (down from 16,000). Workspace sends the last 6 messages, allows 1,000-character questions and 20 questions per browser per hour, and gives up after 30 seconds. What broke: the Flag buttons could be clicked again while Claude was writing, which started extra paid calls. They now stay locked until the answer arrives.
+- **Polish.** Every page now has the same header and number formats: $1.2M on cards, full figures in tables, one-decimal percentages. Tables sort, and loading shows placeholders and spinners. A new Integrations page shows Supabase, today's Claude spend, and HubSpot and Salesforce as planned.
+
 ## 2026-11-19 (Thursday)
 
 ## Highlights
@@ -297,3 +304,11 @@ The live results table in section 1 shows the figures from before this fix. Over
 - **Budget overshoot from simultaneous calls (2c).** Two calls started at the same moment can both pass the $2 check, so the budget can be exceeded by a few cents. Fix: reserve the cost before the call, or check again just before sending.
 - **Questions-per-hour limit is per browser cookie (2d).** Clearing cookies resets it, and each server instance on Vercel keeps its own count. Fix: limit per signed-in user, stored in the database.
 - **Pause AI if cost logging fails.** If a call's cost can't be saved to `llm_calls`, the app only prints an error, so that cost is missing from the budget. Fix: pause AI features for the day when logging fails.
+
+## 2026-11-20 (Friday)
+
+- **Full HubSpot sync.** `npm run hubspot:sync` loaded 190 companies, 207 deals and 30 contacts into the test account, plus two deal pipelines: "New business" and "Renewals & expansion". Records are matched on our own IDs (`lumen_account_id`, `lumen_opportunity_id`), so a re-run updates instead of duplicating. A second run created nothing new, and HubSpot's counts and risk levels match Cockpit. Decision: always do a dry run and a one-record run (`--one`) before a full sync.
+- **Our own Renewal date field.** On 19 Nov we chose to reuse HubSpot's built-in "Next Renewal Date". What broke: the first one-record sync was refused, because HubSpot fills that field from its Contracts feature and won't accept values from outside. Nothing was written. Renewal date now goes to `lumen_renewal_date`, and `hubspot:setup` warns if a reused built-in field is read-only. Every other built-in field the sync writes was checked and accepts values.
+- **Contact email fix.** Each prospect gets one made-up contact. What broke: HubSpot rejected emails ending in a bare `.example`. They now use `<company>.example.com`, a reserved domain that can't receive mail. The made-up names also repeated too often, so they now vary more.
+- **Percent check.** As decided on 19 Nov, one record went first: 0.7186 showed as 71.86% in HubSpot. Percentages go as decimals, unchanged.
+- **Note and task test.** This answers the 19 Nov question of whether the app's access covers notes and tasks. `npm run hubspot:test-activity` created one note and one task on the test company, Ionic Logistics, and both attached correctly. No extra access is needed.
