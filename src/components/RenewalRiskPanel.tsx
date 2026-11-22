@@ -77,7 +77,7 @@ function DownsellSummary({ result }: { result: RenewalDealsResult }) {
       <Stat
         label="Missing renewal deal"
         value={`${m.count} ${m.count === 1 ? "contract" : "contracts"}`}
-        detail={`${usd(m.arr)} ARR renewing in the next ${days} days with no open renewal deal`}
+        detail={`${usd(m.arr)} ARR renewing inside its renewal window with no open renewal deal`}
         tone={m.count > 0 ? "warn" : "default"}
       />
       <Stat label="Open renewal deals" value={String(result.deals.length)} detail={`${usd(openAmount)} in deal amounts`} />
@@ -123,19 +123,19 @@ function MissingRenewalDeals({ result, windows }: { result: RenewalDealsResult; 
     <section>
       <SectionHeading
         title="Missing Renewal Deals"
-        detail={`${m.count} customer contracts renewing in the next ${result.lookaheadDays} days with no open renewal deal · ${usd(m.arr)} ARR · soonest first`}
+        detail={`${m.count} customer contracts renewing inside their renewal window (${windows}) with no open renewal deal · ${usd(m.arr)} ARR · soonest first`}
       />
       <DataTable
         columns={columns}
         rows={m.rows}
         rowKey={(r) => r.contractId}
         defaultSort={{ key: "renewal", dir: "asc" }}
-        empty={{ title: "No missing renewal deals", detail: `Every contract renewing in the next ${result.lookaheadDays} days has an open renewal deal.` }}
+        empty={{ title: "No missing renewal deals", detail: "Every contract inside its renewal window has an open renewal deal." }}
         minWidth="min-w-[720px]"
       />
       <div className="mt-2">
         <RuleNote>
-          Renewal risk is the same level the HubSpot sync sends. Renewals outside the customer&apos;s window ({windows}) are Low.
+          Renewal window by segment: {windows}, the same window the account page uses. Renewal risk is the same level the HubSpot sync sends.
         </RuleNote>
       </div>
     </section>

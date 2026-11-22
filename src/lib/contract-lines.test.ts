@@ -201,7 +201,7 @@ test("Renewal deals: only active lines; no contract or a churned contract means 
 });
 
 // ---------------------------------------------------------------------------
-// Next 180 days: downsell risk and missing renewal deals
+// Next 180 days: downsell risk; missing renewal deals by segment window
 //
 // Today = 2026-11-13, so today + 180 days = 2027-05-12 (inside); 2027-05-13 is day 181.
 // ---------------------------------------------------------------------------
@@ -227,20 +227,47 @@ test("ARR at downsell risk, next 180 days: adoption-drop lines renewing from tod
   assert.deepEqual(calcDownsellRiskNext(AHEAD, AS_OF, null), { arr: 21_600, lines: 4, contracts: 4 });
 });
 
-test("Missing renewal deal: customer contracts renewing within 180 days with no open renewal deal", () => {
-  const accts = ["A1", "A4", "A5", "A6", "A7", "A8"].map((id) => account(id, `Acct ${id}`));
+// Missing renewal deal uses each segment's renewal window (RENEWAL_RISK_RULES.windowDays),
+// the same window as the account page: enterprise 180, mid-market 120, SMB 90 days.
+// Today + 90 = 2027-02-11, + 120 = 2027-03-13, + 180 = 2027-05-12.
+const seg = (id: string, segment: string): AccountRow => ({ ...account(id, `Acct ${id}`), segment });
+const MISSING = [
+  ...AHEAD.filter((m) => m.contractId !== "C7"),
+  metric("C7-core", "A7", "C7", 7_000, "2027-02-20", false), // mid-market day 99, has an open renewal deal
+  metric("M1-core", "M1", "M1", 6_000, "2027-03-13", false), // mid-market day 120: inside
+  metric("M2-core", "M2", "M2", 6_500, "2027-03-14", false), // mid-market day 121: outside
+  metric("S1-core", "S1", "S1", 2_000, "2027-02-11", false), // SMB day 90: inside
+  metric("S2-core", "S2", "S2", 2_500, "2027-02-12", false), // SMB day 91: outside
+  metric("S3-core", "S3", "S3", 3_500, "2027-03-01", true), // SMB day 108: outside (was inside the old flat 180 days)
+];
+
+test("Missing renewal deal: contracts inside their segment's renewal window with no open renewal deal", () => {
+  const accts = [
+    seg("A1", "enterprise"), // C1 day 49
+    seg("A4", "enterprise"), // C4 day 180: inside
+    seg("A5", "enterprise"), // C5 day 181: outside
+    seg("A6", "enterprise"), // C6 yesterday: outside
+    seg("A7", "mid-market"),
+    seg("A8", "SMB"), // C8 day 30
+    seg("M1", "mid-market"),
+    seg("M2", "mid-market"),
+    seg("S1", "SMB"),
+    seg("S2", "SMB"),
+    seg("S3", "SMB"),
+  ];
   const r = calcMissingRenewalDeals(
     [...accts, { ...account("A9", "Churned co"), status: "churned" }],
-    AHEAD,
+    MISSING,
     [deal("D7", "A7", "Proposal", 7_000, "C7"), deal("D8", "A8", "Closed Won", 1_000, "C8")],
     new Map([["A1", "High" as const]]),
     AS_OF,
   );
-  // In the window: C8 (day 30), C1 (day 49), C7 (day 99), C4 (day 180). C7 has an open deal, so it's covered.
-  // C8's only deal is closed, so it still needs one.
-  assert.deepEqual(r.rows.map((x) => x.contractId), ["C8", "C1", "C4"]); // soonest renewal first
-  assert.equal(r.count, 3);
-  assert.equal(r.arr, 18_000); // 1,000 + (9,600 + 2,400) + 5,000
+  // Inside: C8 (SMB day 30), C1 (ent day 49), S1 (SMB day 90), M1 (mid day 120), C4 (ent day 180).
+  // Covered: C7 has an open deal. C8's only deal is closed, so it still needs one.
+  // Outside: S2 (SMB 91), S3 (SMB 108), M2 (mid 121), C5 (ent 181), C6 (past), C9 (churned).
+  assert.deepEqual(r.rows.map((x) => x.contractId), ["C8", "C1", "S1", "M1", "C4"]); // soonest renewal first
+  assert.equal(r.count, 5);
+  assert.equal(r.arr, 26_000); // 1,000 + (9,600 + 2,400) + 2,000 + 6,000 + 5,000
   const by = Object.fromEntries(r.rows.map((x) => [x.contractId, x]));
   assert.equal(by.C1.arr, 12_000);
   assert.equal(by.C1.downsellRiskArr, 9_600);
@@ -248,4 +275,5 @@ test("Missing renewal deal: customer contracts renewing within 180 days with no 
   assert.equal(by.C8.riskLevel, "Low"); // not High or Medium
   assert.equal(by.C4.riskLevel, "Low"); // every customer has a level now: no entry means Low
   assert.equal(by.C8.daysToRenewal, 30);
+  assert.deepEqual([by.C8.windowDays, by.M1.windowDays, by.C4.windowDays], [90, 120, 180]);
 });

@@ -1973,7 +1973,7 @@ export function calcRenewalDeals(deals: RenewalDealInput[], lineMetrics: Contrac
   });
 }
 
-export const RENEWAL_LOOKAHEAD_DAYS = 180; // "next 180 days" for downsell risk and missing renewal deals
+export const RENEWAL_LOOKAHEAD_DAYS = 180; // "next 180 days" for downsell risk (missing renewal deals use the segment windows)
 
 export type DownsellRiskSummary = { arr: number; lines: number; contracts: number };
 
@@ -2006,8 +2006,9 @@ export type MissingRenewalDealRow = {
   contractId: string;
   renewalDate: string;
   daysToRenewal: number;
+  windowDays: number; // the segment's renewal window (RENEWAL_RISK_RULES.windowDays)
   arr: number; // sum of the contract's active lines
-  /** Renewal-risk level (same as the HubSpot sync); null when the renewal is beyond the risk rule's window. */
+  /** Renewal-risk level (same as the HubSpot sync). */
   riskLevel: RenewalRiskLevel | null;
   downsellRiskArr: number; // ARR on this contract's lines with an adoption drop
 };
@@ -2015,8 +2016,10 @@ export type MissingRenewalDealRow = {
 export type MissingRenewalDealsResult = { count: number; arr: number; rows: MissingRenewalDealRow[] };
 
 /**
- * Missing renewal deal: a customer contract renewing within `days` of today
- * with no open renewal deal pointing at it (deal.contract_id = contract).
+ * Missing renewal deal: a customer contract renewing inside its segment's
+ * renewal window (RENEWAL_RISK_RULES.windowDays, the same window the account
+ * page and renewal risk use) with no open renewal deal pointing at it
+ * (deal.contract_id = contract).
  * `riskLevels` holds every customer's renewal-risk level (calcRenewalRisk `all`);
  * a customer missing from it is Low.
  */
@@ -2026,7 +2029,6 @@ export function calcMissingRenewalDeals(
   renewalDeals: RenewalDealInput[],
   riskLevels: Map<string, RenewalRiskLevel>,
   asOf: string,
-  days = RENEWAL_LOOKAHEAD_DAYS,
 ): MissingRenewalDealsResult {
   const customers = new Map(customersOnly(accounts).map((a) => [a.id, a]));
   const covered = new Set(
@@ -2043,8 +2045,9 @@ export function calcMissingRenewalDeals(
   }
   const rows: MissingRenewalDealRow[] = [];
   for (const [contractId, c] of contracts) {
-    if (covered.has(contractId) || !renewsWithin(c.renewalDate, asOf, days)) continue;
     const a = customers.get(c.accountId)!;
+    const windowDays = renewalWindowDays(a.segment);
+    if (covered.has(contractId) || !renewsWithin(c.renewalDate, asOf, windowDays)) continue;
     const daysToRenewal = daysBetween(asOf, c.renewalDate);
     rows.push({
       accountId: a.id,
@@ -2054,6 +2057,7 @@ export function calcMissingRenewalDeals(
       contractId,
       renewalDate: c.renewalDate,
       daysToRenewal,
+      windowDays,
       arr: c.arr,
       riskLevel: riskLevels.get(a.id) ?? "Low",
       downsellRiskArr: c.downsell,
@@ -2482,7 +2486,7 @@ export type RenewalDealsResult = {
   deals: RenewalDealRow[]; // open renewal deals, soonest close first
   downsellRiskNext: DownsellRiskSummary; // adoption-drop lines renewing in the next 180 days, deal or not
   downsellRiskAllCustomers: DownsellRiskSummary; // every active line with an adoption drop, for context
-  missingRenewalDeals: MissingRenewalDealsResult; // contracts renewing in the next 180 days with no open renewal deal
+  missingRenewalDeals: MissingRenewalDealsResult; // contracts renewing inside their segment window with no open renewal deal
   lookaheadDays: number;
 };
 
