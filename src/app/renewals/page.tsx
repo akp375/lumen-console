@@ -13,7 +13,7 @@ const R = RENEWAL_RISK_RULES;
 const RULES =
   `How flags work: renewal within ${R.renewalWithinDays} days AND at least one of latest NPS below ${R.npsBelow}, ` +
   `NPS down ${Math.abs(R.npsDropOf)} or more, usage down more than ${Math.abs(R.usageDropBelow * 100)}% (last 30 days vs the 30 before), ` +
-  `or margin below 30%.`;
+  `margin below 30%, or health below 50 or down 10+ points on last week (counted only when usage isn't already declining).`;
 
 export default function RenewalsPage() {
   return (

@@ -3,13 +3,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { ADOPTION_DROP_BELOW, getAccountPageData, type ContractLineMetrics } from "@/lib/metrics";
+import { ADOPTION_DROP_BELOW, HEALTH_RULES, getAccountPageData, type ContractLineMetrics, type HealthTrendRow } from "@/lib/metrics";
 import { pct, pctChange, segmentLabel, shortDate, usd } from "@/lib/format";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { PageHeader } from "@/components/PageHeader";
 import { RiskBadge, RuleNote, SectionHeading, Stat } from "@/components/RiskUi";
 import { SectionSkeleton } from "@/components/Skeleton";
 import { RenewalDealsTable } from "@/components/RenewalDealsTable";
+import { BAND_LABEL, BAND_TEXT, ContributionBar, TrendArrow } from "@/components/HealthUi";
+import { HealthChart } from "@/components/HealthChart";
 
 export const metadata: Metadata = { title: tabTitle("Account") };
 
@@ -31,7 +33,7 @@ async function AccountContent({ params }: Params) {
   const { id } = await params;
   const data = await getAccountPageData(id);
   if (!data) notFound();
-  const { account: a, renewalRiskLevel, products, renewalDeals } = data;
+  const { account: a, renewalRiskLevel, products, renewalDeals, health } = data;
   const isCustomer = a.status === "customer";
 
   const description = [segmentLabel(a.segment), a.owner, a.status === "customer" ? "Customer" : a.status === "churned" ? "Churned" : "Prospect"].join(" · ");
@@ -61,6 +63,7 @@ async function AccountContent({ params }: Params) {
       </div>
 
       <div className="space-y-8">
+        {health && <HealthSection health={health} />}
         <ProductsSection products={products} />
         <section>
           <SectionHeading
@@ -78,6 +81,41 @@ async function AccountContent({ params }: Params) {
         </section>
       </div>
     </>
+  );
+}
+
+function HealthSection({ health: h }: { health: HealthTrendRow }) {
+  const i = h.inputs;
+  const facts = [
+    i.lastTouchDays === null ? "No CSM touch yet" : `Last CSM touch ${i.lastTouchDays} days ago`,
+    i.execMeetingIn90d ? `exec meeting in the last ${HEALTH_RULES.lookbackDays} days` : `no exec meeting in ${HEALTH_RULES.lookbackDays} days`,
+    i.qbrThisTerm ? "QBR this term" : "no QBR this term",
+    i.latestNps === null ? "no NPS response" : `NPS ${i.latestNps}${i.npsChange === null ? "" : ` (${i.npsChange > 0 ? "+" : ""}${i.npsChange})`}`,
+    i.csatAvg === null ? "no CSAT" : `CSAT ${i.csatAvg.toFixed(1)}`,
+    `${i.openLowOrMedium + i.openHighOrUrgent} open tickets (${i.openHighOrUrgent} high or urgent)`,
+    `${i.overdueInvoices} overdue invoices`,
+  ];
+  return (
+    <section>
+      <SectionHeading title="Health" detail="Score out of 100 as of the app's date, the last 6 weekly snapshots, and what each category contributed." />
+      <div className="grid gap-4 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 lg:grid-cols-[180px_1fr]">
+        <div>
+          <div className={`text-6xl font-semibold tabular-nums ${BAND_TEXT[h.band]}`}>{Math.round(h.score)}</div>
+          <div className={`mt-1 text-sm font-medium ${BAND_TEXT[h.band]}`}>{BAND_LABEL[h.band]}</div>
+          <div className="mt-2 text-sm">
+            <TrendArrow change={h.change} declining={h.declining} /> <span className="text-xs text-zinc-500">vs last week</span>
+          </div>
+          {h.declining && (
+            <span className="mt-2 inline-block rounded-md bg-red-600 px-2 py-0.5 text-xs font-semibold text-white dark:bg-red-500">Declining</span>
+          )}
+        </div>
+        <HealthChart history={h.history} greenFrom={HEALTH_RULES.greenFrom} amberFrom={HEALTH_RULES.amberFrom} />
+        <div className="lg:col-span-2">
+          <ContributionBar points={h.points} />
+          <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{facts.join(" · ")}</p>
+        </div>
+      </div>
+    </section>
   );
 }
 

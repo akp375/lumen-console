@@ -5,7 +5,8 @@
  *   npm run health-inputs:check                  print the checks, and compare with the saved "before" snapshot if there is one
  *   npm run health-inputs:check -- --save-before save this run as the "before" snapshot (reconciliation/health-inputs-before.json)
  *
- * Part 1 (must not change): every existing column of every existing table,
+ * Part 1 (must not change): every existing column of every existing table
+ * except health_scores (filled by `npm run health:backfill`),
  * fingerprinted row by row (new columns are left out), plus total ARR, the
  * renewal-risk level of each account and the High-risk list.
  *
@@ -34,13 +35,12 @@ const TABLES: Record<string, string[]> = {
   support_tickets: ["id"],
   nps_responses: ["id"],
   contract_lines: ["id"],
-  health_scores: ["account_id", "week_start"],
 };
+// health_scores is left out: `npm run health:backfill` writes it on purpose.
 const NEW_COLUMNS: Record<string, string[]> = {
   accounts: ["csm_id"],
   opportunities: ["ae_id", "adr_id", "csm_id"],
   support_tickets: ["csat_score"],
-  health_scores: ["behavioral_points", "relationship_points", "feedback_points", "support_points", "financial_points"],
 };
 
 const url = process.env.SUPABASE_URL;
@@ -246,6 +246,15 @@ async function main() {
   for (const x of activities) byType.set(String(x.type), (byType.get(String(x.type)) ?? 0) + 1);
   console.log(`\n  CS activities: ${activities.length} (${[...byType].map(([t, n]) => `${n} ${t}`).join(", ")})`);
   console.log(`  CSAT: ${rated.length} of ${closed.length} closed tickets rated (${closed.length ? Math.round((rated.length / closed.length) * 100) : 0}%)`);
+
+  // Financial inputs available to the health score (report only)
+  const yearAgo = new Date(Date.parse(`${AS_OF_DATE}T00:00:00Z`) - 365 * 86_400_000).toISOString().slice(0, 10);
+  const ended = data.contract_lines.filter((l) => l.status !== "active" && accById.get(String(l.account_id))?.status === "customer");
+  const wonExpansion = opps.filter((o) => o.type === "expansion" && o.stage === "Closed Won" && String(o.close_date) > yearAgo && String(o.close_date) <= AS_OF_DATE);
+  const unpaid = new Map<string, number>();
+  for (const i of data.invoices.filter((x) => x.status !== "paid")) unpaid.set(`${i.status} ${String(i.month).slice(0, 7)}`, (unpaid.get(`${i.status} ${String(i.month).slice(0, 7)}`) ?? 0) + 1);
+  console.log(`\n  Financial inputs: ${ended.length} ended lines on current customers; ${wonExpansion.length} expansion deals won in the last 12 months`);
+  console.log(`  Unpaid invoices: ${[...unpaid].sort().map(([k, n]) => `${n} ${k}`).join(", ") || "none"}`);
   console.log(`  => ${results.every(Boolean) ? "All ownership and data rules pass." : "SOME RULES FAIL: see FAIL lines."}`);
 }
 

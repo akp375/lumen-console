@@ -815,7 +815,10 @@ export const RENEWAL_RISK_RULES = {
   usageDropBelow: -0.2, // usage down more than 20%, last 30 days vs prior 30
 } as const;
 
-export const RENEWAL_RISK_SIGNALS = ["Low NPS", "NPS dropping", "Usage declining", "Underwater margin"] as const;
+export const RENEWAL_RISK_SIGNALS = ["Low NPS", "NPS dropping", "Usage declining", "Underwater margin", "Poor or declining health"] as const;
+
+/** Per account: health below 50 or down 10+ points on last week (see calcHealthTrend). */
+export type HealthRiskFlags = Map<string, { poorOrDeclining: boolean }>;
 export type RenewalRiskSignal = (typeof RENEWAL_RISK_SIGNALS)[number];
 
 export type RenewalRiskRow = {
@@ -849,6 +852,7 @@ export function calcRenewalRisk(
   prices: ModelPriceRow[],
   nps: NpsResponseRow[],
   asOf: string,
+  health?: HealthRiskFlags,
 ): RenewalRiskResult {
   const R = RENEWAL_RISK_RULES;
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r]));
@@ -870,6 +874,8 @@ export function calcRenewalRisk(
     if (s.npsChange !== null && s.npsChange <= R.npsDropOf) signals.push("NPS dropping");
     if (t.usageChange !== null && t.usageChange < R.usageDropBelow) signals.push("Usage declining");
     if (m.underwater) signals.push("Underwater margin");
+    // Counted only when "Usage declining" isn't already firing, so one usage slide can't count twice.
+    if (health?.get(a.id)?.poorOrDeclining && !signals.includes("Usage declining")) signals.push("Poor or declining health");
     if (signals.length === 0) continue;
     rows.push({
       accountId: a.id,
@@ -1146,12 +1152,13 @@ export function calcCrmSyncData(
   prices: ModelPriceRow[],
   nps: NpsResponseRow[],
   asOf: string,
+  health?: HealthRiskFlags,
 ): CrmSyncData {
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r.grossMargin]));
   const capacity = new Map(calcCapacity(accounts, usage, prices, asOf).map((r) => [r.accountId, r.capacityUsed]));
   const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
   // Same level the Renewals page shows: both read RenewalRiskRow.level.
-  const renewalLevels = new Map(calcRenewalRisk(accounts, usage, prices, nps, asOf).rows.map((r) => [r.accountId, r.level]));
+  const renewalLevels = new Map(calcRenewalRisk(accounts, usage, prices, nps, asOf, health).rows.map((r) => [r.accountId, r.level]));
   const dealSignals = new Map(calcDealRisk(deals, accounts, asOf).rows.map((r) => [r.opportunityId, r.signals.length]));
   const withOpenDeal = new Set(deals.filter(isOpen).map((o) => o.account_id));
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
@@ -1267,10 +1274,18 @@ const PRODUCT_ORDER = (p: string) => {
   return i === -1 ? PRODUCTS.length : i;
 };
 
-/** One row per contract line: usage and active users from the line's features, last 30 days vs prior 30. */
-export function calcContractLineMetrics(lines: ContractLineRow[], usage: FeatureUsageRow[], asOf: string): ContractLineMetrics[] {
+/**
+ * One row per contract line: usage and active users from the line's features, last 30 days vs prior 30.
+ *
+ * historyStart (optional): the first day usage history exists. When the prior window starts before it
+ * (older weekly health snapshots), the prior totals cover fewer days, so they are scaled up to 30 days
+ * (daily averages compared like with like). Leave it out for today's numbers: nothing changes.
+ */
+export function calcContractLineMetrics(lines: ContractLineRow[], usage: FeatureUsageRow[], asOf: string, historyStart?: string): ContractLineMetrics[] {
   const last = usageWindow(asOf);
   const prior = priorUsageWindow(asOf);
+  const priorDays = historyStart && prior.start < historyStart ? Math.max(0, daysBetween(historyStart, prior.end) + 1) : USAGE_WINDOW_DAYS;
+  const priorScale = priorDays > 0 ? USAGE_WINDOW_DAYS / priorDays : 0;
   type T = { tl: number; tp: number; ul: number; up: number };
   const totals = new Map<string, T>(); // `${account}|${product}`
   for (const u of usage) {
@@ -1297,7 +1312,8 @@ export function calcContractLineMetrics(lines: ContractLineRow[], usage: Feature
   return [...lines]
     .sort((a, b) => a.account_id.localeCompare(b.account_id) || PRODUCT_ORDER(a.product) - PRODUCT_ORDER(b.product))
     .map((l) => {
-      const t = totals.get(`${l.account_id}|${l.product}`) ?? { tl: 0, tp: 0, ul: 0, up: 0 };
+      const raw = totals.get(`${l.account_id}|${l.product}`) ?? { tl: 0, tp: 0, ul: 0, up: 0 };
+      const t = priorScale === 1 ? raw : { ...raw, tp: raw.tp * priorScale, up: raw.up * priorScale };
       const usageChange = change(t.tl, t.tp);
       return {
         lineId: l.id,
@@ -1319,6 +1335,335 @@ export function calcContractLineMetrics(lines: ContractLineRow[], usage: Feature
         notAdopted: t.tl === 0 && t.tp === 0,
       };
     });
+}
+
+// ---------------------------------------------------------------------------
+// Account health score (0-100), customers only
+//
+// Five categories, each built from metrics above or straight from the rows:
+//   Behavioral   product adoption per contract line (calcContractLineMetrics), weighted by line ARR
+//   Relationship last CSM touch, an exec meeting in 90 days, a QBR this contract term (cs_activities)
+//   Feedback     latest NPS and its change (calcNpsTrend), CSAT on tickets closed in 90 days
+//   Support      tickets open on the day by severity, average resolution time over 90 days
+//   Financial    overdue invoices in 6 months, invoice amount now vs 12 months ago
+// Gross margin and renewal risk are deliberately not inputs.
+// ---------------------------------------------------------------------------
+
+/** Points per metric. Round numbers adding to 100 (a test checks this). */
+export const HEALTH_WEIGHTS = {
+  behavioral: { adoption: 35 },
+  relationship: { lastTouch: 8, execMeeting: 7, qbrThisTerm: 5 },
+  feedback: { latestNps: 12, npsChange: 4, csat: 4 },
+  support: { openTickets: 10, resolutionTime: 5 },
+  financial: { overdueInvoices: 5, netExpansion: 5 },
+} as const;
+
+export const HEALTH_CATEGORIES = ["behavioral", "relationship", "feedback", "support", "financial"] as const;
+export type HealthCategory = (typeof HEALTH_CATEGORIES)[number];
+export const HEALTH_CATEGORY_LABELS: Record<HealthCategory, string> = {
+  behavioral: "Behavioral",
+  relationship: "Relationship",
+  feedback: "Feedback",
+  support: "Support",
+  financial: "Financial",
+};
+
+export const HEALTH_RULES = {
+  greenFrom: 70, // 70+ green, 50-69 amber, below 50 red
+  amberFrom: 50,
+  poorBelow: 50, // renewal-risk sign: below 50 ...
+  decliningDrop: 10, // ... or down 10+ points on last week ("declining")
+  snapshotWeeks: 6,
+  lookbackDays: 90, // exec meeting, CSAT and resolution time look back 90 days
+  overdueMonths: 6,
+  expansionMonths: 12,
+  ticketPenalty: { lowOrMedium: 0.1, highOrUrgent: 0.25 }, // share of the open-ticket points lost per ticket
+} as const;
+
+export type HealthBand = "green" | "amber" | "red";
+export const healthBand = (score: number): HealthBand =>
+  score >= HEALTH_RULES.greenFrom ? "green" : score >= HEALTH_RULES.amberFrom ? "amber" : "red";
+
+// Each metric scores 0-1 (share of its points). Null means no data, which scores the neutral value shown.
+
+/** Usage or active-users trend (last 30 days vs prior 30). No prior usage: 0.5. */
+export function trendScore(change: number | null): number {
+  if (change === null) return 0.5;
+  if (change >= 0.1) return 1;
+  if (change >= 0) return 0.8;
+  if (change >= -0.1) return 0.6;
+  if (change >= -0.2) return 0.35;
+  if (change >= ADOPTION_DROP_BELOW) return 0.15;
+  return 0; // adoption drop
+}
+
+/** Allowance used in the last 30 days. No allowance: 0.5. */
+export function capacityScore(used: number | null): number {
+  if (used === null) return 0.5;
+  if (used > 1) return 0.9;
+  if (used >= 0.8) return 1;
+  if (used >= 0.5) return 0.85;
+  if (used >= 0.25) return 0.5;
+  return 0.2;
+}
+
+/** One line's adoption: usage trend 40%, allowance used 30%, active-users trend 30%. Not adopted: 0. */
+export function lineAdoptionScore(l: Pick<ContractLineMetrics, "notAdopted" | "usageChange" | "capacityUsed" | "usersChange">): number {
+  if (l.notAdopted) return 0;
+  return 0.4 * trendScore(l.usageChange) + 0.3 * capacityScore(l.capacityUsed) + 0.3 * trendScore(l.usersChange);
+}
+
+export function latestNpsScore(nps: number | null): number {
+  if (nps === null) return 0.4;
+  if (nps >= 9) return 1;
+  if (nps >= 7) return 0.6;
+  if (nps >= 5) return 0.3;
+  return 0;
+}
+
+export function npsChangeScore(change: number | null): number {
+  if (change === null) return 0.5;
+  if (change >= 1) return 1;
+  if (change === 0) return 0.7;
+  if (change === -1) return 0.4;
+  return 0;
+}
+
+export function csatScore(avg: number | null): number {
+  if (avg === null) return 0.5;
+  if (avg >= 4.5) return 1;
+  if (avg >= 4) return 0.75;
+  if (avg >= 3) return 0.4;
+  return 0;
+}
+
+/** Days since the last call, meeting, QBR or exec meeting (emails don't count). Never: null, scores 0. */
+export function lastTouchScore(days: number | null): number {
+  if (days === null) return 0;
+  if (days <= 30) return 1;
+  if (days <= 60) return 0.6;
+  if (days <= 90) return 0.3;
+  return 0;
+}
+
+export function openTicketsScore(lowOrMedium: number, highOrUrgent: number): number {
+  const P = HEALTH_RULES.ticketPenalty;
+  return Math.max(0, 1 - P.lowOrMedium * lowOrMedium - P.highOrUrgent * highOrUrgent);
+}
+
+/** Average days from opened to closed. None closed: 0.5. */
+export function resolutionScore(avgDays: number | null): number {
+  if (avgDays === null) return 0.5;
+  if (avgDays <= 2) return 1;
+  if (avgDays <= 5) return 0.7;
+  if (avgDays <= 10) return 0.35;
+  return 0;
+}
+
+export function overdueScore(count: number): number {
+  return count === 0 ? 1 : count === 1 ? 0.4 : 0;
+}
+
+/** Invoice amount now minus 12 months ago: up = expansion, down = contraction. No invoices: 0.6. */
+export function netExpansionScore(change: number | null): number {
+  if (change === null || change === 0) return 0.6;
+  return change > 0 ? 1 : 0;
+}
+
+export type TicketRow = {
+  id: string;
+  account_id: string;
+  opened_at: string;
+  closed_at: string | null;
+  severity: string; // low, medium, high, urgent
+  status: string; // open, pending, closed
+  csat_score: number | null; // 1-5, closed tickets only
+};
+export type CsActivityRow = { account_id: string; activity_date: string; type: string; attendee_level: string };
+export type InvoiceStatusRow = { account_id: string; month: string; amount_usd: number; status: string };
+
+export type HealthInputs = {
+  accounts: AccountRow[];
+  lines: ContractLineRow[];
+  featureUsage: FeatureUsageRow[];
+  nps: NpsResponseRow[];
+  tickets: TicketRow[];
+  activities: CsActivityRow[];
+  invoices: InvoiceStatusRow[];
+  /** First day of usage history (older snapshots compare daily averages when their prior window is short). */
+  usageHistoryStart: string;
+};
+
+export type HealthScoreRow = {
+  accountId: string;
+  name: string;
+  segment: string;
+  asOf: string;
+  score: number; // 0-100, one decimal
+  band: HealthBand;
+  points: Record<HealthCategory, number>;
+  /** The raw values behind the points (shown on the pages). */
+  inputs: {
+    adoption: number | null; // 0-1, ARR-weighted across active lines
+    lastTouchDays: number | null;
+    execMeetingIn90d: boolean;
+    qbrThisTerm: boolean;
+    latestNps: number | null;
+    npsChange: number | null;
+    csatAvg: number | null;
+    openLowOrMedium: number;
+    openHighOrUrgent: number;
+    avgResolutionDays: number | null;
+    overdueInvoices: number;
+    invoiceChange12m: number | null;
+  };
+  lines: { product: string; arr: number; adoptionScore: number; adoptionDrop: boolean; notAdopted: boolean }[];
+};
+
+const round = (n: number, dp: number) => Math.round(n * 10 ** dp) / 10 ** dp;
+
+/** Health score for every customer who had started by asOf. Every date comparison uses asOf, never the clock. */
+export function calcHealthScores(input: HealthInputs, asOf: string): HealthScoreRow[] {
+  const W = HEALTH_WEIGHTS;
+  const R = HEALTH_RULES;
+  const customers = customersOnly(input.accounts).filter((a) => a.start_date !== null && day(a.start_date) <= asOf);
+
+  const activeLines = input.lines.filter((l) => l.status === "active" && day(l.purchase_date) <= asOf);
+  const lineMetrics = calcContractLineMetrics(activeLines, input.featureUsage, asOf, input.usageHistoryStart);
+  const linesBy = groupByAccount(lineMetrics, (l) => l.accountId);
+  const npsBy = new Map(calcNpsTrend(customers, input.nps, asOf).map((n) => [n.accountId, n]));
+  const ticketsBy = groupByAccount(input.tickets, (t) => t.account_id);
+  const activitiesBy = groupByAccount(input.activities, (x) => x.account_id);
+  const invoicesBy = groupByAccount(input.invoices, (i) => i.account_id);
+  const lookbackStart = addDays(asOf, -R.lookbackDays); // window is (start, asOf]
+
+  return customers.map((a) => {
+    // Behavioral
+    const lines = linesBy.get(a.id) ?? [];
+    const lineArr = lines.reduce((s, l) => s + l.arr, 0);
+    const adoption = lineArr > 0 ? lines.reduce((s, l) => s + lineAdoptionScore(l) * l.arr, 0) / lineArr : null;
+
+    // Relationship
+    const acts = (activitiesBy.get(a.id) ?? []).filter((x) => day(x.activity_date) <= asOf);
+    const touches = acts.filter((x) => x.type !== "email").map((x) => day(x.activity_date)).sort();
+    const lastTouchDays = touches.length ? daysBetween(touches[touches.length - 1], asOf) : null;
+    const execMeetingIn90d = acts.some((x) => x.type !== "email" && x.attendee_level === "executive" && day(x.activity_date) > lookbackStart);
+    let termStart = a.renewal_date ? addMonths(day(a.renewal_date), -12) : addDays(asOf, -365);
+    while (termStart > asOf) termStart = addMonths(termStart, -12);
+    const qbrThisTerm = acts.some((x) => x.type === "QBR" && day(x.activity_date) >= termStart);
+
+    // Feedback
+    const n = npsBy.get(a.id);
+    const tickets = ticketsBy.get(a.id) ?? [];
+    const closedRecently = tickets.filter((t) => t.closed_at !== null && day(t.closed_at) > lookbackStart && day(t.closed_at) <= asOf);
+    const rated = closedRecently.filter((t) => t.csat_score !== null);
+    const csatAvg = rated.length ? rated.reduce((s, t) => s + t.csat_score!, 0) / rated.length : null;
+
+    // Support: open on the day = opened by asOf and not closed by asOf
+    const open = tickets.filter((t) => day(t.opened_at) <= asOf && (t.closed_at === null || day(t.closed_at) > asOf));
+    const openHighOrUrgent = open.filter((t) => t.severity === "high" || t.severity === "urgent").length;
+    const openLowOrMedium = open.length - openHighOrUrgent;
+    const avgResolutionDays = closedRecently.length
+      ? closedRecently.reduce((s, t) => s + (Date.parse(t.closed_at!) - Date.parse(t.opened_at)) / DAY_MS, 0) / closedRecently.length
+      : null;
+
+    // Financial
+    const thisMonth = monthStart(asOf);
+    const invoices = (invoicesBy.get(a.id) ?? []).filter((i) => day(i.month) <= thisMonth).sort((x, y) => x.month.localeCompare(y.month));
+    const overdueInvoices = invoices.filter((i) => i.status === "overdue" && day(i.month) >= addMonths(thisMonth, -R.overdueMonths)).length;
+    const inWindow = invoices.filter((i) => day(i.month) >= addMonths(thisMonth, -R.expansionMonths));
+    const invoiceChange12m = inWindow.length >= 2 ? inWindow[inWindow.length - 1].amount_usd - inWindow[0].amount_usd : null;
+
+    const points: Record<HealthCategory, number> = {
+      behavioral: W.behavioral.adoption * (adoption ?? 0.5),
+      relationship:
+        W.relationship.lastTouch * lastTouchScore(lastTouchDays) +
+        W.relationship.execMeeting * (execMeetingIn90d ? 1 : 0) +
+        W.relationship.qbrThisTerm * (qbrThisTerm ? 1 : 0),
+      feedback:
+        W.feedback.latestNps * latestNpsScore(n?.latestNps ?? null) +
+        W.feedback.npsChange * npsChangeScore(n?.npsChange ?? null) +
+        W.feedback.csat * csatScore(csatAvg),
+      support: W.support.openTickets * openTicketsScore(openLowOrMedium, openHighOrUrgent) + W.support.resolutionTime * resolutionScore(avgResolutionDays),
+      financial: W.financial.overdueInvoices * overdueScore(overdueInvoices) + W.financial.netExpansion * netExpansionScore(invoiceChange12m),
+    };
+    const score = round(HEALTH_CATEGORIES.reduce((s, c) => s + points[c], 0), 1);
+    for (const c of HEALTH_CATEGORIES) points[c] = round(points[c], 2);
+
+    return {
+      accountId: a.id,
+      name: a.name,
+      segment: a.segment,
+      asOf,
+      score,
+      band: healthBand(score),
+      points,
+      inputs: {
+        adoption,
+        lastTouchDays,
+        execMeetingIn90d,
+        qbrThisTerm,
+        latestNps: n?.latestNps ?? null,
+        npsChange: n?.npsChange ?? null,
+        csatAvg,
+        openLowOrMedium,
+        openHighOrUrgent,
+        avgResolutionDays,
+        overdueInvoices,
+        invoiceChange12m,
+      },
+      lines: lines.map((l) => ({ product: l.product, arr: l.arr, adoptionScore: lineAdoptionScore(l), adoptionDrop: l.adoptionDrop, notAdopted: l.notAdopted })),
+    };
+  });
+}
+
+function groupByAccount<T>(rows: T[], keyOf: (r: T) => string): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const r of rows) {
+    const k = keyOf(r);
+    const list = out.get(k);
+    if (list) list.push(r);
+    else out.set(k, [r]);
+  }
+  return out;
+}
+
+/** Weekly snapshot dates, oldest first: asOf - 7 x (weeks - 1) ... asOf. */
+export function healthSnapshotDates(asOf: string, weeks: number = HEALTH_RULES.snapshotWeeks): string[] {
+  return Array.from({ length: weeks }, (_, k) => addDays(asOf, -7 * (weeks - 1 - k)));
+}
+
+export type HealthTrendRow = HealthScoreRow & {
+  history: { date: string; score: number }[]; // oldest first; weeks before the customer started are left out
+  /** Points vs last week's snapshot; null without one. */
+  change: number | null;
+  /** Down 10+ points on last week. */
+  declining: boolean;
+  /** Below 50, or declining: the renewal-risk sign. */
+  poorOrDeclining: boolean;
+};
+
+/** Today's score plus the weekly history, all measured from asOf. */
+export function calcHealthTrend(input: HealthInputs, asOf: string, weeks: number = HEALTH_RULES.snapshotWeeks): HealthTrendRow[] {
+  const dates = healthSnapshotDates(asOf, weeks);
+  const byDate = dates.map((d) => new Map(calcHealthScores(input, d).map((r) => [r.accountId, r])));
+  const today = byDate[byDate.length - 1];
+  const lastWeek = byDate.length > 1 ? byDate[byDate.length - 2] : new Map<string, HealthScoreRow>();
+  return [...today.values()].map((r) => {
+    const history = dates.flatMap((d, i) => {
+      const h = byDate[i].get(r.accountId);
+      return h ? [{ date: d, score: h.score }] : [];
+    });
+    const prev = lastWeek.get(r.accountId);
+    const change = prev ? round(r.score - prev.score, 1) : null;
+    const declining = change !== null && change <= -HEALTH_RULES.decliningDrop;
+    return { ...r, history, change, declining, poorOrDeclining: declining || r.score < HEALTH_RULES.poorBelow };
+  });
+}
+
+/** Renewal-risk input: which accounts have poor or declining health. */
+export function healthRiskFlags(rows: HealthTrendRow[]): HealthRiskFlags {
+  return new Map(rows.map((r) => [r.accountId, { poorOrDeclining: r.poorOrDeclining }]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1696,12 +2041,13 @@ export async function getNpsTrend(asOf: string = AS_OF_DATE): Promise<NpsTrendRo
 }
 
 export async function getRenewalRisk(asOf: string = AS_OF_DATE): Promise<RenewalRiskResult> {
-  const [accounts, { usage, prices }, nps] = await Promise.all([
+  const [accounts, { usage, prices }, nps, health] = await Promise.all([
     loadAccounts(customerFilter),
     loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
     loadNps(),
+    loadHealthRiskFlags(asOf),
   ]);
-  return calcRenewalRisk(accounts, usage, prices, nps, asOf);
+  return calcRenewalRisk(accounts, usage, prices, nps, asOf, health);
 }
 
 export async function getUpcomingRenewals(asOf: string = AS_OF_DATE): Promise<UpcomingRenewalsQuarter[]> {
@@ -1749,13 +2095,92 @@ export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskRe
 
 /** All accounts and all deals with the values the HubSpot sync sends. */
 export async function getCrmSyncData(asOf: string = AS_OF_DATE): Promise<CrmSyncData> {
-  const [accounts, deals, { usage, prices }, nps] = await Promise.all([
+  const [accounts, deals, { usage, prices }, nps, health] = await Promise.all([
     loadAccounts(),
     loadDealsWithRiskFields(),
     loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
     loadNps(),
+    loadHealthRiskFlags(asOf),
   ]);
-  return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf);
+  return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf, health);
+}
+
+// ---------------------------------------------------------------------------
+// Health score: loaders
+// ---------------------------------------------------------------------------
+
+async function loadTickets(accountId?: string): Promise<TicketRow[]> {
+  const rows = await fetchAll("support_tickets", "id, account_id, opened_at, closed_at, severity, status, csat_score", ["id"], accountId ? (q) => q.eq("account_id", accountId) : undefined);
+  return rows.map((r) => ({
+    id: str(r.id),
+    account_id: str(r.account_id),
+    opened_at: str(r.opened_at),
+    closed_at: strOrNull(r.closed_at),
+    severity: str(r.severity),
+    status: str(r.status),
+    csat_score: r.csat_score === null || r.csat_score === undefined ? null : num(r.csat_score),
+  }));
+}
+
+async function loadCsActivities(asOf: string, accountId?: string): Promise<CsActivityRow[]> {
+  const rows = await fetchAll("cs_activities", "id, account_id, activity_date, type, attendee_level", ["id"], (q) => {
+    const upTo = q.lte("activity_date", asOf);
+    return accountId ? upTo.eq("account_id", accountId) : upTo;
+  });
+  return rows.map((r) => ({ account_id: str(r.account_id), activity_date: str(r.activity_date), type: str(r.type), attendee_level: str(r.attendee_level) }));
+}
+
+async function loadInvoiceStatuses(asOf: string, accountId?: string): Promise<InvoiceStatusRow[]> {
+  const rows = await fetchAll("invoices", "account_id, month, amount_usd, status", ["account_id", "month"], (q) => {
+    const upTo = q.lte("month", monthStart(asOf));
+    return accountId ? upTo.eq("account_id", accountId) : upTo;
+  });
+  return rows.map((r) => ({ account_id: str(r.account_id), month: str(r.month), amount_usd: num(r.amount_usd), status: str(r.status) }));
+}
+
+/** Everything the health score reads, for all customers or one account. */
+export async function loadHealthInputs(asOf: string = AS_OF_DATE, accountId?: string): Promise<HealthInputs> {
+  const history = usageHistory(asOf);
+  const one = accountId ? (q: Query) => q.eq("account_id", accountId) : undefined;
+  const [accounts, lines, featureUsage, nps, tickets, activities, invoices] = await Promise.all([
+    loadAccounts(accountId ? (q) => q.eq("id", accountId) : customerFilter),
+    loadContractLines(accountId),
+    loadFeatureUsage(asOf, accountId, history.start),
+    one
+      ? fetchAll("nps_responses", "account_id, responded_at, score", ["id"], one).then((rows) =>
+          rows.map((r) => ({ account_id: str(r.account_id), responded_at: str(r.responded_at), score: num(r.score) })),
+        )
+      : loadNps(),
+    loadTickets(accountId),
+    loadCsActivities(asOf, accountId),
+    loadInvoiceStatuses(asOf, accountId),
+  ]);
+  return { accounts, lines, featureUsage, nps, tickets, activities, invoices, usageHistoryStart: history.start };
+}
+
+/** Poor-or-declining flags for renewal risk (today vs last week only). */
+async function loadHealthRiskFlags(asOf: string): Promise<HealthRiskFlags> {
+  return healthRiskFlags(calcHealthTrend(await loadHealthInputs(asOf), asOf, 2));
+}
+
+export type HealthPageRow = HealthTrendRow & { csm: string | null; owner: string };
+
+/** Every customer's health score with its weekly history, worst first. */
+export async function getHealth(asOf: string = AS_OF_DATE): Promise<HealthPageRow[]> {
+  const [input, team, csmRows] = await Promise.all([
+    loadHealthInputs(asOf),
+    fetchAll("team", "id, name", ["id"]),
+    fetchAll("accounts", "id, csm_id", ["id"], customerFilter),
+  ]);
+  const teamName = new Map(team.map((t) => [str(t.id), str(t.name)]));
+  const csmOf = new Map(csmRows.map((a) => [str(a.id), strOrNull(a.csm_id)]));
+  const owner = new Map(input.accounts.map((a) => [a.id, a.owner]));
+  return calcHealthTrend(input, asOf)
+    .map((r) => {
+      const csmId = csmOf.get(r.accountId) ?? null;
+      return { ...r, csm: csmId ? (teamName.get(csmId) ?? null) : null, owner: owner.get(r.accountId) ?? "" };
+    })
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
 }
 
 // ---------------------------------------------------------------------------
@@ -1786,9 +2211,10 @@ async function loadContractLines(accountId?: string): Promise<ContractLineRow[]>
   }));
 }
 
-/** Usage by feature for the last 60 days (the two 30-day windows), with active users. */
-async function loadFeatureUsage(asOf: string, accountId?: string): Promise<FeatureUsageRow[]> {
-  const prior = priorUsageWindow(asOf);
+/** Usage by feature for the last 60 days (the two 30-day windows), with active users. `from` reads further back. */
+async function loadFeatureUsage(asOf: string, accountId?: string, from?: string): Promise<FeatureUsageRow[]> {
+  const window = priorUsageWindow(asOf);
+  const prior = { start: from && from < window.start ? from : window.start };
   const last = usageWindow(asOf);
   const rows = await fetchAll(
     "usage_daily",
@@ -1862,17 +2288,19 @@ export type AccountPageData = {
   renewalRiskLevel: RenewalRiskLevel | null; // null when not renewing within the risk window
   products: ContractLineMetrics[];
   renewalDeals: RenewalDealRow[]; // every renewal deal for this account, latest close first
+  health: HealthTrendRow | null; // customers only
 };
 
 /** One account, its renewal-risk level, its contract lines with per-line usage, and its renewal deals. Null if the account doesn't exist. */
 export async function getAccountPageData(accountId: string, asOf: string = AS_OF_DATE): Promise<AccountPageData | null> {
-  const [accounts, seatRows, lines, usage, deals, risk] = await Promise.all([
+  const [accounts, seatRows, lines, usage, deals, risk, healthInput] = await Promise.all([
     loadAccounts((q) => q.eq("id", accountId)),
     fetchAll("accounts", "id, seats", ["id"], (q) => q.eq("id", accountId)),
     loadContractLines(accountId),
     loadFeatureUsage(asOf, accountId),
     loadRenewalDeals((q) => q.eq("account_id", accountId)),
     getRenewalRisk(asOf),
+    loadHealthInputs(asOf, accountId),
   ]);
   const account = accounts[0];
   if (!account) return null;
@@ -1885,6 +2313,7 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
     renewalDeals: calcRenewalDeals(deals, products, accounts).sort(
       (a, b) => b.closeDate.localeCompare(a.closeDate) || a.opportunityId.localeCompare(b.opportunityId),
     ),
+    health: calcHealthTrend(healthInput, asOf)[0] ?? null,
   };
 }
 

@@ -353,7 +353,9 @@ The live results table in section 1 shows the figures from before this fix. Over
 - **Renewal deals with their lines.** The Renewals page lists all 22 open renewal deals, and each account page lists that account's renewal deals. Each is one row at its full amount and expands to the active lines of the contract it renews (product, ARR, adoption status), found by joining `opportunities.contract_id` to `contract_lines.contract_id`; no columns were added. Where the deal amount and the lines differ, both show with the gap as "uplift" or "reduction"; a churned or unlinked contract shows "No active lines" instead of a gap. Lines with an adoption drop are marked **Downsell risk**, and the Renewals page opens with **ARR at downsell risk**: $34,800 on open renewal deals (both of Vantagely Energy's lines), against $298K across all customers. All 22 open renewals match their lines exactly; only won renewals differ. 5 new tests (66 in total).
 - **Next 180 days on Renewals.** The headline card is now **ARR at downsell risk, next 180 days**: adoption-drop lines whose contract renews within 180 days of the as-of date, deal or not. It shows $216K (9 lines on 5 contracts: Ionic Retail, Cedarline Legal, Vantagely Energy and two Orchardly accounts), with $298K across all customers in the small print. A new **Missing renewal deal** check (`calcMissingRenewalDeals`) finds customer contracts renewing within 180 days with no open renewal deal: **46 contracts, $1,085,400 ARR**, listed in a table with renewal date, ARR, renewal-risk level and downsell risk. Finding: 3 High-risk accounts (Larkspur Systems in 13 days, Quillon Retail, Cedarline Legal) have no open renewal deal. Renewals beyond the 120-day risk window show "Not yet checked". 2 new tests replace the open-deals-only downsell test (67 in total).
 
-## 22 Nov 2026: Health-score inputs, team and ownership
+## 2026-11-22 (Sunday)
+
+### Health-score inputs, team and ownership
 
 **What we did.** Added the data the health score needs, without changing anything that already existed.
 
@@ -368,3 +370,35 @@ The live results table in section 1 shows the figures from before this fix. Over
 **Reproducible.** `scripts/health-inputs-lib.ts` is used by both `npm run health-inputs:backfill` and `npm run seed`; both print the same fingerprint (`b798f6eb7f07`), and the core (`393ca01b70f9`) and contract-layer (`640e3ebf199b`) fingerprints are unchanged.
 
 **Simplification.** Invoices store only their current status, so past weekly health snapshots use today's invoice status (worth at most 5 points).
+
+### Health score
+
+**What we did.** Built the account health score (0–100) in `src/lib/metrics.ts`, reusing the per-line adoption metrics and adoption-drop flag.
+
+- **Weights** (`HEALTH_WEIGHTS`, one config object adding to 100):
+  - Behavioral 35: line adoption weighted by line ARR. Unused lines count as 0.
+  - Relationship 20: last CSM touch 8, exec meeting in 90 days 7, QBR this term 5. Emails don't count as a touch.
+  - Feedback 20: latest NPS 12, NPS change 4, CSAT 4. No NPS response scores 40%.
+  - Support 15: open tickets by severity 10, resolution time 5.
+  - Financial 10: overdue invoices 5, invoice growth over 12 months 5.
+  - Gross margin and renewal risk are not inputs.
+- **Bands:** green 70+, amber 50–69, red below 50.
+- **Declining:** down 10+ points on last week.
+- **Weekly snapshots:** 900 rows in `health_scores` (`npm run health:backfill`): 150 customers × 6 weeks, from 9 Oct to 13 Nov, all measured from `AS_OF_DATE`. The pages compute the same numbers live with the same function (`calcHealthTrend`).
+- **Today's results:** 114 green, 22 amber, 14 red, 2 declining (Aster Legal and Orchardly Logistics).
+- **Renewal risk** has a fifth sign, "Poor or declining health" (below 50, or down 10+). It counts only when "Usage declining" isn't already firing.
+  - **Before and after:** High-risk stays at **6, the same accounts**.
+  - The only two renewing customers with poor health (Vantagely Energy and Cedarline Legal) already fire "Usage declining", and both were already High.
+- **Pages:**
+  - A new **Health** page: score badges, a week-over-week arrow, adoption-drop chips and a Declining tag, worst first.
+  - On each account page, above Products: a large score, a 6-week line chart, and a bar of each category's points.
+- **Tests:** 7 new (74 in total) cover the weights, every band edge, a hand-worked account, the short-window rule, declining vs poor, and the new renewal sign.
+
+**Decisions and simplifications.**
+
+- **Expansion vs contraction uses invoices.** No contract line has ever ended on a current customer, so line-based contraction would never fire. The score compares each customer's latest invoice with the earliest in the last 12 months (seat changes move it). Invoices don't show mid-contract add-ons (see 21 Nov).
+- **Short comparison window.** The oldest snapshot's prior 30 days start before usage history (15 Aug), so `calcContractLineMetrics` takes an optional history start and compares daily averages. Today's numbers are unchanged.
+- **Back-weeks use today's invoice status.** Invoices only store their current status (at most 5 points).
+- **`health_scores.usage_trend` and `capacity_used` are left empty.** Adoption is per contract line now, and the five category points are stored instead.
+- **HubSpot not synced.** Risk levels didn't change, so nothing is stale. The `lumen_health_score` property is still empty.
+
