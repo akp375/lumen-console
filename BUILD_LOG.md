@@ -402,3 +402,46 @@ The live results table in section 1 shows the figures from before this fix. Over
 - **`health_scores.usage_trend` and `capacity_used` are left empty.** Adoption is per contract line now, and the five category points are stored instead.
 - **HubSpot not synced.** Risk levels didn't change, so nothing is stale. The `lumen_health_score` property is still empty.
 
+
+### Health display polish
+
+- **Health page:** ARR column, filters, sorting and clickable rows. Hovering a score badge shows the five-category summary.
+- **Account page:** one row per health category with an earned-vs-possible bar. Hovering shows each metric's value and points, and for Behavioral each product line's usage, users and allowance used. The stacked bar is gone.
+- Every adoption figure states its window (last 30 days vs prior 30). Account names are underlined links, and the account page has a **← Back** link to the previous page.
+
+### Renewal risk rebuilt on the health score
+
+**What changed.** Renewal risk used separate signs (low NPS, NPS dropping, usage declining and so on). Those now live inside the health score, so the rule reads the score instead. All thresholds are in one config object, `RENEWAL_RISK_RULES` in `src/lib/metrics.ts`.
+
+- **Window by segment**, counted from `AS_OF_DATE`: enterprise 180 days, mid-market 120, SMB 90. Renewals outside the window are Low.
+- **High:** health below 50; or health 50–69 with underwater margin, health down 10+ points on last week, or 25%+ of contract ARR at downsell risk.
+- **Medium:** health 50–69; or health 70+ with underwater margin or any line at downsell risk; or NPS down 3+ points since the previous survey.
+- **Every customer now has a level** (Low included), used by the Renewals page, the account page, the HubSpot sync values and Claude's renewal facts. Reasons show as chips.
+- **Result:** High went from 6 accounts to 4 (Vantagely Energy, Cedarline Legal, Ionic Retail, Copperleaf Labs), $370,800 ARR. Larkspur Systems and Quillon Retail moved to Medium.
+- `npm run renewal-risk:compare` (read-only) prints the High and Medium lists and compares them with a saved "before" (`reconciliation/renewal-risk-before.json`).
+- This replaces the "fifth sign" described under Health score above.
+
+### Executive sponsor
+
+- **New account fields** (migration `20261123000000_add_account_exec_sponsor.sql`): sponsor name, title, status (active / left / none) and the date a sponsor left.
+- **Seeded additively** for enterprise and mid-market customers only: 46 active, 9 none, 5 left (mostly on lower-health accounts). SMB, prospects and churned accounts are not tracked. The backfill and `npm run seed` share one builder; the reconciliation check showed no existing value changed.
+- **New renewal-risk trigger:** an enterprise or mid-market customer with no sponsor, or whose sponsor left, is Medium on its own, High when health is below 70.
+- **Result:** High stays at the same 4. Medium went from 10 to 13 (Copperleaf Media: sponsor left; Nimbus Health and Nimbus Media: no sponsor). Copperleaf Labs, already High, gained a "No exec sponsor" chip.
+- The account page shows the sponsor, and Claude's renewal facts include sponsor status.
+
+### Account page: Renewal Risk section and missing renewal deal
+
+- **Renewal Risk section** under Renewal Deals: the level, reason chips, the window, and every condition with this account's value, the rule and whether it counts.
+- **Missing renewal deal:** inside the window with no open renewal deal, the page says "Contract renews [date] ([N] days) · No renewal deal opened yet" with a red chip. This doesn't change the risk level. Outside the window it says no renewal deal is needed yet.
+
+### Missing renewal deals: same window on both pages
+
+**What broke.** The Renewals page looked 180 days ahead for every customer, while account pages used the segment windows. An SMB account renewing in 100 days showed as missing a deal on the Renewals page but not on its own page.
+
+**Fix.** The Renewals check (`calcMissingRenewalDeals`) now uses the same segment windows from `RENEWAL_RISK_RULES`. The "ARR at downsell risk, next 180 days" card still looks 180 days ahead for everyone.
+
+**Result.** Missing renewal deals went from 46 contracts ($1,085,400 ARR, see 21 Nov) to **19 ($833,400)**: 7 enterprise, 6 mid-market, 6 SMB. A read-only check of all 150 customers found the Renewals page and the account pages flag exactly the same 19 accounts. Three are High risk: Cedarline Legal (108 days), Ionic Retail (165) and Copperleaf Labs (177).
+
+**Tests:** 79 in total. The missing-deal test now covers each window's edge (SMB day 90/91, mid-market 120/121, enterprise 180/181).
+
+**Open item.** HubSpot has not been re-synced since the renewal-risk rule changed, so the Renewal risk values there are out of date (6 High before, 4 now). Run a dry run, then `npm run hubspot:sync`, when ready.
