@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
+import Link from "next/link";
+import type { MissingRenewalDealRow, RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
 import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/renewals/actions";
 import { pct, pctChange, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
 import { PAGES } from "@/lib/pages";
@@ -59,23 +60,85 @@ function UpcomingRenewals({ quarters }: { quarters: UpcomingRenewalsQuarter[] })
 }
 
 function DownsellSummary({ result }: { result: RenewalDealsResult }) {
-  const d = result.downsellRisk;
-  const openAmount = result.deals.reduce((s, r) => s + r.amount, 0);
+  const d = result.downsellRiskNext;
   const all = result.downsellRiskAllCustomers;
+  const m = result.missingRenewalDeals;
+  const openAmount = result.deals.reduce((s, r) => s + r.amount, 0);
+  const days = result.lookaheadDays;
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <Stat
-        label="ARR at downsell risk"
+        label={`ARR at downsell risk, next ${days} days`}
         value={usdCompact(d.arr)}
-        detail={`${d.lines} ${d.lines === 1 ? "line" : "lines"} with an adoption drop on ${d.deals} open renewal ${d.deals === 1 ? "deal" : "deals"} · ${usdCompact(all.arr)} across all customers`}
+        detail={`${d.lines} ${d.lines === 1 ? "line" : "lines"} with an adoption drop on ${d.contracts} ${d.contracts === 1 ? "contract" : "contracts"} renewing in ${days} days, deal or not · ${usdCompact(all.arr)} across all customers`}
         tone={d.arr > 0 ? "alert" : "default"}
       />
       <Stat
-        label="Open renewal deals"
-        value={String(result.deals.length)}
-        detail={`${usd(openAmount)} in deal amounts`}
+        label="Missing renewal deal"
+        value={`${m.count} ${m.count === 1 ? "contract" : "contracts"}`}
+        detail={`${usd(m.arr)} ARR renewing in the next ${days} days with no open renewal deal`}
+        tone={m.count > 0 ? "warn" : "default"}
       />
+      <Stat label="Open renewal deals" value={String(result.deals.length)} detail={`${usd(openAmount)} in deal amounts`} />
     </div>
+  );
+}
+
+function MissingRenewalDeals({ result, riskWindowDays }: { result: RenewalDealsResult; riskWindowDays: number }) {
+  const m = result.missingRenewalDeals;
+  const columns: Column<MissingRenewalDealRow>[] = [
+    {
+      key: "name",
+      label: "Account",
+      render: (r) => (
+        <>
+          <Link href={`/accounts/${r.accountId}`} className="whitespace-nowrap font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100">
+            {r.accountName}
+          </Link>
+          <div className="whitespace-nowrap text-xs text-zinc-500">{r.owner}</div>
+        </>
+      ),
+      sortValue: (r) => r.accountName.toLowerCase(),
+    },
+    { key: "renewal", label: "Renewal", render: renewal, sortValue: (r) => r.renewalDate },
+    { key: "arr", label: "ARR", numeric: true, render: (r) => usd(r.arr), sortValue: (r) => r.arr },
+    {
+      key: "risk",
+      label: "Renewal Risk",
+      render: (r) => (r.riskLevel ? <RiskBadge level={r.riskLevel} /> : <span className="whitespace-nowrap text-xs text-zinc-500">Not yet checked</span>),
+      sortValue: (r) => (r.riskLevel ? LEVEL_RANK[r.riskLevel] : 3),
+      firstDir: "asc",
+    },
+    {
+      key: "downsell",
+      label: "Downsell Risk",
+      numeric: true,
+      render: (r) => (r.downsellRiskArr > 0 ? <span className="font-medium text-red-700 dark:text-red-400">{usd(r.downsellRiskArr)}</span> : <span className="text-zinc-400">None</span>),
+      sortValue: (r) => r.downsellRiskArr,
+      firstDir: "desc",
+    },
+  ];
+  return (
+    <section>
+      <SectionHeading
+        title="Missing Renewal Deals"
+        detail={`${m.count} customer contracts renewing in the next ${result.lookaheadDays} days with no open renewal deal · ${usd(m.arr)} ARR · soonest first`}
+      />
+      <DataTable
+        columns={columns}
+        rows={m.rows}
+        rowKey={(r) => r.contractId}
+        defaultSort={{ key: "renewal", dir: "asc" }}
+        empty={{ title: "No missing renewal deals", detail: `Every contract renewing in the next ${result.lookaheadDays} days has an open renewal deal.` }}
+        minWidth="min-w-[720px]"
+      />
+      <div className="mt-2">
+        <RuleNote>
+          Renewal risk is the same level the HubSpot sync sends. The risk rules only look {riskWindowDays} days ahead, so renewals further out show
+          &ldquo;Not yet checked&rdquo;.
+        </RuleNote>
+      </div>
+    </section>
   );
 }
 
@@ -176,6 +239,7 @@ export function RenewalRiskPanel({
         {!busy && !data && (
           <div className="space-y-8">
             <UpcomingRenewals quarters={upcoming} />
+            <MissingRenewalDeals result={renewalDeals} riskWindowDays={windowDays} />
             <RenewalDeals result={renewalDeals} adoptionDropPct={adoptionDropPct} />
           </div>
         )}

@@ -1365,8 +1365,6 @@ export type RenewalDealRow = {
   downsellRiskArr: number;
 };
 
-export type DownsellRiskSummary = { arr: number; lines: number; deals: number };
-
 function adoptionStatus(m: ContractLineMetrics): AdoptionStatus {
   if (m.notAdopted) return "Not adopted";
   if (m.adoptionDrop) return "Adoption drop";
@@ -1422,22 +1420,94 @@ export function calcRenewalDeals(deals: RenewalDealInput[], lineMetrics: Contrac
   });
 }
 
-/** ARR on lines with an adoption drop, across the given deals. A contract is counted once even if two deals point at it. */
-export function calcDownsellRisk(rows: RenewalDealRow[]): DownsellRiskSummary {
-  const seen = new Set<string>();
-  let arr = 0;
-  let lines = 0;
-  let deals = 0;
-  for (const r of rows) {
-    if (r.downsellRiskArr > 0) deals++;
-    for (const l of r.lines) {
-      if (!l.downsellRisk || seen.has(l.lineId)) continue;
-      seen.add(l.lineId);
-      arr += l.arr;
-      lines++;
-    }
+export const RENEWAL_LOOKAHEAD_DAYS = 180; // "next 180 days" for downsell risk and missing renewal deals
+
+export type DownsellRiskSummary = { arr: number; lines: number; contracts: number };
+
+/** True when the date falls from today to today + `days`, inclusive. `days` null = any date. */
+function renewsWithin(date: string, asOf: string, days: number | null): boolean {
+  if (days === null) return true;
+  const d = day(date);
+  return d >= asOf && daysBetween(asOf, d) <= days;
+}
+
+/**
+ * ARR at downsell risk: active contract lines with an adoption drop whose
+ * renewal date is within `days` of today, whether or not a renewal deal exists.
+ * `days` null = every active line with an adoption drop, whatever its renewal date.
+ */
+export function calcDownsellRiskNext(lineMetrics: ContractLineMetrics[], asOf: string, days: number | null = RENEWAL_LOOKAHEAD_DAYS): DownsellRiskSummary {
+  const atRisk = lineMetrics.filter((m) => m.status === "active" && m.adoptionDrop && renewsWithin(m.renewalDate, asOf, days));
+  return {
+    arr: atRisk.reduce((s, m) => s + m.arr, 0),
+    lines: atRisk.length,
+    contracts: new Set(atRisk.map((m) => m.contractId)).size,
+  };
+}
+
+export type MissingRenewalDealRow = {
+  accountId: string;
+  accountName: string;
+  owner: string;
+  segment: string;
+  contractId: string;
+  renewalDate: string;
+  daysToRenewal: number;
+  arr: number; // sum of the contract's active lines
+  /** Renewal-risk level (same as the HubSpot sync); null when the renewal is beyond the risk rule's window. */
+  riskLevel: RenewalRiskLevel | null;
+  downsellRiskArr: number; // ARR on this contract's lines with an adoption drop
+};
+
+export type MissingRenewalDealsResult = { count: number; arr: number; rows: MissingRenewalDealRow[] };
+
+/**
+ * Missing renewal deal: a customer contract renewing within `days` of today
+ * with no open renewal deal pointing at it (deal.contract_id = contract).
+ * `riskLevels` holds the flagged (High/Medium) customers from calcRenewalRisk;
+ * any other customer renewing within the risk window is Low.
+ */
+export function calcMissingRenewalDeals(
+  accounts: AccountRow[],
+  lineMetrics: ContractLineMetrics[],
+  renewalDeals: RenewalDealInput[],
+  riskLevels: Map<string, RenewalRiskLevel>,
+  asOf: string,
+  days = RENEWAL_LOOKAHEAD_DAYS,
+): MissingRenewalDealsResult {
+  const customers = new Map(customersOnly(accounts).map((a) => [a.id, a]));
+  const covered = new Set(
+    renewalDeals.filter((d) => (OPEN_STAGES as readonly string[]).includes(d.stage) && d.contract_id).map((d) => d.contract_id!),
+  );
+  type C = { accountId: string; renewalDate: string; arr: number; downsell: number };
+  const contracts = new Map<string, C>();
+  for (const m of lineMetrics) {
+    if (m.status !== "active" || !customers.has(m.accountId)) continue;
+    const c = contracts.get(m.contractId) ?? { accountId: m.accountId, renewalDate: m.renewalDate, arr: 0, downsell: 0 };
+    c.arr += m.arr;
+    if (m.adoptionDrop) c.downsell += m.arr;
+    contracts.set(m.contractId, c);
   }
-  return { arr, lines, deals };
+  const rows: MissingRenewalDealRow[] = [];
+  for (const [contractId, c] of contracts) {
+    if (covered.has(contractId) || !renewsWithin(c.renewalDate, asOf, days)) continue;
+    const a = customers.get(c.accountId)!;
+    const daysToRenewal = daysBetween(asOf, c.renewalDate);
+    rows.push({
+      accountId: a.id,
+      accountName: a.name,
+      owner: a.owner,
+      segment: a.segment,
+      contractId,
+      renewalDate: c.renewalDate,
+      daysToRenewal,
+      arr: c.arr,
+      riskLevel: daysToRenewal <= RENEWAL_RISK_RULES.renewalWithinDays ? (riskLevels.get(a.id) ?? "Low") : null,
+      downsellRiskArr: c.downsell,
+    });
+  }
+  rows.sort((x, y) => x.renewalDate.localeCompare(y.renewalDate) || y.arr - x.arr || x.contractId.localeCompare(y.contractId));
+  return { count: rows.length, arr: rows.reduce((s, r) => s + r.arr, 0), rows };
 }
 
 // ---------------------------------------------------------------------------
@@ -1757,31 +1827,33 @@ async function loadRenewalDeals(filter?: (q: Query) => Query): Promise<RenewalDe
 
 export type RenewalDealsResult = {
   deals: RenewalDealRow[]; // open renewal deals, soonest close first
-  downsellRisk: DownsellRiskSummary; // on the contracts these open deals renew
-  downsellRiskAllCustomers: { arr: number; lines: number; contracts: number }; // every active line with an adoption drop, for context
+  downsellRiskNext: DownsellRiskSummary; // adoption-drop lines renewing in the next 180 days, deal or not
+  downsellRiskAllCustomers: DownsellRiskSummary; // every active line with an adoption drop, for context
+  missingRenewalDeals: MissingRenewalDealsResult; // contracts renewing in the next 180 days with no open renewal deal
+  lookaheadDays: number;
 };
 
-/** Open renewal deals with their contract lines, and the ARR at downsell risk. */
+/** Open renewal deals with their contract lines, ARR at downsell risk, and contracts missing a renewal deal. */
 export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<RenewalDealsResult> {
-  const [accounts, deals, lines, usage] = await Promise.all([
+  const [accounts, deals, lines, usage, risk] = await Promise.all([
     loadAccounts(),
-    loadRenewalDeals((q) => q.in("stage", [...OPEN_STAGES])),
+    loadRenewalDeals(),
     loadContractLines(),
     loadFeatureUsage(asOf),
+    getRenewalRisk(asOf),
   ]);
   const metrics = calcContractLineMetrics(lines, usage, asOf);
-  const rows = calcRenewalDeals(deals, metrics, accounts).sort(
+  const open = deals.filter((d) => (OPEN_STAGES as readonly string[]).includes(d.stage));
+  const rows = calcRenewalDeals(open, metrics, accounts).sort(
     (a, b) => a.closeDate.localeCompare(b.closeDate) || b.amount - a.amount || a.opportunityId.localeCompare(b.opportunityId),
   );
-  const allActive = metrics.filter((m) => m.status === "active" && m.adoptionDrop);
+  const levels = new Map(risk.rows.map((r) => [r.accountId, r.level]));
   return {
     deals: rows,
-    downsellRisk: calcDownsellRisk(rows),
-    downsellRiskAllCustomers: {
-      arr: allActive.reduce((s, m) => s + m.arr, 0),
-      lines: allActive.length,
-      contracts: new Set(allActive.map((m) => m.contractId)).size,
-    },
+    downsellRiskNext: calcDownsellRiskNext(metrics, asOf),
+    downsellRiskAllCustomers: calcDownsellRiskNext(metrics, asOf, null),
+    missingRenewalDeals: calcMissingRenewalDeals(accounts, metrics, deals, levels, asOf),
+    lookaheadDays: RENEWAL_LOOKAHEAD_DAYS,
   };
 }
 

@@ -8,7 +8,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   calcContractLineMetrics,
-  calcDownsellRisk,
+  calcDownsellRiskNext,
+  calcMissingRenewalDeals,
+  type ContractLineMetrics,
   calcRenewalDeals,
   type AccountRow,
   type ContractLineRow,
@@ -198,8 +200,52 @@ test("Renewal deals: only active lines; no contract or a churned contract means 
   assert.equal(D.R6.downsellRiskArr, 0);
 });
 
-test("ARR at downsell risk: adoption-drop line ARR, each line counted once", () => {
-  // R1 and R4 both renew C1: its Core line ($9,600) counts once.
-  assert.deepEqual(calcDownsellRisk([D.R1, D.R4]), { arr: 9_600, lines: 1, deals: 2 });
-  assert.deepEqual(calcDownsellRisk([D.R2, D.R3, D.R5, D.R6]), { arr: 0, lines: 0, deals: 0 });
+// ---------------------------------------------------------------------------
+// Next 180 days: downsell risk and missing renewal deals
+//
+// Today = 2026-11-13, so today + 180 days = 2027-05-12 (inside); 2027-05-13 is day 181.
+// ---------------------------------------------------------------------------
+
+function metric(lineId: string, accountId: string, contractId: string, arr: number, renewalDate: string, adoptionDrop: boolean, status: ContractLineMetrics["status"] = "active"): ContractLineMetrics {
+  return { ...rows[0], lineId, accountId, contractId, product: "Core", arr, renewalDate, adoptionDrop, status, notAdopted: false };
+}
+const AHEAD = [
+  metric("C1-core", "A1", "C1", 9_600, "2027-01-01", true), // day 49, drop
+  metric("C1-extract", "A1", "C1", 2_400, "2027-01-01", false), // day 49, no drop
+  metric("C4-core", "A4", "C4", 5_000, "2027-05-12", true), // day 180: inside
+  metric("C5-core", "A5", "C5", 3_000, "2027-05-13", true), // day 181: outside
+  metric("C6-core", "A6", "C6", 4_000, "2026-11-12", true), // yesterday: outside
+  metric("C7-core", "A7", "C7", 7_000, "2027-02-20", false), // day 99, has an open renewal deal
+  metric("C8-core", "A8", "C8", 1_000, "2026-12-13", false), // day 30, only a won renewal deal
+  metric("C9-core", "A9", "C9", 8_000, "2027-01-01", true, "churned"), // churned line
+];
+
+test("ARR at downsell risk, next 180 days: adoption-drop lines renewing from today to day 180", () => {
+  // C1 Core 9,600 (day 49) + C4 Core 5,000 (day 180). Not C5 (day 181), C6 (past) or C9 (churned).
+  assert.deepEqual(calcDownsellRiskNext(AHEAD, AS_OF), { arr: 14_600, lines: 2, contracts: 2 });
+  // Small print, all customers: every active drop line, any date: 9,600 + 5,000 + 3,000 + 4,000
+  assert.deepEqual(calcDownsellRiskNext(AHEAD, AS_OF, null), { arr: 21_600, lines: 4, contracts: 4 });
+});
+
+test("Missing renewal deal: customer contracts renewing within 180 days with no open renewal deal", () => {
+  const accts = ["A1", "A4", "A5", "A6", "A7", "A8"].map((id) => account(id, `Acct ${id}`));
+  const r = calcMissingRenewalDeals(
+    [...accts, { ...account("A9", "Churned co"), status: "churned" }],
+    AHEAD,
+    [deal("D7", "A7", "Proposal", 7_000, "C7"), deal("D8", "A8", "Closed Won", 1_000, "C8")],
+    new Map([["A1", "High" as const]]),
+    AS_OF,
+  );
+  // In the window: C8 (day 30), C1 (day 49), C7 (day 99), C4 (day 180). C7 has an open deal, so it's covered.
+  // C8's only deal is closed, so it still needs one.
+  assert.deepEqual(r.rows.map((x) => x.contractId), ["C8", "C1", "C4"]); // soonest renewal first
+  assert.equal(r.count, 3);
+  assert.equal(r.arr, 18_000); // 1,000 + (9,600 + 2,400) + 5,000
+  const by = Object.fromEntries(r.rows.map((x) => [x.contractId, x]));
+  assert.equal(by.C1.arr, 12_000);
+  assert.equal(by.C1.downsellRiskArr, 9_600);
+  assert.equal(by.C1.riskLevel, "High"); // flagged by the renewal-risk rule
+  assert.equal(by.C8.riskLevel, "Low"); // within 120 days, not flagged
+  assert.equal(by.C4.riskLevel, null); // day 180 is beyond the 120-day risk window
+  assert.equal(by.C8.daysToRenewal, 30);
 });
