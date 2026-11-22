@@ -34,6 +34,7 @@ import {
   calcUpcomingDeals,
   calcCrmSyncData,
   decideRenewalRisk,
+  calcRenewalDealCoverage,
   RENEWAL_RISK_RULES,
   dealRiskLevel,
   type DealRiskInput,
@@ -837,4 +838,27 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
   assert.equal(D.E4.daysInStage, null);
   assert.equal(D.E2.forecastCategory, "Commit");
   assert.equal(D.E1.accountName, "P1");
+});
+
+test("Renewal deal coverage: missing only inside the window with no open renewal deal", () => {
+  const base = { status: "customer" as const, mrr_usd: 1000, segment: "SMB" };
+  const accounts = [
+    acc({ id: "G1", ...base, renewal_date: "2026-12-01" }), // 18 days: inside SMB's 90
+    acc({ id: "G2", ...base, renewal_date: "2027-03-01" }), // 108 days: outside
+  ];
+  const health = new Map(["G1", "G2"].map((id) => [id, { score: 85, change: 0, npsChange: null, lines: [{ arr: 12_000, adoptionDrop: false }] }]));
+  const byId = Object.fromEntries(calcRenewalRisk(accounts, [], PRICES, health, TODAY).all.map((r) => [r.accountId, r]));
+  // Inside the window: no deals, or only a closed one = missing; an open one = covered
+  assert.equal(calcRenewalDealCoverage(byId.G1, []).missing, true);
+  assert.equal(calcRenewalDealCoverage(byId.G1, [{ stage: "Closed Won" }]).missing, true);
+  assert.deepEqual(calcRenewalDealCoverage(byId.G1, [{ stage: "Proposal" }]), {
+    renewalDate: "2026-12-01",
+    daysToRenewal: 18,
+    inWindow: true,
+    windowDays: 90,
+    hasOpenRenewalDeal: true,
+    missing: false,
+  });
+  // Outside the window: not needed yet
+  assert.equal(calcRenewalDealCoverage(byId.G2, []).missing, false);
 });

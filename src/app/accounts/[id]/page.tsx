@@ -10,11 +10,14 @@ import {
   type AccountPageData,
   type ContractLineMetrics,
   type HealthTrendRow,
+  type RenewalDealCoverage,
+  type RenewalRiskReason,
+  type RenewalRiskRow,
 } from "@/lib/metrics";
 import { pct, pctChange, segmentLabel, shortDate, usd } from "@/lib/format";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { PageHeader } from "@/components/PageHeader";
-import { RiskBadge, RuleNote, SectionHeading, Stat } from "@/components/RiskUi";
+import { RiskBadge, RuleNote, SectionHeading, SignalChips, Stat } from "@/components/RiskUi";
 import { SectionSkeleton } from "@/components/Skeleton";
 import { RenewalDealsTable } from "@/components/RenewalDealsTable";
 import { BAND_LABEL, BAND_TEXT, HealthCategoryRows, TrendArrow } from "@/components/HealthUi";
@@ -77,7 +80,16 @@ async function AccountContent({ params }: Params) {
             title="Renewal Deals"
             detail="Every renewal deal for this account at its full amount, latest close first. Expand a row to see the contract's active lines."
           />
-          <RenewalDealsTable rows={renewalDeals} showAccount={false} empty="No renewal deals for this account yet." />
+          {data.renewalDealCoverage?.missing && renewalDeals.length > 0 && (
+            <div className="mb-3">
+              <RenewalDealGap coverage={data.renewalDealCoverage} />
+            </div>
+          )}
+          {renewalDeals.length === 0 && data.renewalDealCoverage ? (
+            <RenewalDealGap coverage={data.renewalDealCoverage} />
+          ) : (
+            <RenewalDealsTable rows={renewalDeals} showAccount={false} empty="No renewal deals for this account yet." />
+          )}
           <div className="mt-2">
             <RuleNote>
               Difference = deal amount minus the sum of the contract&apos;s active lines: uplift when the deal is higher, reduction when lower. Downsell
@@ -86,8 +98,147 @@ async function AccountContent({ params }: Params) {
             </RuleNote>
           </div>
         </section>
+        {isCustomer && data.renewalRisk && <RenewalRiskSection r={data.renewalRisk} missingDeal={data.renewalDealCoverage?.missing ?? false} />}
       </div>
     </>
+  );
+}
+
+function MissingDealChip() {
+  return <span className="inline-block whitespace-nowrap rounded-md bg-red-600 px-2 py-0.5 text-xs font-semibold text-white dark:bg-red-500">Missing renewal deal</span>;
+}
+
+/** No open renewal deal: flagged when the contract renews inside its window, neutral before that. */
+function RenewalDealGap({ coverage: c }: { coverage: RenewalDealCoverage }) {
+  const box = "rounded-lg border bg-white p-4 text-sm dark:bg-zinc-900";
+  if (c.missing) {
+    return (
+      <div className={`${box} flex flex-wrap items-center gap-3 border-red-200 dark:border-red-900`}>
+        <span className="font-medium text-zinc-900 dark:text-zinc-100">
+          Contract renews {shortDate(c.renewalDate)} ({c.daysToRenewal} days) · No renewal deal opened yet
+        </span>
+        <MissingDealChip />
+      </div>
+    );
+  }
+  return (
+    <p className={`${box} border-zinc-200 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400`}>
+      {c.hasOpenRenewalDeal ? `Contract renews ${shortDate(c.renewalDate)}.` : `Contract renews ${shortDate(c.renewalDate)}; no renewal deal needed yet.`}
+    </p>
+  );
+}
+
+type ConditionStatus = "counts" | "present" | "ok" | "off";
+
+const STATUS_PILL: Record<ConditionStatus, { label: string; className: string }> = {
+  counts: { label: "Counts", className: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" },
+  present: { label: "Present, not counted", className: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" },
+  ok: { label: "OK", className: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400" },
+  off: { label: "Not checked yet", className: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" },
+};
+
+/** Renewal risk for this account: the level, the reasons behind it, and every condition the rule checks. */
+function RenewalRiskSection({ r, missingDeal }: { r: RenewalRiskRow; missingDeal: boolean }) {
+  const R = RENEWAL_RISK_RULES;
+  const c = r.conditions;
+  const counts = (...reasons: RenewalRiskReason[]) => reasons.some((x) => r.reasons.includes(x));
+  const status = (counted: boolean, present: boolean): ConditionStatus => (!r.inWindow ? "off" : counted ? "counts" : present ? "present" : "ok");
+
+  const health = r.healthScore === null ? null : Math.round(r.healthScore);
+  const rows: { label: string; value: string; rule: string; status: ConditionStatus }[] = [
+    {
+      label: "Health score",
+      value: health === null ? "No score" : `${health} of 100`,
+      rule: `Below ${R.highHealthBelow} = High. ${R.highHealthBelow}–${R.mediumHealthBelow - 1} = Medium, or High with a red flag below.`,
+      status: status(counts("Health below 50", "Health 50–69"), health !== null && health < R.mediumHealthBelow),
+    },
+    {
+      label: "Health trend",
+      value: r.healthChange === null ? "No snapshot last week" : `${r.healthChange > 0 ? "+" : ""}${Math.round(r.healthChange)} points on last week`,
+      rule: `Down ${R.healthDropOf}+ points makes health ${R.highHealthBelow}–${R.mediumHealthBelow - 1} High.`,
+      status: status(counts("Health down 10+"), c.healthDown10),
+    },
+    {
+      label: "Gross margin",
+      value: r.grossMargin === null ? "n/a" : `${pct(r.grossMargin)} (last 30 days)`,
+      rule: `Underwater below ${R.underwaterMarginBelow * 100}%: High with health ${R.highHealthBelow}–${R.mediumHealthBelow - 1}, Medium at ${R.mediumHealthBelow}+.`,
+      status: status(counts("Underwater margin"), c.underwater),
+    },
+    {
+      label: "Downsell risk",
+      value: c.anyDownsell ? `${usd(r.downsellArr)} of contract ARR (${pct(r.downsellShare)})` : "None",
+      rule: `Lines with usage down more than ${Math.abs(ADOPTION_DROP_BELOW * 100)}% (last 30 days vs prior 30). ${R.downsellShareFrom * 100}%+ of ARR makes health ${R.highHealthBelow}–${R.mediumHealthBelow - 1} High; any line makes health ${R.mediumHealthBelow}+ Medium.`,
+      status: status(counts("25%+ ARR at downsell risk", "Downsell risk"), c.anyDownsell),
+    },
+    {
+      label: "NPS change",
+      value: r.npsChange === null ? "Only one survey" : `${r.npsChange > 0 ? "+" : ""}${r.npsChange} since the previous survey`,
+      rule: `Down ${R.npsDropOf}+ points = Medium on its own.`,
+      status: status(counts("NPS down 3+"), c.npsDown3),
+    },
+    {
+      label: "Executive sponsor",
+      value: !c.sponsorTracked
+        ? `Not tracked for ${segmentLabel(r.segment)}`
+        : r.sponsorStatus === "left"
+          ? "Left"
+          : r.sponsorStatus === "none"
+            ? "None"
+            : "Active",
+      rule: `Enterprise and mid-market only. None or left = Medium on its own, High when health is below ${R.mediumHealthBelow}.`,
+      status: status(counts("No exec sponsor", "Exec sponsor left"), c.sponsorGap !== null),
+    },
+  ];
+
+  const window = r.inWindow
+    ? `Renews ${shortDate(r.renewalDate)}, in ${r.daysToRenewal} days: inside the ${r.windowDays}-day ${segmentLabel(r.segment)} window, so the rules below apply.`
+    : r.daysToRenewal < 0
+      ? `Renewal date ${shortDate(r.renewalDate)} has passed.`
+      : `Renews ${shortDate(r.renewalDate)}, in ${r.daysToRenewal} days: outside the ${r.windowDays}-day ${segmentLabel(r.segment)} window, so it is Low until ${shortDate(r.windowOpensOn)}. The values below show where it stands today.`;
+
+  return (
+    <section>
+      <SectionHeading title="Renewal Risk" detail="The level the Renewals page and HubSpot use, what set it, and every condition the rule checks." />
+      <div className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+          <RiskBadge level={r.level} />
+          {r.reasons.length > 0 ? <SignalChips signals={r.reasons} /> : <span className="text-sm text-zinc-500">No condition met</span>}
+          {missingDeal && (
+            <span className="flex items-center gap-2">
+              <MissingDealChip />
+              <span className="text-xs text-zinc-500">Inside the window with no open renewal deal (doesn&apos;t change the level)</span>
+            </span>
+          )}
+          <p className="w-full text-sm text-zinc-600 dark:text-zinc-400">{window}</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead className="border-b border-zinc-200 text-left text-xs font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+              <tr>
+                <th className="px-4 py-2">Condition</th>
+                <th className="px-4 py-2">This account</th>
+                <th className="px-4 py-2">Rule</th>
+                <th className="px-4 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {rows.map((row) => (
+                <tr key={row.label} className="align-top">
+                  <td className="whitespace-nowrap px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{row.label}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 tabular-nums">{row.value}</td>
+                  <td className="px-4 py-2.5 text-xs text-zinc-500 dark:text-zinc-400">{row.rule}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_PILL[row.status].className}`}>
+                      {STATUS_PILL[row.status].label}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -931,6 +931,19 @@ export type RenewalRiskRow = {
   /** ARR on lines with an adoption drop, and its share of the account's line ARR. */
   downsellArr: number;
   downsellShare: number | null;
+  /** First day the renewal falls inside the window (renewal date minus the window). */
+  windowOpensOn: string;
+  /** Every condition the rule looks at, whether or not it set the level (see `reasons` for the ones that did). */
+  conditions: {
+    underwater: boolean;
+    healthDown10: boolean;
+    downsell25: boolean;
+    anyDownsell: boolean;
+    npsDown3: boolean;
+    sponsorGap: "none" | "left" | null;
+    /** Sponsor tracked for this segment. */
+    sponsorTracked: boolean;
+  };
   /** The conditions that put the account at its level (empty for Low). */
   reasons: RenewalRiskReason[];
   /** The HubSpot sync sends this same value. */
@@ -992,6 +1005,16 @@ export function calcRenewalRisk(accounts: AccountRow[], usage: UsageRow[], price
         grossMargin: m?.grossMargin ?? null,
         downsellArr,
         downsellShare,
+        windowOpensOn: addDays(a.renewal_date!, -windowDays),
+        conditions: {
+          underwater: m?.underwater ?? false,
+          healthDown10: h?.change !== null && h?.change !== undefined && h.change <= -RENEWAL_RISK_RULES.healthDropOf,
+          downsell25: (downsellShare ?? 0) >= RENEWAL_RISK_RULES.downsellShareFrom,
+          anyDownsell: downsellArr > 0,
+          npsDown3: h?.npsChange !== null && h?.npsChange !== undefined && h.npsChange <= -RENEWAL_RISK_RULES.npsDropOf,
+          sponsorGap: sponsorGap(a),
+          sponsorTracked: RENEWAL_RISK_RULES.sponsorRequiredSegments.includes(a.segment),
+        },
         reasons: decided.reasons,
         level: decided.level,
       };
@@ -2487,6 +2510,30 @@ export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<Renewa
   };
 }
 
+export type RenewalDealCoverage = {
+  renewalDate: string;
+  daysToRenewal: number;
+  /** Inside the segment's renewal window (RENEWAL_RISK_RULES.windowDays). */
+  inWindow: boolean;
+  windowDays: number;
+  hasOpenRenewalDeal: boolean;
+  /** Inside the window with no open renewal deal. */
+  missing: boolean;
+};
+
+/** Renewal-deal coverage for one renewal-risk row: missing = inside the window and no open renewal deal. */
+export function calcRenewalDealCoverage(risk: RenewalRiskRow, deals: Pick<RenewalDealInput, "stage">[]): RenewalDealCoverage {
+  const hasOpenRenewalDeal = deals.some((d) => (OPEN_STAGES as readonly string[]).includes(d.stage));
+  return {
+    renewalDate: risk.renewalDate,
+    daysToRenewal: risk.daysToRenewal,
+    inWindow: risk.inWindow,
+    windowDays: risk.windowDays,
+    hasOpenRenewalDeal,
+    missing: risk.inWindow && !hasOpenRenewalDeal,
+  };
+}
+
 export type AccountPageData = {
   account: AccountRow & {
     seats: number | null;
@@ -2494,6 +2541,9 @@ export type AccountPageData = {
     executiveSponsor: { name: string | null; title: string | null; status: "active" | "left" | "none"; leftDate: string | null } | null;
   };
   renewalRiskLevel: RenewalRiskLevel | null; // null for prospects and churned accounts
+  renewalRisk: RenewalRiskRow | null; // the full row behind the level, with every condition
+  /** Customers with a renewal date: is there an open renewal deal, and is one needed yet (inside the renewal-risk window)? */
+  renewalDealCoverage: RenewalDealCoverage | null;
   products: ContractLineMetrics[];
   renewalDeals: RenewalDealRow[]; // every renewal deal for this account, latest close first
   health: HealthTrendRow | null; // customers only
@@ -2529,6 +2579,11 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
         : null,
     },
     renewalRiskLevel: risk.all.find((r) => r.accountId === accountId)?.level ?? null,
+    renewalRisk: risk.all.find((r) => r.accountId === accountId) ?? null,
+    renewalDealCoverage: (() => {
+      const row = risk.all.find((r) => r.accountId === accountId);
+      return row ? calcRenewalDealCoverage(row, deals) : null;
+    })(),
     products,
     renewalDeals: calcRenewalDeals(deals, products, accounts).sort(
       (a, b) => b.closeDate.localeCompare(a.closeDate) || a.opportunityId.localeCompare(b.opportunityId),
