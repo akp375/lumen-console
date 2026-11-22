@@ -1661,6 +1661,34 @@ export function calcHealthTrend(input: HealthInputs, asOf: string, weeks: number
   });
 }
 
+export type HealthSummary = {
+  customers: number;
+  arr: number;
+  green: number;
+  amber: number;
+  red: number;
+  declining: number;
+  /** Total ARR of customers below 50 (red). */
+  arrAtRisk: number;
+};
+
+/** Counts per band, declining count and ARR at risk for a set of customers. */
+export function calcHealthSummary(rows: { band: HealthBand; declining: boolean; arr: number }[]): HealthSummary {
+  const red = rows.filter((r) => r.band === "red");
+  return {
+    customers: rows.length,
+    arr: rows.reduce((s, r) => s + r.arr, 0),
+    green: rows.filter((r) => r.band === "green").length,
+    amber: rows.filter((r) => r.band === "amber").length,
+    red: red.length,
+    declining: rows.filter((r) => r.declining).length,
+    arrAtRisk: red.reduce((s, r) => s + r.arr, 0),
+  };
+}
+
+/** Key for a health filter: segment and CSM name, each "all" when not filtered. */
+export const healthFilterKey = (segment: string, csm: string) => `${segment}|${csm}`;
+
 /** Renewal-risk input: which accounts have poor or declining health. */
 export function healthRiskFlags(rows: HealthTrendRow[]): HealthRiskFlags {
   return new Map(rows.map((r) => [r.accountId, { poorOrDeclining: r.poorOrDeclining }]));
@@ -2163,10 +2191,18 @@ async function loadHealthRiskFlags(asOf: string): Promise<HealthRiskFlags> {
   return healthRiskFlags(calcHealthTrend(await loadHealthInputs(asOf), asOf, 2));
 }
 
-export type HealthPageRow = HealthTrendRow & { csm: string | null; owner: string };
+export type HealthPageRow = HealthTrendRow & { csm: string | null; owner: string; arr: number };
 
-/** Every customer's health score with its weekly history, worst first. */
-export async function getHealth(asOf: string = AS_OF_DATE): Promise<HealthPageRow[]> {
+export type HealthPageData = {
+  rows: HealthPageRow[]; // worst score first
+  segments: string[];
+  csms: string[];
+  /** One summary for every segment x CSM filter, keyed by healthFilterKey ("all" = no filter). */
+  summaries: Record<string, HealthSummary>;
+};
+
+/** Every customer's health score with its weekly history and ARR, plus totals for each filter. */
+export async function getHealth(asOf: string = AS_OF_DATE): Promise<HealthPageData> {
   const [input, team, csmRows] = await Promise.all([
     loadHealthInputs(asOf),
     fetchAll("team", "id, name", ["id"]),
@@ -2174,13 +2210,24 @@ export async function getHealth(asOf: string = AS_OF_DATE): Promise<HealthPageRo
   ]);
   const teamName = new Map(team.map((t) => [str(t.id), str(t.name)]));
   const csmOf = new Map(csmRows.map((a) => [str(a.id), strOrNull(a.csm_id)]));
-  const owner = new Map(input.accounts.map((a) => [a.id, a.owner]));
-  return calcHealthTrend(input, asOf)
+  const accountOf = new Map(input.accounts.map((a) => [a.id, a]));
+  const rows: HealthPageRow[] = calcHealthTrend(input, asOf)
     .map((r) => {
       const csmId = csmOf.get(r.accountId) ?? null;
-      return { ...r, csm: csmId ? (teamName.get(csmId) ?? null) : null, owner: owner.get(r.accountId) ?? "" };
+      const a = accountOf.get(r.accountId);
+      return { ...r, csm: csmId ? (teamName.get(csmId) ?? null) : null, owner: a?.owner ?? "", arr: (a?.mrr_usd ?? 0) * 12 };
     })
     .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+
+  const segments = SEGMENT_ORDER.filter((s) => rows.some((r) => r.segment === s));
+  const csms = [...new Set(rows.map((r) => r.csm).filter((c): c is string => c !== null))].sort();
+  const summaries: Record<string, HealthSummary> = {};
+  for (const seg of ["all", ...segments]) {
+    for (const csm of ["all", ...csms]) {
+      summaries[healthFilterKey(seg, csm)] = calcHealthSummary(rows.filter((r) => (seg === "all" || r.segment === seg) && (csm === "all" || r.csm === csm)));
+    }
+  }
+  return { rows, segments, csms, summaries };
 }
 
 // ---------------------------------------------------------------------------

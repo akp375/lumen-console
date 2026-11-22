@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { ACCOUNT_LINK } from "@/lib/ui";
 import type { AccountEconomicsRow } from "@/lib/metrics";
 import { pct, segmentLabel, shortDate, tenureLabel, usd } from "@/lib/format";
 import { LIFECYCLE_COLORS } from "./chart-colors";
@@ -15,7 +16,7 @@ const COLUMNS: Column<AccountEconomicsRow>[] = [
     key: "name",
     label: "Account",
     render: (r) => (
-      <Link href={`/accounts/${r.accountId}`} className="whitespace-nowrap font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100">
+      <Link href={`/accounts/${r.accountId}`} className={ACCOUNT_LINK}>
         {r.name}
       </Link>
     ),

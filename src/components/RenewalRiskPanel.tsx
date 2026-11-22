@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { ACCOUNT_LINK } from "@/lib/ui";
 import type { MissingRenewalDealRow, RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
 import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/renewals/actions";
 import { pct, pctChange, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
@@ -92,7 +93,7 @@ function MissingRenewalDeals({ result, riskWindowDays }: { result: RenewalDealsR
       label: "Account",
       render: (r) => (
         <>
-          <Link href={`/accounts/${r.accountId}`} className="whitespace-nowrap font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100">
+          <Link href={`/accounts/${r.accountId}`} className={ACCOUNT_LINK}>
             {r.accountName}
           </Link>
           <div className="whitespace-nowrap text-xs text-zinc-500">{r.owner}</div>

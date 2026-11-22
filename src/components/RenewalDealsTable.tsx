@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from "react";
 import Link from "next/link";
+import { ACCOUNT_LINK } from "@/lib/ui";
 import type { AdoptionStatus, RenewalDealRow } from "@/lib/metrics";
 import { pctChange, shortDate, usd } from "@/lib/format";
 
@@ -94,7 +95,7 @@ export function RenewalDealsTable({ rows, showAccount, empty }: { rows: RenewalD
                       <Link
                         href={`/accounts/${r.accountId}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="whitespace-nowrap font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100"
+                        className={ACCOUNT_LINK}
                       >
                         {r.accountName}
                       </Link>

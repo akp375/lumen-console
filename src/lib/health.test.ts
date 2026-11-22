@@ -11,6 +11,7 @@ import {
   HEALTH_WEIGHTS,
   calcContractLineMetrics,
   calcHealthScores,
+  calcHealthSummary,
   calcHealthTrend,
   calcRenewalRisk,
   capacityScore,
@@ -262,4 +263,16 @@ test("Renewal risk: 'Poor or declining health' counts only when usage isn't alre
   // healthRiskFlags turns trend rows into the same map
   const flags = healthRiskFlags(calcHealthTrend(A1, AS_OF));
   assert.deepEqual([...flags], [["A1", { poorOrDeclining: false }]]);
+});
+
+test("Health summary: band counts, declining and ARR at risk (customers below 50)", () => {
+  const s = calcHealthSummary([
+    { band: "green", declining: false, arr: 10_000 },
+    { band: "amber", declining: true, arr: 20_000 },
+    { band: "red", declining: true, arr: 30_000 },
+    { band: "red", declining: false, arr: 5_000 },
+  ]);
+  // ARR at risk = 30,000 + 5,000 (the two red customers)
+  assert.deepEqual(s, { customers: 4, arr: 65_000, green: 1, amber: 1, red: 2, declining: 2, arrAtRisk: 35_000 });
+  assert.deepEqual(calcHealthSummary([]), { customers: 0, arr: 0, green: 0, amber: 0, red: 0, declining: 0, arrAtRisk: 0 });
 });
