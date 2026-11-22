@@ -1,6 +1,6 @@
 /**
  * Writes the weekly health-score snapshots for Cockpit (built for Lumen AI)
- * into health_scores, and shows what the new renewal-risk sign changes.
+ * into health_scores. (Renewal-risk before/after: npm run renewal-risk:compare.)
  *
  *   npm run health:backfill -- --dry-run   compute and print; writes nothing
  *   npm run health:backfill                write the snapshots
@@ -12,10 +12,9 @@
  * Every number comes from src/lib/metrics.ts (calcHealthTrend, the same code
  * the pages use). This script recomputes nothing.
  */
-import { existsSync, readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "../src/lib/as-of-date.ts";
-import { HEALTH_CATEGORIES, calcHealthScores, calcHealthTrend, getRenewalRisk, healthSnapshotDates, loadHealthInputs } from "../src/lib/metrics.ts";
+import { HEALTH_CATEGORIES, calcHealthScores, calcHealthTrend, healthSnapshotDates, loadHealthInputs } from "../src/lib/metrics.ts";
 
 const dryRun = process.argv.includes("--dry-run");
 const url = process.env.SUPABASE_URL;
@@ -65,35 +64,6 @@ async function main() {
   for (const r of declining) console.log(`  ${r.accountId} ${r.name}: ${r.history.map((h) => h.score.toFixed(0)).join(" -> ")} (${r.change})`);
   console.log(`Below 50 today: ${poor.length}`);
   for (const r of poor) console.log(`  ${r.accountId} ${r.name}: ${r.score}`);
-
-  // Renewal risk before and after the new sign
-  const snapshot = "reconciliation/health-inputs-before.json";
-  if (existsSync(snapshot)) {
-    const before = JSON.parse(readFileSync(snapshot, "utf8")) as { highRisk: string[]; riskLevel: Record<string, string> };
-    const after = await getRenewalRisk(AS_OF_DATE);
-    const health = new Map(trend.map((r) => [r.accountId, r]));
-    const afterHigh = after.rows.filter((r) => r.level === "High");
-    console.log(`\nRenewal risk, High: ${before.highRisk.length} before -> ${afterHigh.length} after`);
-    console.log("  Before: " + before.highRisk.join(", "));
-    console.log("  After:  " + afterHigh.map((r) => `${r.accountId} ${r.name}`).join(", "));
-    const afterLevel = new Map(after.rows.map((r) => [r.accountId, r]));
-    const ids = new Set([...Object.keys(before.riskLevel), ...afterLevel.keys()]);
-    console.log("  Changes:");
-    let changes = 0;
-    for (const id of [...ids].sort()) {
-      const b = before.riskLevel[id] ?? "Low";
-      const a = afterLevel.get(id);
-      if ((a?.level ?? "Low") === b) continue;
-      changes++;
-      const h = health.get(id);
-      console.log(`    ${id} ${a?.name ?? ""}: ${b} -> ${a?.level ?? "Low"}; signals ${a?.signals.join(", ")}; health ${h?.score} (week change ${h?.change ?? "n/a"})`);
-    }
-    if (!changes) console.log("    none");
-    const withHealthSign = after.rows.filter((r) => r.signals.includes("Poor or declining health"));
-    console.log(`  Renewals (next 120 days) with the health sign: ${withHealthSign.length}`);
-    const suppressed = after.rows.filter((r) => health.get(r.accountId)?.poorOrDeclining && r.signals.includes("Usage declining"));
-    console.log(`  Poor or declining health but not counted (usage declining already fires): ${suppressed.map((r) => r.name).join(", ") || "none"}`);
-  }
 
   if (dryRun) {
     console.log(`\nDry run: ${rows.length} snapshot rows would be written.`);

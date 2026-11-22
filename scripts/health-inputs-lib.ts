@@ -13,7 +13,7 @@
  * the app's business math stays in src/lib/metrics.ts.
  */
 import { createHash } from "node:crypto";
-import { RENEWAL_RISK_RULES, calcNpsTrend, calcUsageTrend, type AccountRow, type NpsResponseRow, type UsageRow } from "../src/lib/metrics.ts";
+import { calcNpsTrend, calcUsageTrend, type AccountRow, type NpsResponseRow, type UsageRow } from "../src/lib/metrics.ts";
 
 // ---------------------------------------------------------------------------
 // Team (fictional people). The 6 AEs are the existing account owners.
@@ -152,6 +152,10 @@ const TOUCH_GAP: Record<"healthy" | "middle" | "declining", Record<"enterprise" 
 };
 const EMAIL_GAP: readonly [number, number] = [25, 50];
 
+// Thresholds for sorting accounts into seeding tiers (the old renewal-risk signs, kept here so the
+// seeded data never changes when the app's rules do).
+const SEED_TIER = { usageDropBelow: -0.2, npsBelow: 7, npsDropOf: -2 } as const;
+
 const CSAT_SCORES: Record<"healthy" | "middle" | "declining", readonly (readonly [number, number])[]> = {
   healthy: [[5, 0.55], [4, 0.3], [3, 0.1], [2, 0.04], [1, 0.01]],
   middle: [[5, 0.35], [4, 0.35], [3, 0.18], [2, 0.08], [1, 0.04]],
@@ -177,9 +181,9 @@ function buildTiers(accounts: HealthAccount[], usage: HealthUsage[], nps: Health
     const u = usageTrend.get(a.id);
     const n = npsTrend.get(a.id);
     let trouble = 0;
-    if (u != null && u < RENEWAL_RISK_RULES.usageDropBelow) trouble++;
-    if (n?.latestNps != null && n.latestNps < RENEWAL_RISK_RULES.npsBelow) trouble++;
-    if (n?.npsChange != null && n.npsChange <= RENEWAL_RISK_RULES.npsDropOf) trouble++;
+    if (u != null && u < SEED_TIER.usageDropBelow) trouble++;
+    if (n?.latestNps != null && n.latestNps < SEED_TIER.npsBelow) trouble++;
+    if (n?.npsChange != null && n.npsChange <= SEED_TIER.npsDropOf) trouble++;
     if (severeOpen.has(a.id)) trouble++;
     tiers.set(a.id, trouble === 0 ? "healthy" : trouble === 1 ? "middle" : declineStyle);
   }

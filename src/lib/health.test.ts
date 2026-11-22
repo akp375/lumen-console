@@ -13,11 +13,10 @@ import {
   calcHealthScores,
   calcHealthSummary,
   calcHealthTrend,
-  calcRenewalRisk,
   capacityScore,
   csatScore,
   healthBand,
-  healthRiskFlags,
+  renewalHealth,
   lastTouchScore,
   latestNpsScore,
   lineAdoptionScore,
@@ -221,12 +220,12 @@ test("Health score: one customer by hand", () => {
   assert.deepEqual(r.possible, { behavioral: 35, relationship: 20, feedback: 20, support: 15, financial: 10 });
 });
 
-test("Declining = down 10+ points on last week; poor = below 50", () => {
+test("Declining = down 10+ points on last week (a low score alone is not declining)", () => {
   // B1: no lines, NPS, activities or invoices. 4 urgent tickets opened on 2026-11-10.
   //   Both weeks: behavioral 35 x 0.5 = 17.5; relationship 0; feedback 12 x 0.4 + 4 x 0.5 + 4 x 0.5 = 8.8;
   //   resolution 5 x 0.5 = 2.5; financial 5 + 5 x 0.6 = 8.
   //   Last week (11-06) no open tickets: +10 => 46.8. This week all 4 open: +0 => 36.8. Change -10 => declining.
-  // D1: the same account without the tickets: 46.8 both weeks. Not declining, but below 50 (poor).
+  // D1: the same account without the tickets: 46.8 both weeks. Below 50, but not declining.
   const input: HealthInputs = {
     ...A1,
     accounts: [account("A1"), account("B1"), account("D1")],
@@ -238,40 +237,20 @@ test("Declining = down 10+ points on last week; poor = below 50", () => {
   assert.equal(trend.B1.score, 36.8);
   assert.equal(trend.B1.change, -10);
   assert.equal(trend.B1.declining, true);
-  assert.equal(trend.B1.poorOrDeclining, true);
 
   assert.equal(trend.D1.score, 46.8);
   assert.equal(trend.D1.change, 0);
   assert.equal(trend.D1.declining, false);
-  assert.equal(trend.D1.poorOrDeclining, true);
 
   assert.equal(trend.A1.change, 0); // 71.3 both weeks
-  assert.equal(trend.A1.poorOrDeclining, false);
 });
 
-test("Renewal risk: 'Poor or declining health' counts only when usage isn't already declining", () => {
-  const prices = [{ model: "m", input_usd_per_million: 1, output_usd_per_million: 1 }];
-  const accounts = [account("R1", { renewal_date: "2026-12-13" }), account("R2", { renewal_date: "2026-12-13" })];
-  const use = (acc: string, date: string, tokens: number) => ({ account_id: acc, date, model: "m", input_tokens: tokens, output_tokens: 0 });
-  const usageRows = [use("R1", "2026-11-01", 1000), use("R1", "2026-10-01", 1000), use("R2", "2026-11-01", 500), use("R2", "2026-10-01", 1000)];
-  const nps = [{ account_id: "R1", responded_at: "2026-10-01T00:00:00Z", score: 5 }]; // Low NPS
-  const health = new Map([
-    ["R1", { poorOrDeclining: true }],
-    ["R2", { poorOrDeclining: true }],
-  ]);
-
-  const before = Object.fromEntries(calcRenewalRisk(accounts, usageRows, prices, nps, AS_OF).rows.map((r) => [r.accountId, r]));
-  const after = Object.fromEntries(calcRenewalRisk(accounts, usageRows, prices, nps, AS_OF, health).rows.map((r) => [r.accountId, r]));
-  // R1: Low NPS only = Medium; with poor health = 2 signs = High
-  assert.equal(before.R1.level, "Medium");
-  assert.deepEqual(after.R1.signals, ["Low NPS", "Poor or declining health"]);
-  assert.equal(after.R1.level, "High");
-  // R2: usage down 50% already fires, so poor health isn't counted again: stays Medium
-  assert.deepEqual(after.R2.signals, ["Usage declining"]);
-  assert.equal(after.R2.level, "Medium");
-  // healthRiskFlags turns trend rows into the same map
-  const flags = healthRiskFlags(calcHealthTrend(A1, AS_OF));
-  assert.deepEqual([...flags], [["A1", { poorOrDeclining: false }]]);
+test("Renewal risk input: each customer's score, weekly change and lines from the health trend", () => {
+  const map = renewalHealth(calcHealthTrend(A1, AS_OF));
+  const a1 = map.get("A1")!;
+  assert.equal(a1.score, 71.3);
+  assert.equal(a1.change, 0);
+  assert.deepEqual(a1.lines.map((l) => [l.arr, l.adoptionDrop]), [[9000, false], [1000, false]]);
 });
 
 test("Health summary: band counts, declining and ARR at risk (customers below 50)", () => {

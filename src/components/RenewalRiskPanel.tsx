@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ACCOUNT_LINK } from "@/lib/ui";
 import type { MissingRenewalDealRow, RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
 import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/renewals/actions";
-import { pct, pctChange, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
+import { pct, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
 import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";
 import { PageHeader } from "./PageHeader";
@@ -85,7 +85,7 @@ function DownsellSummary({ result }: { result: RenewalDealsResult }) {
   );
 }
 
-function MissingRenewalDeals({ result, riskWindowDays }: { result: RenewalDealsResult; riskWindowDays: number }) {
+function MissingRenewalDeals({ result, windows }: { result: RenewalDealsResult; windows: string }) {
   const m = result.missingRenewalDeals;
   const columns: Column<MissingRenewalDealRow>[] = [
     {
@@ -106,7 +106,7 @@ function MissingRenewalDeals({ result, riskWindowDays }: { result: RenewalDealsR
     {
       key: "risk",
       label: "Renewal Risk",
-      render: (r) => (r.riskLevel ? <RiskBadge level={r.riskLevel} /> : <span className="whitespace-nowrap text-xs text-zinc-500">Not yet checked</span>),
+      render: (r) => (r.riskLevel ? <RiskBadge level={r.riskLevel} /> : <span className="text-zinc-400">n/a</span>),
       sortValue: (r) => (r.riskLevel ? LEVEL_RANK[r.riskLevel] : 3),
       firstDir: "asc",
     },
@@ -135,8 +135,7 @@ function MissingRenewalDeals({ result, riskWindowDays }: { result: RenewalDealsR
       />
       <div className="mt-2">
         <RuleNote>
-          Renewal risk is the same level the HubSpot sync sends. The risk rules only look {riskWindowDays} days ahead, so renewals further out show
-          &ldquo;Not yet checked&rdquo;.
+          Renewal risk is the same level the HubSpot sync sends. Renewals outside the customer&apos;s window ({windows}) are Low.
         </RuleNote>
       </div>
     </section>
@@ -162,13 +161,13 @@ function RenewalDeals({ result, adoptionDropPct }: { result: RenewalDealsResult;
 }
 
 export function RenewalRiskPanel({
-  windowDays,
+  windows,
   rules,
   upcoming,
   renewalDeals,
   adoptionDropPct,
 }: {
-  windowDays: number;
+  windows: string;
   rules: string;
   upcoming: UpcomingRenewalsQuarter[];
   renewalDeals: RenewalDealsResult;
@@ -213,11 +212,29 @@ export function RenewalRiskPanel({
     { key: "risk", label: "Renewal Risk", render: (r) => <RiskBadge level={r.level} />, sortValue: riskOrder, firstDir: "asc" },
     { key: "arr", label: "ARR", numeric: true, render: (r) => usd(r.arr), sortValue: (r) => r.arr },
     { key: "renewal", label: "Renewal", render: renewal, sortValue: (r) => r.renewalDate },
-    { key: "nps", label: "NPS", numeric: true, render: (r) => r.latestNps ?? "n/a", sortValue: (r) => r.latestNps, firstDir: "asc" },
-    { key: "npsChange", label: "NPS Change", numeric: true, render: (r) => signedInt(r.npsChange), sortValue: (r) => r.npsChange, firstDir: "asc" },
-    { key: "usage", label: "Usage Trend", numeric: true, render: (r) => pctChange(r.usageChange), sortValue: (r) => r.usageChange, firstDir: "asc" },
+    {
+      key: "health",
+      label: "Health",
+      numeric: true,
+      render: (r) => (
+        <span className="whitespace-nowrap tabular-nums">
+          {r.healthScore === null ? "n/a" : Math.round(r.healthScore)}
+          {r.healthChange !== null && <span className="ml-1 text-xs text-zinc-500">({signedInt(Math.round(r.healthChange))} wk)</span>}
+        </span>
+      ),
+      sortValue: (r) => r.healthScore,
+      firstDir: "asc",
+    },
+    {
+      key: "downsell",
+      label: "Downsell Risk",
+      numeric: true,
+      render: (r) => (r.downsellArr > 0 ? <span className="whitespace-nowrap tabular-nums">{usd(r.downsellArr)} ({pct(r.downsellShare)})</span> : <span className="text-zinc-400">None</span>),
+      sortValue: (r) => r.downsellShare,
+      firstDir: "desc",
+    },
     { key: "margin", label: "Margin", numeric: true, render: (r) => pct(r.grossMargin), sortValue: (r) => r.grossMargin, firstDir: "asc" },
-    { key: "signals", label: "Rules Fired", render: (r) => <SignalChips signals={r.signals} />, sortValue: (r) => r.signals.length, firstDir: "desc" },
+    { key: "reasons", label: "Why", render: (r) => <SignalChips signals={r.reasons} />, sortValue: (r) => r.reasons.length, firstDir: "desc" },
     { key: "ai", label: "Claude: Reason and Next Action", render: (r) => <AiCell state={ai} note={notes[r.accountId]} /> },
   ];
 
@@ -240,7 +257,7 @@ export function RenewalRiskPanel({
         {!busy && !data && (
           <div className="space-y-8">
             <UpcomingRenewals quarters={upcoming} />
-            <MissingRenewalDeals result={renewalDeals} riskWindowDays={windowDays} />
+            <MissingRenewalDeals result={renewalDeals} windows={windows} />
             <RenewalDeals result={renewalDeals} adoptionDropPct={adoptionDropPct} />
           </div>
         )}
@@ -251,13 +268,13 @@ export function RenewalRiskPanel({
               <Stat
                 label="High risk"
                 value={`${data.byLevel.High.count} ${data.byLevel.High.count === 1 ? "account" : "accounts"}`}
-                detail={`${usd(data.byLevel.High.arr)} ARR at risk · 2+ rules fired`}
+                detail={`${usd(data.byLevel.High.arr)} ARR · health below 50, or 50–69 plus a red flag`}
                 tone={data.byLevel.High.count ? "alert" : "default"}
               />
               <Stat
                 label="Medium risk"
                 value={`${data.byLevel.Medium.count} ${data.byLevel.Medium.count === 1 ? "account" : "accounts"}`}
-                detail={`${usd(data.byLevel.Medium.arr)} ARR at risk · 1 rule fired`}
+                detail={`${usd(data.byLevel.Medium.arr)} ARR · health 50–69, or 70+ with margin or downsell risk`}
                 tone={data.byLevel.Medium.count ? "warn" : "default"}
               />
               <Stat
@@ -265,25 +282,25 @@ export function RenewalRiskPanel({
                 value={usdCompact(data.atRiskArr)}
                 detail={`${pct(data.renewingArr > 0 ? data.atRiskArr / data.renewingArr : null)} of renewing ARR · ${data.rows.length} of ${data.renewingCount} accounts`}
               />
-              <Stat label={`Renewing in next ${windowDays} days`} value={String(data.renewingCount)} detail={`${usd(data.renewingArr)} ARR up for renewal`} />
+              <Stat label="Renewing within window" value={String(data.renewingCount)} detail={`${usd(data.renewingArr)} ARR · ${windows}`} />
             </div>
             {aiNotice && <LimitNotice message={aiNotice} />}
             {aiError && <ErrorNote message={aiError} />}
             <section>
-              <SectionHeading title="At-Risk Renewals" detail={`Renewing within ${windowDays} days · High first, then soonest renewal`} />
+              <SectionHeading title="At-Risk Renewals" detail={`Renewing within each segment's window (${windows}) · High first, then soonest renewal`} />
               <DataTable
                 columns={riskColumns}
                 rows={data.rows}
                 rowKey={(r) => r.accountId}
                 defaultSort={{ key: "risk", dir: "asc" }}
-                empty={{ title: "No renewals at risk", detail: `No customer renewing in the next ${windowDays} days matches the risk rules.` }}
+                empty={{ title: "No renewals at risk", detail: "No customer renewing within its window is High or Medium." }}
                 minWidth="min-w-[1180px]"
               />
               <div className="mt-2 space-y-1">
                 <RuleNote>{rules}</RuleNote>
                 <RuleNote>
-                  Risk level (the same value synced to HubSpot): 2 or more rules = High, 1 rule = Medium. Customers with no rules fired, or renewing
-                  later than {windowDays} days, are Low and aren&apos;t listed here.
+                  Risk level is the same value synced to HubSpot. &ldquo;Why&rdquo; lists the conditions that set each level. Everyone else, and
+                  customers renewing outside their window, are Low and aren&apos;t listed here.
                 </RuleNote>
               </div>
             </section>

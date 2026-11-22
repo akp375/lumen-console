@@ -806,20 +806,87 @@ export function calcUsageTrend(accounts: AccountRow[], usage: UsageRow[], asOf: 
 // Renewal risk
 // ---------------------------------------------------------------------------
 
-/** Renewal-risk rule settings. A customer is flagged when its renewal is
- *  within `renewalWithinDays` AND at least one of the signals fires. */
+/**
+ * Renewal-risk rule settings, all in one place. The health score drives the level:
+ *   Within the customer's renewal window (by segment, from the as-of date):
+ *     High   = health below 50, or health 50-69 with underwater margin, health down 10+ on last week,
+ *              or 25%+ of contract ARR at downsell risk
+ *     Medium = health 50-69, or health 70+ with underwater margin or any line at downsell risk,
+ *              or NPS down 3+ points since the previous survey (any health)
+ *     Low    = everything else
+ *   Outside the window: Low. Prospects and churned accounts: no level.
+ * NPS and usage are not separate signs any more: they live inside the health score.
+ */
 export const RENEWAL_RISK_RULES = {
-  renewalWithinDays: 120,
-  npsBelow: 7, // latest NPS below 7
-  npsDropOf: -2, // nps_change of -2 or worse
-  usageDropBelow: -0.2, // usage down more than 20%, last 30 days vs prior 30
+  windowDays: { enterprise: 180, "mid-market": 120, SMB: 90 } as Readonly<Record<string, number>>,
+  highHealthBelow: 50,
+  mediumHealthBelow: 70,
+  healthDropOf: 10, // points down on last week's snapshot
+  downsellShareFrom: 0.25, // share of contract ARR on lines with an adoption drop
+  underwaterMarginBelow: UNDERWATER_MARGIN_BELOW,
+  npsDropOf: 3, // latest NPS 3+ points below the previous survey: a Medium trigger on its own
 } as const;
 
-export const RENEWAL_RISK_SIGNALS = ["Low NPS", "NPS dropping", "Usage declining", "Underwater margin", "Poor or declining health"] as const;
+/** Renewal window for a segment, in days from the as-of date. */
+export function renewalWindowDays(segment: string): number {
+  const w = RENEWAL_RISK_RULES.windowDays[segment];
+  if (w === undefined) throw new Error(`No renewal window for segment "${segment}" in RENEWAL_RISK_RULES`);
+  return w;
+}
 
-/** Per account: health below 50 or down 10+ points on last week (see calcHealthTrend). */
-export type HealthRiskFlags = Map<string, { poorOrDeclining: boolean }>;
-export type RenewalRiskSignal = (typeof RENEWAL_RISK_SIGNALS)[number];
+export const RENEWAL_RISK_REASONS = [
+  "Health below 50",
+  "Health 50–69",
+  "Health down 10+",
+  "Underwater margin",
+  "25%+ ARR at downsell risk",
+  "Downsell risk",
+  "NPS down 3+",
+] as const;
+export type RenewalRiskReason = (typeof RENEWAL_RISK_REASONS)[number];
+
+/** What renewal risk needs from the health score for one customer (HealthTrendRow fits). */
+export type RenewalHealthInput = { score: number; change: number | null; npsChange: number | null; lines: { arr: number; adoptionDrop: boolean }[] };
+export type RenewalHealth = Map<string, RenewalHealthInput>;
+
+/** The level and the conditions that set it, for one customer inside its renewal window. */
+export function decideRenewalRisk(input: {
+  healthScore: number | null;
+  healthChange: number | null;
+  underwater: boolean;
+  downsellShare: number | null;
+  npsChange?: number | null;
+}): { level: RenewalRiskLevel; reasons: RenewalRiskReason[] } {
+  const byHealth = decideByHealth(input);
+  // NPS down 3+ since the previous survey: Medium on its own. It never raises an account to High,
+  // so a High account's reasons stay the conditions that made it High.
+  const npsDrop = input.npsChange !== null && input.npsChange !== undefined && input.npsChange <= -RENEWAL_RISK_RULES.npsDropOf;
+  if (!npsDrop || byHealth.level === "High") return byHealth;
+  return { level: "Medium", reasons: [...byHealth.reasons, "NPS down 3+"] };
+}
+
+function decideByHealth(input: { healthScore: number | null; healthChange: number | null; underwater: boolean; downsellShare: number | null }): {
+  level: RenewalRiskLevel;
+  reasons: RenewalRiskReason[];
+} {
+  const R = RENEWAL_RISK_RULES;
+  const { healthScore: score } = input;
+  if (score === null) return { level: "Low", reasons: [] };
+  if (score < R.highHealthBelow) return { level: "High", reasons: ["Health below 50"] };
+  const declining = input.healthChange !== null && input.healthChange <= -R.healthDropOf;
+  const anyDownsell = (input.downsellShare ?? 0) > 0;
+  if (score < R.mediumHealthBelow) {
+    const extra: RenewalRiskReason[] = [];
+    if (input.underwater) extra.push("Underwater margin");
+    if (declining) extra.push("Health down 10+");
+    if ((input.downsellShare ?? 0) >= R.downsellShareFrom) extra.push("25%+ ARR at downsell risk");
+    return extra.length ? { level: "High", reasons: ["Health 50–69", ...extra] } : { level: "Medium", reasons: ["Health 50–69"] };
+  }
+  const extra: RenewalRiskReason[] = [];
+  if (input.underwater) extra.push("Underwater margin");
+  if (anyDownsell) extra.push("Downsell risk");
+  return extra.length ? { level: "Medium", reasons: extra } : { level: "Low", reasons: [] };
+}
 
 export type RenewalRiskRow = {
   accountId: string;
@@ -829,80 +896,82 @@ export type RenewalRiskRow = {
   arr: number;
   renewalDate: string;
   daysToRenewal: number;
-  latestNps: number | null;
+  windowDays: number;
+  /** Renewal falls inside the segment's window; outside it the level is always Low. */
+  inWindow: boolean;
+  healthScore: number | null;
+  /** Points vs last week's snapshot. */
+  healthChange: number | null;
+  /** Latest NPS minus the previous survey's. */
   npsChange: number | null;
-  usageChange: number | null;
   grossMargin: number | null;
-  signals: RenewalRiskSignal[];
-  /** From renewalRiskLevel(); the HubSpot sync sends this same value. Flagged rows are Medium or High. */
+  /** ARR on lines with an adoption drop, and its share of the account's line ARR. */
+  downsellArr: number;
+  downsellShare: number | null;
+  /** The conditions that put the account at its level (empty for Low). */
+  reasons: RenewalRiskReason[];
+  /** The HubSpot sync sends this same value. */
   level: RenewalRiskLevel;
 };
 
 export type RenewalRiskResult = {
-  rows: RenewalRiskRow[]; // soonest renewal first
+  rows: RenewalRiskRow[]; // High and Medium only: High first, then soonest renewal
+  all: RenewalRiskRow[]; // every customer with a renewal date, Low included
   atRiskArr: number;
-  renewingCount: number; // customers renewing within the window, flagged or not
+  renewingCount: number; // customers inside their renewal window, any level
   renewingArr: number;
   byLevel: Record<"High" | "Medium", { count: number; arr: number }>;
 };
 
-export function calcRenewalRisk(
-  accounts: AccountRow[],
-  usage: UsageRow[],
-  prices: ModelPriceRow[],
-  nps: NpsResponseRow[],
-  asOf: string,
-  health?: HealthRiskFlags,
-): RenewalRiskResult {
-  const R = RENEWAL_RISK_RULES;
+export function calcRenewalRisk(accounts: AccountRow[], usage: UsageRow[], prices: ModelPriceRow[], health: RenewalHealth, asOf: string): RenewalRiskResult {
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r]));
-  const trend = new Map(calcUsageTrend(accounts, usage, asOf).map((r) => [r.accountId, r]));
-  const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
-
-  const renewing = customersOnly(accounts)
+  const all: RenewalRiskRow[] = customersOnly(accounts)
     .filter((a) => a.renewal_date !== null)
-    .map((a) => ({ a, days: daysBetween(asOf, a.renewal_date!) }))
-    .filter(({ days }) => days >= 0 && days <= R.renewalWithinDays);
-
-  const rows: RenewalRiskRow[] = [];
-  for (const { a, days } of renewing) {
-    const m = margin.get(a.id)!;
-    const t = trend.get(a.id)!;
-    const s = sentiment.get(a.id)!;
-    const signals: RenewalRiskSignal[] = [];
-    if (s.latestNps !== null && s.latestNps < R.npsBelow) signals.push("Low NPS");
-    if (s.npsChange !== null && s.npsChange <= R.npsDropOf) signals.push("NPS dropping");
-    if (t.usageChange !== null && t.usageChange < R.usageDropBelow) signals.push("Usage declining");
-    if (m.underwater) signals.push("Underwater margin");
-    // Counted only when "Usage declining" isn't already firing, so one usage slide can't count twice.
-    if (health?.get(a.id)?.poorOrDeclining && !signals.includes("Usage declining")) signals.push("Poor or declining health");
-    if (signals.length === 0) continue;
-    rows.push({
-      accountId: a.id,
-      name: a.name,
-      segment: a.segment,
-      owner: a.owner,
-      arr: a.mrr_usd * 12,
-      renewalDate: a.renewal_date!,
-      daysToRenewal: days,
-      latestNps: s.latestNps,
-      npsChange: s.npsChange,
-      usageChange: t.usageChange,
-      grossMargin: m.grossMargin,
-      signals,
-      level: renewalRiskLevel(signals.length),
+    .map((a) => {
+      const days = daysBetween(asOf, a.renewal_date!);
+      const windowDays = renewalWindowDays(a.segment);
+      const inWindow = days >= 0 && days <= windowDays;
+      const h = health.get(a.id);
+      const lineArr = h ? h.lines.reduce((t, l) => t + l.arr, 0) : 0;
+      const downsellArr = h ? h.lines.filter((l) => l.adoptionDrop).reduce((t, l) => t + l.arr, 0) : 0;
+      const downsellShare = lineArr > 0 ? downsellArr / lineArr : null;
+      const m = margin.get(a.id);
+      const decided = inWindow
+        ? decideRenewalRisk({ healthScore: h?.score ?? null, healthChange: h?.change ?? null, underwater: m?.underwater ?? false, downsellShare, npsChange: h?.npsChange ?? null })
+        : { level: "Low" as const, reasons: [] };
+      return {
+        accountId: a.id,
+        name: a.name,
+        segment: a.segment,
+        owner: a.owner,
+        arr: a.mrr_usd * 12,
+        renewalDate: a.renewal_date!,
+        daysToRenewal: days,
+        windowDays,
+        inWindow,
+        healthScore: h?.score ?? null,
+        healthChange: h?.change ?? null,
+        npsChange: h?.npsChange ?? null,
+        grossMargin: m?.grossMargin ?? null,
+        downsellArr,
+        downsellShare,
+        reasons: decided.reasons,
+        level: decided.level,
+      };
     });
-  }
-  rows.sort((x, y) => x.daysToRenewal - y.daysToRenewal || y.arr - x.arr);
+  const rank = { High: 0, Medium: 1, Low: 2 } as const;
+  const rows = all.filter((r) => r.level !== "Low").sort((x, y) => rank[x.level] - rank[y.level] || x.daysToRenewal - y.daysToRenewal || y.arr - x.arr);
+  const renewing = all.filter((r) => r.inWindow);
   const levelTotals = (level: RenewalRiskLevel) => {
     const at = rows.filter((r) => r.level === level);
-    return { count: at.length, arr: at.reduce((s, r) => s + r.arr, 0) };
+    return { count: at.length, arr: at.reduce((t, r) => t + r.arr, 0) };
   };
   return {
     rows,
-    atRiskArr: rows.reduce((s, r) => s + r.arr, 0),
+    all,
+    atRiskArr: rows.reduce((t, r) => t + r.arr, 0),
     renewingCount: renewing.length,
-    renewingArr: renewing.reduce((s, { a }) => s + a.mrr_usd * 12, 0),
+    renewingArr: renewing.reduce((t, r) => t + r.arr, 0),
     byLevel: { High: levelTotals("High"), Medium: levelTotals("Medium") },
   };
 }
@@ -1100,12 +1169,6 @@ export type RenewalRiskLevel = (typeof RENEWAL_RISK_LEVELS)[number];
 export const DEAL_RISK_LEVELS = ["None", "Amber", "Red"] as const;
 export type DealRiskLevel = (typeof DEAL_RISK_LEVELS)[number];
 
-/** Renewal risk level from the number of renewal-risk signals: 0 = Low, 1 = Medium, 2+ = High.
- *  Customers not flagged (including renewals beyond the 120-day window) are Low. */
-export function renewalRiskLevel(signalCount: number): RenewalRiskLevel {
-  return signalCount >= 2 ? "High" : signalCount === 1 ? "Medium" : "Low";
-}
-
 /** Deal risk level from the number of deal-risk signals: 0 = None, 1 = Amber, 2+ = Red. */
 export function dealRiskLevel(signalCount: number): DealRiskLevel {
   return signalCount >= 2 ? "Red" : signalCount === 1 ? "Amber" : "None";
@@ -1152,13 +1215,13 @@ export function calcCrmSyncData(
   prices: ModelPriceRow[],
   nps: NpsResponseRow[],
   asOf: string,
-  health?: HealthRiskFlags,
+  health: RenewalHealth,
 ): CrmSyncData {
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r.grossMargin]));
   const capacity = new Map(calcCapacity(accounts, usage, prices, asOf).map((r) => [r.accountId, r.capacityUsed]));
   const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
   // Same level the Renewals page shows: both read RenewalRiskRow.level.
-  const renewalLevels = new Map(calcRenewalRisk(accounts, usage, prices, nps, asOf, health).rows.map((r) => [r.accountId, r.level]));
+  const renewalLevels = new Map(calcRenewalRisk(accounts, usage, prices, health, asOf).all.map((r) => [r.accountId, r.level]));
   const dealSignals = new Map(calcDealRisk(deals, accounts, asOf).rows.map((r) => [r.opportunityId, r.signals.length]));
   const withOpenDeal = new Set(deals.filter(isOpen).map((o) => o.account_id));
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
@@ -1178,7 +1241,7 @@ export function calcCrmSyncData(
         capacityUsed: isCustomer ? (capacity.get(a.id) ?? null) : null,
         latestNps: isCustomer ? (s?.latestNps ?? null) : null,
         npsChange: isCustomer ? (s?.npsChange ?? null) : null,
-        renewalRisk: isCustomer ? (renewalLevels.get(a.id) ?? renewalRiskLevel(0)) : null,
+        renewalRisk: isCustomer ? (renewalLevels.get(a.id) ?? "Low") : null,
         hasOpenDeal: withOpenDeal.has(a.id),
       };
     }),
@@ -1371,8 +1434,7 @@ export const HEALTH_CATEGORY_LABELS: Record<HealthCategory, string> = {
 export const HEALTH_RULES = {
   greenFrom: 70, // 70+ green, 50-69 amber, below 50 red
   amberFrom: 50,
-  poorBelow: 50, // renewal-risk sign: below 50 ...
-  decliningDrop: 10, // ... or down 10+ points on last week ("declining")
+  decliningDrop: 10, // down 10+ points on last week = "declining"
   snapshotWeeks: 6,
   lookbackDays: 90, // exec meeting, CSAT and resolution time look back 90 days
   overdueMonths: 6,
@@ -1699,8 +1761,6 @@ export type HealthTrendRow = HealthScoreRow & {
   change: number | null;
   /** Down 10+ points on last week. */
   declining: boolean;
-  /** Below 50, or declining: the renewal-risk sign. */
-  poorOrDeclining: boolean;
 };
 
 /** Today's score plus the weekly history, all measured from asOf. */
@@ -1717,7 +1777,7 @@ export function calcHealthTrend(input: HealthInputs, asOf: string, weeks: number
     const prev = lastWeek.get(r.accountId);
     const change = prev ? round(r.score - prev.score, 1) : null;
     const declining = change !== null && change <= -HEALTH_RULES.decliningDrop;
-    return { ...r, history, change, declining, poorOrDeclining: declining || r.score < HEALTH_RULES.poorBelow };
+    return { ...r, history, change, declining };
   });
 }
 
@@ -1749,9 +1809,9 @@ export function calcHealthSummary(rows: { band: HealthBand; declining: boolean; 
 /** Key for a health filter: segment and CSM name, each "all" when not filtered. */
 export const healthFilterKey = (segment: string, csm: string) => `${segment}|${csm}`;
 
-/** Renewal-risk input: which accounts have poor or declining health. */
-export function healthRiskFlags(rows: HealthTrendRow[]): HealthRiskFlags {
-  return new Map(rows.map((r) => [r.accountId, { poorOrDeclining: r.poorOrDeclining }]));
+/** Renewal-risk input: each customer's health score, weekly change and lines. */
+export function renewalHealth(rows: HealthTrendRow[]): RenewalHealth {
+  return new Map(rows.map((r) => [r.accountId, { score: r.score, change: r.change, npsChange: r.inputs.npsChange, lines: r.lines }]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,8 +1957,8 @@ export type MissingRenewalDealsResult = { count: number; arr: number; rows: Miss
 /**
  * Missing renewal deal: a customer contract renewing within `days` of today
  * with no open renewal deal pointing at it (deal.contract_id = contract).
- * `riskLevels` holds the flagged (High/Medium) customers from calcRenewalRisk;
- * any other customer renewing within the risk window is Low.
+ * `riskLevels` holds every customer's renewal-risk level (calcRenewalRisk `all`);
+ * a customer missing from it is Low.
  */
 export function calcMissingRenewalDeals(
   accounts: AccountRow[],
@@ -1935,7 +1995,7 @@ export function calcMissingRenewalDeals(
       renewalDate: c.renewalDate,
       daysToRenewal,
       arr: c.arr,
-      riskLevel: daysToRenewal <= RENEWAL_RISK_RULES.renewalWithinDays ? (riskLevels.get(a.id) ?? "Low") : null,
+      riskLevel: riskLevels.get(a.id) ?? "Low",
       downsellRiskArr: c.downsell,
     });
   }
@@ -2129,13 +2189,12 @@ export async function getNpsTrend(asOf: string = AS_OF_DATE): Promise<NpsTrendRo
 }
 
 export async function getRenewalRisk(asOf: string = AS_OF_DATE): Promise<RenewalRiskResult> {
-  const [accounts, { usage, prices }, nps, health] = await Promise.all([
+  const [accounts, { usage, prices }, health] = await Promise.all([
     loadAccounts(customerFilter),
     loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
-    loadNps(),
-    loadHealthRiskFlags(asOf),
+    loadRenewalHealth(asOf),
   ]);
-  return calcRenewalRisk(accounts, usage, prices, nps, asOf, health);
+  return calcRenewalRisk(accounts, usage, prices, health, asOf);
 }
 
 export async function getUpcomingRenewals(asOf: string = AS_OF_DATE): Promise<UpcomingRenewalsQuarter[]> {
@@ -2188,7 +2247,7 @@ export async function getCrmSyncData(asOf: string = AS_OF_DATE): Promise<CrmSync
     loadDealsWithRiskFields(),
     loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
     loadNps(),
-    loadHealthRiskFlags(asOf),
+    loadRenewalHealth(asOf),
   ]);
   return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf, health);
 }
@@ -2246,9 +2305,9 @@ export async function loadHealthInputs(asOf: string = AS_OF_DATE, accountId?: st
   return { accounts, lines, featureUsage, nps, tickets, activities, invoices, usageHistoryStart: history.start };
 }
 
-/** Poor-or-declining flags for renewal risk (today vs last week only). */
-async function loadHealthRiskFlags(asOf: string): Promise<HealthRiskFlags> {
-  return healthRiskFlags(calcHealthTrend(await loadHealthInputs(asOf), asOf, 2));
+/** Health for renewal risk: today's score, the change on last week, and each line (today vs last week only). */
+async function loadRenewalHealth(asOf: string): Promise<RenewalHealth> {
+  return renewalHealth(calcHealthTrend(await loadHealthInputs(asOf), asOf, 2));
 }
 
 export type HealthPageRow = HealthTrendRow & { csm: string | null; owner: string; arr: number };
@@ -2380,7 +2439,7 @@ export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<Renewa
   const rows = calcRenewalDeals(open, metrics, accounts).sort(
     (a, b) => a.closeDate.localeCompare(b.closeDate) || b.amount - a.amount || a.opportunityId.localeCompare(b.opportunityId),
   );
-  const levels = new Map(risk.rows.map((r) => [r.accountId, r.level]));
+  const levels = new Map(risk.all.map((r) => [r.accountId, r.level]));
   return {
     deals: rows,
     downsellRiskNext: calcDownsellRiskNext(metrics, asOf),
@@ -2392,7 +2451,7 @@ export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<Renewa
 
 export type AccountPageData = {
   account: AccountRow & { seats: number | null; arr: number };
-  renewalRiskLevel: RenewalRiskLevel | null; // null when not renewing within the risk window
+  renewalRiskLevel: RenewalRiskLevel | null; // null for prospects and churned accounts
   products: ContractLineMetrics[];
   renewalDeals: RenewalDealRow[]; // every renewal deal for this account, latest close first
   health: HealthTrendRow | null; // customers only
@@ -2415,7 +2474,7 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
   const products = calcContractLineMetrics(lines, usage, asOf);
   return {
     account: { ...account, seats: seats === null || seats === undefined ? null : num(seats), arr: account.status === "customer" ? account.mrr_usd * 12 : 0 },
-    renewalRiskLevel: risk.rows.find((r) => r.accountId === accountId)?.level ?? null,
+    renewalRiskLevel: risk.all.find((r) => r.accountId === accountId)?.level ?? null,
     products,
     renewalDeals: calcRenewalDeals(deals, products, accounts).sort(
       (a, b) => b.closeDate.localeCompare(a.closeDate) || a.opportunityId.localeCompare(b.opportunityId),
@@ -2446,7 +2505,7 @@ export async function getWorkspaceSnapshot(asOf: string = AS_OF_DATE) {
   const dealRisk = calcDealRisk(openDeals, accounts, asOf);
   const npsById = new Map(nps.map((n) => [n.accountId, n]));
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
-  const usage = new Map(renewalRisk.rows.map((r) => [r.accountId, r.usageChange]));
+  const riskById = new Map(renewalRisk.all.map((r) => [r.accountId, r]));
 
   return {
     as_of_date: asOf,
@@ -2501,14 +2560,15 @@ export async function getWorkspaceSnapshot(asOf: string = AS_OF_DATE) {
       overage: a.overage,
       latest_nps: npsById.get(a.accountId)?.latestNps ?? null,
       nps_change: npsById.get(a.accountId)?.npsChange ?? null,
-      usage_change_30d: r3(usage.get(a.accountId) ?? null),
+      health_score: riskById.get(a.accountId)?.healthScore ?? null,
+      renewal_risk: riskById.get(a.accountId)?.level ?? null,
     })),
     renewals_by_quarter: upcomingRenewals.map((q) => ({ quarter: q.quarter.label, renewals: q.count, arr: r0(q.totalArr) })),
     renewal_risk_flags: {
-      window_days: RENEWAL_RISK_RULES.renewalWithinDays,
+      window_days_by_segment: RENEWAL_RISK_RULES.windowDays,
       at_risk_arr: r0(renewalRisk.atRiskArr),
       renewing_accounts: renewalRisk.renewingCount,
-      flagged: renewalRisk.rows.map((r) => ({ id: r.accountId, name: r.name, arr: r0(r.arr), renewal_date: r.renewalDate, days_to_renewal: r.daysToRenewal, latest_nps: r.latestNps, nps_change: r.npsChange, usage_change_30d: r3(r.usageChange), gross_margin: r3(r.grossMargin), signals: r.signals })),
+      flagged: renewalRisk.rows.map((r) => ({ id: r.accountId, name: r.name, segment: r.segment, level: r.level, arr: r0(r.arr), renewal_date: r.renewalDate, days_to_renewal: r.daysToRenewal, health_score: r.healthScore, health_change_vs_last_week: r.healthChange, arr_at_downsell_risk: r0(r.downsellArr), gross_margin: r3(r.grossMargin), reasons: r.reasons })),
     },
     deals_by_quarter: upcomingDeals.map((q) => ({ quarter: q.quarter.label, open_deals: q.count, value: r0(q.totalAmount), weighted: r0(q.weightedAmount) })),
     open_deals: openDeals.map((o) => ({

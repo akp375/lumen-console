@@ -48,11 +48,13 @@ export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiN
       segment: r.segment,
       arr_usd: r.arr,
       days_to_renewal: r.daysToRenewal,
-      latest_nps: r.latestNps,
-      nps_change: r.npsChange,
-      usage_change_last_30d_vs_prior_30d: r.usageChange === null ? null : `${(r.usageChange * 100).toFixed(0)}%`,
+      risk_level: r.level,
+      health_score: r.healthScore,
+      health_change_vs_last_week: r.healthChange,
+      nps_change_vs_previous_survey: r.npsChange,
+      arr_at_downsell_risk_usd: r.downsellArr,
       gross_margin: r.grossMargin === null ? null : `${(r.grossMargin * 100).toFixed(0)}%`,
-      signals: r.signals,
+      reasons: r.reasons,
     }));
     const result = await callClaude({
       feature: "renewal_risk",

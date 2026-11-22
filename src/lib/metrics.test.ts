@@ -33,7 +33,8 @@ import {
   calcUpcomingRenewals,
   calcUpcomingDeals,
   calcCrmSyncData,
-  renewalRiskLevel,
+  decideRenewalRisk,
+  RENEWAL_RISK_RULES,
   dealRiskLevel,
   type DealRiskInput,
   usageWindow,
@@ -541,41 +542,106 @@ test("Usage trend: last 30 days vs the 30 before", () => {
   assert.equal(rows.U2.usageChange, null);
 });
 
-test("Renewal risk: renewal within 120 days AND at least one signal", () => {
+test("Renewal risk: health drives the level, inside each segment's window", () => {
+  // Windows from today (2026-11-13): enterprise 180 days, mid-market 120, SMB 90.
   const base = { status: "customer" as const, mrr_usd: 1000 };
   const accounts = [
-    acc({ id: "R1", ...base, renewal_date: "2027-01-01" }), // low NPS
-    acc({ id: "R2", ...base, renewal_date: "2027-02-01" }), // NPS 9 -> 7: change -2
-    acc({ id: "R3", ...base, renewal_date: "2026-12-01" }), // usage down 50%
-    acc({ id: "R4", ...base, renewal_date: "2026-12-15" }), // underwater: $800 cost on $1,000 MRR
-    acc({ id: "R5", ...base, renewal_date: "2027-06-01" }), // low NPS but renews in 200 days: not flagged
-    acc({ id: "R6", ...base, renewal_date: "2027-01-10" }), // healthy: not flagged
+    acc({ id: "H1", ...base, segment: "SMB", renewal_date: "2026-12-01" }), // health 45: below 50 = High
+    acc({ id: "H2", ...base, segment: "SMB", renewal_date: "2026-12-02" }), // health 60 and down 12 on last week = High
+    acc({ id: "H3", ...base, segment: "SMB", renewal_date: "2026-12-03" }), // health 60, 30% of ARR at downsell risk = High
+    acc({ id: "H4", ...base, segment: "SMB", renewal_date: "2026-12-04" }), // health 60, underwater = High
+    acc({ id: "M1", ...base, segment: "SMB", renewal_date: "2026-12-05" }), // health 60, 10% at downsell risk (under 25%) = Medium
+    acc({ id: "M2", ...base, segment: "SMB", renewal_date: "2026-12-06" }), // health 80, a line at downsell risk = Medium
+    acc({ id: "L1", ...base, segment: "SMB", renewal_date: "2026-12-07" }), // health 80, nothing else = Low
+    acc({ id: "W1", ...base, segment: "SMB", renewal_date: "2027-02-20" }), // health 30 but 99 days out: past SMB's 90 = Low
+    acc({ id: "W2", ...base, segment: "enterprise", renewal_date: "2027-04-01" }), // health 30, 139 days: inside enterprise 180 = High
+    acc({ id: "W3", ...base, segment: "mid-market", renewal_date: "2027-04-01" }), // health 30, 139 days: past mid-market 120 = Low
   ];
-  const nps = [
-    { account_id: "R1", responded_at: "2026-10-01T10:00:00Z", score: 6 },
-    { account_id: "R2", responded_at: "2026-08-01T10:00:00Z", score: 9 },
-    { account_id: "R2", responded_at: "2026-10-01T10:00:00Z", score: 7 },
-    { account_id: "R5", responded_at: "2026-10-01T10:00:00Z", score: 3 },
-    { account_id: "R6", responded_at: "2026-10-01T10:00:00Z", score: 9 },
+  const line = (arr: number, adoptionDrop: boolean) => ({ arr, adoptionDrop });
+  const healthy = [line(10_000, false), line(2_000, false)];
+  const health = new Map<string, { score: number; change: number | null; npsChange: number | null; lines: { arr: number; adoptionDrop: boolean }[] }>([
+    ["H1", { score: 45, change: 0, npsChange: null, lines: healthy }],
+    ["H2", { score: 60, change: -12, npsChange: null, lines: healthy }],
+    ["H3", { score: 60, change: 0, npsChange: null, lines: [line(7_000, false), line(3_000, true)] }], // 3,000 / 10,000 = 30%
+    ["H4", { score: 60, change: 0, npsChange: null, lines: healthy }],
+    ["M1", { score: 60, change: -9, npsChange: null, lines: [line(9_000, false), line(1_000, true)] }], // 10%; down 9 is not 10+
+    ["M2", { score: 80, change: 0, npsChange: null, lines: [line(9_000, false), line(1_000, true)] }],
+    ["L1", { score: 80, change: -20, npsChange: null, lines: healthy }], // a big drop alone doesn't flag a green account
+    ["W1", { score: 30, change: 0, npsChange: null, lines: healthy }],
+    ["W2", { score: 30, change: 0, npsChange: null, lines: healthy }],
+    ["W3", { score: 30, change: 0, npsChange: null, lines: healthy }],
+  ]);
+  const usage = [usageRow("H4", "2026-11-01", "big", 80_000_000, 0)]; // 80M x $10/M = $800 on $1,000 MRR: margin 20%, underwater
+  const result = calcRenewalRisk(accounts, usage, PRICES, health, TODAY);
+  const byId = Object.fromEntries(result.all.map((r) => [r.accountId, r]));
+
+  assert.deepEqual(byId.H1.reasons, ["Health below 50"]);
+  assert.deepEqual(byId.H2.reasons, ["Health 50–69", "Health down 10+"]);
+  assert.deepEqual(byId.H3.reasons, ["Health 50–69", "25%+ ARR at downsell risk"]);
+  close(byId.H3.downsellShare!, 0.3, "H3 downsell share");
+  assert.deepEqual(byId.H4.reasons, ["Health 50–69", "Underwater margin"]);
+  assert.deepEqual(byId.M1.reasons, ["Health 50–69"]);
+  assert.deepEqual(byId.M2.reasons, ["Downsell risk"]);
+  assert.deepEqual(byId.L1.reasons, []);
+  assert.equal(byId.W1.inWindow, false);
+  assert.equal(byId.W2.windowDays, 180);
+  assert.equal(byId.W3.windowDays, 120);
+  assert.deepEqual(
+    result.all.map((r) => [r.accountId, r.level]),
+    [["H1", "High"], ["H2", "High"], ["H3", "High"], ["H4", "High"], ["M1", "Medium"], ["M2", "Medium"], ["L1", "Low"], ["W1", "Low"], ["W2", "High"], ["W3", "Low"]],
+  );
+  // rows: High and Medium only, High first, then soonest renewal
+  assert.deepEqual(result.rows.map((r) => r.accountId), ["H1", "H2", "H3", "H4", "W2", "M1", "M2"]);
+  assert.deepEqual(result.byLevel, { High: { count: 5, arr: 60_000 }, Medium: { count: 2, arr: 24_000 } });
+  assert.equal(result.renewingCount, 8); // all but W1 and W3
+  assert.equal(result.atRiskArr, 7 * 12_000);
+});
+
+test("Renewal risk: NPS down 3+ since the previous survey is Medium, inside the window only", () => {
+  const base = { status: "customer" as const, mrr_usd: 1000, segment: "SMB" };
+  const accounts = [
+    acc({ id: "N1", ...base, renewal_date: "2026-12-01" }), // 18 days: inside SMB's 90
+    acc({ id: "N2", ...base, renewal_date: "2027-03-01" }), // 108 days: outside SMB's 90
   ];
-  const usage = [
-    usageRow("R3", "2026-10-01", "small", 1000, 0),
-    usageRow("R3", "2026-11-01", "small", 500, 0),
-    usageRow("R4", "2026-11-01", "big", 80_000_000, 0), // 80M x $10/M = $800
-    usageRow("R6", "2026-10-01", "small", 1000, 0),
-    usageRow("R6", "2026-11-01", "small", 1000, 0),
-  ];
-  const result = calcRenewalRisk(accounts, usage, PRICES, nps, TODAY);
-  const byId = Object.fromEntries(result.rows.map((r) => [r.accountId, r]));
-  assert.deepEqual(result.rows.map((r) => r.accountId), ["R3", "R4", "R1", "R2"]); // soonest renewal first
-  assert.deepEqual(byId.R1.signals, ["Low NPS"]);
-  assert.deepEqual(byId.R2.signals, ["NPS dropping"]);
-  assert.deepEqual(byId.R3.signals, ["Usage declining"]);
-  assert.deepEqual(byId.R4.signals, ["Underwater margin"]);
-  assert.equal(result.atRiskArr, 4 * 12_000);
-  assert.equal(result.renewingCount, 5); // R1-R4 and R6
-  assert.ok(result.rows.every((r) => r.level === "Medium")); // one signal each
-  assert.deepEqual(result.byLevel, { High: { count: 0, arr: 0 }, Medium: { count: 4, arr: 4 * 12_000 } });
+  const lines = [{ arr: 12_000, adoptionDrop: false }];
+  const health = new Map([
+    ["N1", { score: 85, change: 0, npsChange: -3, lines }],
+    ["N2", { score: 85, change: 0, npsChange: -6, lines }],
+  ]);
+  const byId = Object.fromEntries(calcRenewalRisk(accounts, [], PRICES, health, TODAY).all.map((r) => [r.accountId, r]));
+  assert.equal(byId.N1.level, "Medium");
+  assert.deepEqual(byId.N1.reasons, ["NPS down 3+"]);
+  assert.equal(byId.N1.npsChange, -3);
+  assert.equal(byId.N2.level, "Low");
+});
+
+test("Renewal risk: the level rule at every boundary", () => {
+  const d = (healthScore: number | null, extra: Partial<Parameters<typeof decideRenewalRisk>[0]> = {}) =>
+    decideRenewalRisk({ healthScore, healthChange: 0, underwater: false, downsellShare: 0, ...extra }).level;
+  assert.equal(d(49.9), "High");
+  assert.equal(d(50), "Medium");
+  assert.equal(d(69.9), "Medium");
+  assert.equal(d(70), "Low");
+  assert.equal(d(60, { healthChange: -10 }), "High"); // exactly 10 down counts
+  assert.equal(d(60, { healthChange: -9.9 }), "Medium");
+  assert.equal(d(60, { downsellShare: 0.25 }), "High"); // exactly 25% counts
+  assert.equal(d(60, { downsellShare: 0.249 }), "Medium");
+  assert.equal(d(75, { underwater: true }), "Medium");
+  assert.equal(d(75, { downsellShare: 0.01 }), "Medium");
+  assert.equal(d(75, { healthChange: -30 }), "Low");
+  assert.equal(d(null), "Low"); // no health score: no level beyond Low
+  // NPS down 3+ since the previous survey: Medium on its own, never High
+  assert.deepEqual(decideRenewalRisk({ healthScore: 85, healthChange: 0, underwater: false, downsellShare: 0, npsChange: -3 }), {
+    level: "Medium",
+    reasons: ["NPS down 3+"],
+  });
+  assert.equal(d(85, { npsChange: -2 }), "Low"); // a 2-point drop isn't enough
+  assert.deepEqual(decideRenewalRisk({ healthScore: 60, healthChange: 0, underwater: false, downsellShare: 0, npsChange: -4 }).reasons, ["Health 50–69", "NPS down 3+"]);
+  assert.deepEqual(decideRenewalRisk({ healthScore: 45, healthChange: 0, underwater: false, downsellShare: 0, npsChange: -5 }), {
+    level: "High",
+    reasons: ["Health below 50"],
+  }); // already High: stays High with its own reason
+  assert.deepEqual(RENEWAL_RISK_RULES.windowDays, { enterprise: 180, "mid-market": 120, SMB: 90 });
 });
 
 test("Deal risk: open deals only, each rule fires on its own", () => {
@@ -654,18 +720,17 @@ test("Upcoming deals: open deals closing this and next quarter, largest first", 
 // CRM sync values (HubSpot)
 // ---------------------------------------------------------------------------
 
-test("Risk levels: renewal 0 = Low, 1 = Medium, 2+ = High; deal 0 = None, 1 = Amber, 2+ = Red", () => {
-  assert.deepEqual([0, 1, 2, 4].map(renewalRiskLevel), ["Low", "Medium", "High", "High"]);
+test("Deal risk levels: 0 = None, 1 = Amber, 2+ = Red", () => {
   assert.deepEqual([0, 1, 2, 5].map(dealRiskLevel), ["None", "Amber", "Red", "Red"]);
 });
 
 test("CRM sync: customer-only values, risk levels for every customer and open deal", () => {
   const accounts = [
-    // K1: renews in 49 days, NPS 9 -> 6 (low NPS and dropping): 2 signals = High
+    // K1: enterprise, renews in 49 days, health 45 = High
     acc({ id: "K1", name: "Kilo", status: "customer", segment: "enterprise", mrr_usd: 1000, included_tokens_monthly: 10_000_000, renewal_date: "2027-01-01" }),
-    // K2: low NPS but renews in 200 days, so not flagged: Low
+    // K2: health 30 but renews in 200 days, outside every window: Low
     acc({ id: "K2", status: "customer", mrr_usd: 500, renewal_date: "2027-06-01" }),
-    // K3: renews in 32 days, latest NPS 6 only: 1 signal = Medium
+    // K3: renews in 32 days, health 60 = Medium
     acc({ id: "K3", status: "customer", mrr_usd: 200, renewal_date: "2026-12-15" }),
     acc({ id: "P1", status: "prospect" }), // has an open deal
     acc({ id: "P2", status: "prospect" }), // closed deal only
@@ -692,7 +757,13 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
     deal({ id: "E4", account_id: "P2", stage: "Closed Lost", forecast_category: "Omitted", executive_sponsor: null }), // closed: no risk, no days
   ];
 
-  const { accounts: a, deals: d } = calcCrmSyncData(accounts, deals, usage, PRICES, nps, TODAY);
+  const lines = [{ arr: 1000, adoptionDrop: false }];
+  const health = new Map([
+    ["K1", { score: 45, change: 0, npsChange: null, lines }],
+    ["K2", { score: 30, change: 0, npsChange: null, lines }],
+    ["K3", { score: 60, change: 0, npsChange: null, lines }],
+  ]);
+  const { accounts: a, deals: d } = calcCrmSyncData(accounts, deals, usage, PRICES, nps, TODAY, health);
   const A = Object.fromEntries(a.map((r) => [r.accountId, r]));
   const D = Object.fromEntries(d.map((r) => [r.opportunityId, r]));
 
@@ -708,9 +779,9 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
   assert.equal(A.K1.hasOpenDeal, true);
 
   // The Renewals page and the sync must never disagree: every flagged row's level is what the sync sends.
-  const page = calcRenewalRisk(accounts, usage, PRICES, nps, TODAY);
-  assert.deepEqual(page.rows.map((r) => [r.accountId, r.level]), [["K3", "Medium"], ["K1", "High"]]);
-  for (const r of page.rows) assert.equal(A[r.accountId].renewalRisk, r.level);
+  const page = calcRenewalRisk(accounts, usage, PRICES, health, TODAY);
+  assert.deepEqual(page.rows.map((r) => [r.accountId, r.level]), [["K1", "High"], ["K3", "Medium"]]); // High first
+  for (const r of page.all) assert.equal(A[r.accountId].renewalRisk, r.level);
   assert.deepEqual(page.byLevel, { High: { count: 1, arr: 12_000 }, Medium: { count: 1, arr: 2_400 } });
 
   // Prospects and churned accounts: no customer values

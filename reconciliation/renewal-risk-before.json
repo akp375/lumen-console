@@ -1,0 +1,128 @@
+{
+  "asOf": "2026-11-13",
+  "takenAt": "2026-11-22T06:19:09.231Z",
+  "rows": {
+    "acc_0135": {
+      "name": "Vantagely Energy",
+      "segment": "mid-market",
+      "level": "High",
+      "reasons": [
+        "Health below 50"
+      ],
+      "renewalDate": "2026-12-31",
+      "daysToRenewal": 48,
+      "arr": 34800
+    },
+    "acc_0059": {
+      "name": "Cedarline Legal",
+      "segment": "enterprise",
+      "level": "High",
+      "reasons": [
+        "Health below 50"
+      ],
+      "renewalDate": "2027-03-01",
+      "daysToRenewal": 108,
+      "arr": 74400
+    },
+    "acc_0089": {
+      "name": "Ionic Retail",
+      "segment": "enterprise",
+      "level": "High",
+      "reasons": [
+        "Health below 50"
+      ],
+      "renewalDate": "2027-04-27",
+      "daysToRenewal": 165,
+      "arr": 99600
+    },
+    "acc_0069": {
+      "name": "Copperleaf Labs",
+      "segment": "enterprise",
+      "level": "High",
+      "reasons": [
+        "Health 50–69",
+        "Underwater margin"
+      ],
+      "renewalDate": "2027-05-09",
+      "daysToRenewal": 177,
+      "arr": 162000
+    },
+    "acc_0054": {
+      "name": "Larkspur Systems",
+      "segment": "mid-market",
+      "level": "Medium",
+      "reasons": [
+        "Health 50–69"
+      ],
+      "renewalDate": "2026-11-26",
+      "daysToRenewal": 13,
+      "arr": 27600
+    },
+    "acc_0083": {
+      "name": "Umbra Energy",
+      "segment": "SMB",
+      "level": "Medium",
+      "reasons": [
+        "Underwater margin"
+      ],
+      "renewalDate": "2026-12-01",
+      "daysToRenewal": 18,
+      "arr": 5520
+    },
+    "acc_0039": {
+      "name": "Deltaform Legal",
+      "segment": "SMB",
+      "level": "Medium",
+      "reasons": [
+        "Health 50–69"
+      ],
+      "renewalDate": "2026-12-20",
+      "daysToRenewal": 37,
+      "arr": 2640
+    },
+    "acc_0074": {
+      "name": "Quillon Retail",
+      "segment": "mid-market",
+      "level": "Medium",
+      "reasons": [
+        "Health 50–69"
+      ],
+      "renewalDate": "2027-01-02",
+      "daysToRenewal": 50,
+      "arr": 19800
+    },
+    "acc_0147": {
+      "name": "Zephyrine Health",
+      "segment": "mid-market",
+      "level": "Medium",
+      "reasons": [
+        "Underwater margin"
+      ],
+      "renewalDate": "2027-01-03",
+      "daysToRenewal": 51,
+      "arr": 26400
+    },
+    "acc_0125": {
+      "name": "Harborview Logistics",
+      "segment": "SMB",
+      "level": "Medium",
+      "reasons": [
+        "Underwater margin"
+      ],
+      "renewalDate": "2027-01-05",
+      "daysToRenewal": 53,
+      "arr": 7920
+    },
+    "acc_0123": {
+      "name": "Larkspur Analytics",
+      "segment": "SMB",
+      "level": "Medium",
+      "reasons": [
+        "Health 50–69"
+      ],
+      "renewalDate": "2027-01-17",
+      "daysToRenewal": 65,
+      "arr": 6480
+    }
+  }
+}

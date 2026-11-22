@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { ADOPTION_DROP_BELOW, getRenewalDeals, getUpcomingRenewals, RENEWAL_RISK_RULES } from "@/lib/metrics";
 import { PAGES, tabTitle } from "@/lib/pages";
+import { segmentLabel } from "@/lib/format";
 import { RenewalRiskPanel } from "@/components/RenewalRiskPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { SectionSkeleton } from "@/components/Skeleton";
@@ -10,10 +11,15 @@ import { SectionSkeleton } from "@/components/Skeleton";
 export const metadata: Metadata = { title: tabTitle(PAGES.renewals.title) };
 
 const R = RENEWAL_RISK_RULES;
+const WINDOWS = Object.entries(R.windowDays)
+  .map(([segment, days]) => `${segmentLabel(segment)} ${days} days`)
+  .join(", ");
 const RULES =
-  `How flags work: renewal within ${R.renewalWithinDays} days AND at least one of latest NPS below ${R.npsBelow}, ` +
-  `NPS down ${Math.abs(R.npsDropOf)} or more, usage down more than ${Math.abs(R.usageDropBelow * 100)}% (last 30 days vs the 30 before), ` +
-  `margin below 30%, or health below 50 or down 10+ points on last week (counted only when usage isn't already declining).`;
+  `How levels work, for renewals inside the window: High = health below ${R.highHealthBelow}, or health ${R.highHealthBelow}–${R.mediumHealthBelow - 1} ` +
+  `with underwater margin (below ${R.underwaterMarginBelow * 100}%), health down ${R.healthDropOf}+ points on last week, or ${R.downsellShareFrom * 100}%+ of ` +
+  `contract ARR at downsell risk. Medium = health ${R.highHealthBelow}–${R.mediumHealthBelow - 1}, or health ${R.mediumHealthBelow}+ with underwater margin ` +
+  `or any line at downsell risk (usage down more than ${Math.abs(ADOPTION_DROP_BELOW * 100)}%, last 30 days vs prior 30), or NPS down ` +
+  `${R.npsDropOf}+ points since the previous survey. Otherwise NPS and usage count inside the health score.`;
 
 export default function RenewalsPage() {
   return (
@@ -31,7 +37,7 @@ async function RenewalsContent() {
   const [upcoming, renewalDeals] = await Promise.all([getUpcomingRenewals(), getRenewalDeals()]);
   return (
     <RenewalRiskPanel
-      windowDays={R.renewalWithinDays}
+      windows={WINDOWS}
       rules={RULES}
       upcoming={upcoming}
       renewalDeals={renewalDeals}

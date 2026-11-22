@@ -245,7 +245,7 @@ test("Missing renewal deal: customer contracts renewing within 180 days with no 
   assert.equal(by.C1.arr, 12_000);
   assert.equal(by.C1.downsellRiskArr, 9_600);
   assert.equal(by.C1.riskLevel, "High"); // flagged by the renewal-risk rule
-  assert.equal(by.C8.riskLevel, "Low"); // within 120 days, not flagged
-  assert.equal(by.C4.riskLevel, null); // day 180 is beyond the 120-day risk window
+  assert.equal(by.C8.riskLevel, "Low"); // not High or Medium
+  assert.equal(by.C4.riskLevel, "Low"); // every customer has a level now: no entry means Low
   assert.equal(by.C8.daysToRenewal, 30);
 });

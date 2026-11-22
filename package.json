@@ -13,6 +13,7 @@
     "hubspot:sync": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/hubspot-sync.ts",
     "hubspot:test-activity": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/hubspot-test-activity.ts",
     "contracts:backfill": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/contracts-backfill.ts",
+    "renewal-risk:compare": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/renewal-risk-compare.ts",
     "health:backfill": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/health-backfill.ts",
     "health-inputs:backfill": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/health-inputs-backfill.ts",
     "health-inputs:check": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/health-inputs-check.ts",
