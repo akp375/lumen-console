@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { getUpcomingRenewals, RENEWAL_RISK_RULES } from "@/lib/metrics";
+import { ADOPTION_DROP_BELOW, getRenewalDeals, getUpcomingRenewals, RENEWAL_RISK_RULES } from "@/lib/metrics";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { RenewalRiskPanel } from "@/components/RenewalRiskPanel";
 import { PageHeader } from "@/components/PageHeader";
@@ -28,8 +28,16 @@ export default function RenewalsPage() {
 // Reads live data on each request (server-side only).
 async function RenewalsContent() {
   await connection();
-  const upcoming = await getUpcomingRenewals();
-  return <RenewalRiskPanel windowDays={R.renewalWithinDays} rules={RULES} upcoming={upcoming} />;
+  const [upcoming, renewalDeals] = await Promise.all([getUpcomingRenewals(), getRenewalDeals()]);
+  return (
+    <RenewalRiskPanel
+      windowDays={R.renewalWithinDays}
+      rules={RULES}
+      upcoming={upcoming}
+      renewalDeals={renewalDeals}
+      adoptionDropPct={Math.abs(ADOPTION_DROP_BELOW * 100)}
+    />
+  );
 }
 
 function Loading() {
@@ -37,6 +45,7 @@ function Loading() {
     <>
       <PageHeader title={PAGES.renewals.title} description={PAGES.renewals.description} />
       <div className="space-y-8">
+        <SectionSkeleton columns={4} rows={2} />
         <SectionSkeleton columns={4} rows={10} />
         <SectionSkeleton columns={4} rows={10} />
       </div>

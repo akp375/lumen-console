@@ -6,7 +6,15 @@
 // Prior 30 days = 2026-09-14 .. 2026-10-13
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { calcContractLineMetrics, type ContractLineRow, type FeatureUsageRow } from "./metrics.ts";
+import {
+  calcContractLineMetrics,
+  calcDownsellRisk,
+  calcRenewalDeals,
+  type AccountRow,
+  type ContractLineRow,
+  type FeatureUsageRow,
+  type RenewalDealInput,
+} from "./metrics.ts";
 
 const AS_OF = "2026-11-13";
 
@@ -112,4 +120,86 @@ test("Contract lines: stops with a clear error for a feature with no product", (
     () => calcContractLineMetrics(LINES, [usageRow("A1", "2026-11-01", "voice_agent", 1, 1, 1)], AS_OF),
     /Usage feature "voice_agent" has no product/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Renewal deals joined to their contract's lines (on contract_id)
+//
+// From the lines above:
+//   C1 (A1): Core $9,600 (adoption drop, -40%) + Extract $2,400 (in use) = $12,000
+//   C2 (A2): Core $6,000 (not adopted)
+//   C3 (A3): Code Review $1,200 (exactly -30%, so in use)
+//   C9: one churned line only (added below), so no active lines
+// ---------------------------------------------------------------------------
+
+const account = (id: string, name: string): AccountRow => ({
+  id, name, status: "customer", segment: "SMB", mrr_usd: 0, included_tokens_monthly: 0,
+  start_date: null, renewal_date: null, churn_date: null, owner: `Owner ${id}`,
+});
+const ACCOUNTS = [account("A1", "Alpha"), account("A2", "Beta"), account("A3", "Gamma"), account("A9", "Omega")];
+const deal = (id: string, acc: string, stage: string, amount: number, contract: string | null): RenewalDealInput => ({
+  id, account_id: acc, stage, amount_usd: amount, close_date: "2026-12-01", contract_id: contract,
+});
+const CHURNED_LINE = { ...rows[0], lineId: "C9-core", accountId: "A9", contractId: "C9", status: "churned" as const, arr: 5_000, adoptionDrop: true };
+const METRICS = [...rows, CHURNED_LINE];
+
+const deals = calcRenewalDeals(
+  [
+    deal("R1", "A1", "Proposal", 13_000, "C1"),
+    deal("R2", "A2", "Closed Won", 5_400, "C2"),
+    deal("R3", "A3", "Negotiation", 1_200.4, "C3"),
+    deal("R4", "A1", "Closed Won", 12_000, "C1"),
+    deal("R5", "A1", "Discovery", 3_000, null),
+    deal("R6", "A9", "Closed Lost", 5_000, "C9"),
+  ],
+  METRICS,
+  ACCOUNTS,
+);
+const D = Object.fromEntries(deals.map((d) => [d.opportunityId, d]));
+
+test("Renewal deals: one row per deal with its full amount, lines joined on contract_id", () => {
+  assert.equal(deals.length, 6);
+  assert.equal(D.R1.amount, 13_000);
+  assert.deepEqual(D.R1.lines.map((l) => l.product), ["Core", "Extract"]); // product order
+  assert.equal(D.R1.linesArr, 12_000); // 9,600 + 2,400
+  assert.equal(D.R1.accountName, "Alpha");
+  assert.equal(D.R1.open, true);
+  assert.equal(D.R2.open, false);
+});
+
+test("Renewal deals: difference = amount - sum of lines, labelled uplift or reduction", () => {
+  assert.equal(D.R1.difference, 1_000); // 13,000 - 12,000
+  assert.equal(D.R1.differenceKind, "uplift");
+  assert.equal(D.R2.difference, -600); // 5,400 - 6,000
+  assert.equal(D.R2.differenceKind, "reduction");
+  assert.equal(D.R3.differenceKind, "matches"); // 1,200.40 - 1,200 = 0.40, under $1
+  assert.equal(D.R4.differenceKind, "matches"); // 12,000 - 12,000
+});
+
+test("Renewal deals: adoption status per line, and adoption drops are downsell risk", () => {
+  const [core, extract] = D.R1.lines;
+  assert.equal(core.adoptionStatus, "Adoption drop");
+  assert.equal(core.downsellRisk, true);
+  assert.equal(extract.adoptionStatus, "In use");
+  assert.equal(extract.downsellRisk, false);
+  assert.equal(D.R1.downsellRiskArr, 9_600);
+  assert.equal(D.R2.lines[0].adoptionStatus, "Not adopted");
+  assert.equal(D.R2.lines[0].downsellRisk, false); // not adopted is not a drop
+  assert.equal(D.R3.lines[0].adoptionStatus, "In use"); // exactly -30%
+});
+
+test("Renewal deals: only active lines; no contract or a churned contract means no lines", () => {
+  assert.deepEqual(D.R5.lines, []);
+  assert.equal(D.R5.linesArr, 0);
+  assert.equal(D.R5.difference, null); // nothing to compare with, so no uplift
+  assert.equal(D.R5.differenceKind, "no active lines");
+  assert.equal(D.R6.differenceKind, "no active lines");
+  assert.deepEqual(D.R6.lines, []); // C9's only line is churned
+  assert.equal(D.R6.downsellRiskArr, 0);
+});
+
+test("ARR at downsell risk: adoption-drop line ARR, each line counted once", () => {
+  // R1 and R4 both renew C1: its Core line ($9,600) counts once.
+  assert.deepEqual(calcDownsellRisk([D.R1, D.R4]), { arr: 9_600, lines: 1, deals: 2 });
+  assert.deepEqual(calcDownsellRisk([D.R2, D.R3, D.R5, D.R6]), { arr: 0, lines: 0, deals: 0 });
 });

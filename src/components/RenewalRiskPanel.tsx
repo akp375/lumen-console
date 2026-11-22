@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import type { RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
+import type { RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
 import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/renewals/actions";
 import { pct, pctChange, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
 import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";
 import { PageHeader } from "./PageHeader";
+import { RenewalDealsTable } from "./RenewalDealsTable";
 import { SectionSkeleton } from "./Skeleton";
 import { AiCell, type AiState, BackButton, ErrorNote, FlagButton, LimitNotice, RiskBadge, RuleNote, SectionHeading, SignalChips, Stat } from "./RiskUi";
 
@@ -57,7 +58,58 @@ function UpcomingRenewals({ quarters }: { quarters: UpcomingRenewalsQuarter[] })
   );
 }
 
-export function RenewalRiskPanel({ windowDays, rules, upcoming }: { windowDays: number; rules: string; upcoming: UpcomingRenewalsQuarter[] }) {
+function DownsellSummary({ result }: { result: RenewalDealsResult }) {
+  const d = result.downsellRisk;
+  const openAmount = result.deals.reduce((s, r) => s + r.amount, 0);
+  const all = result.downsellRiskAllCustomers;
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Stat
+        label="ARR at downsell risk"
+        value={usdCompact(d.arr)}
+        detail={`${d.lines} ${d.lines === 1 ? "line" : "lines"} with an adoption drop on ${d.deals} open renewal ${d.deals === 1 ? "deal" : "deals"} · ${usdCompact(all.arr)} across all customers`}
+        tone={d.arr > 0 ? "alert" : "default"}
+      />
+      <Stat
+        label="Open renewal deals"
+        value={String(result.deals.length)}
+        detail={`${usd(openAmount)} in deal amounts`}
+      />
+    </div>
+  );
+}
+
+function RenewalDeals({ result, adoptionDropPct }: { result: RenewalDealsResult; adoptionDropPct: number }) {
+  return (
+    <section>
+      <SectionHeading
+        title="Open Renewal Deals"
+        detail="One row per deal at its full amount, soonest close first. Expand a row to see the contract's active lines."
+      />
+      <RenewalDealsTable rows={result.deals} showAccount empty="No open renewal deals." />
+      <div className="mt-2">
+        <RuleNote>
+          Difference = deal amount minus the sum of the contract&apos;s active lines: uplift when the deal is higher, reduction when lower. Downsell
+          risk = a line whose usage fell more than {adoptionDropPct}% (last 30 days vs the 30 before).
+        </RuleNote>
+      </div>
+    </section>
+  );
+}
+
+export function RenewalRiskPanel({
+  windowDays,
+  rules,
+  upcoming,
+  renewalDeals,
+  adoptionDropPct,
+}: {
+  windowDays: number;
+  rules: string;
+  upcoming: UpcomingRenewalsQuarter[];
+  renewalDeals: RenewalDealsResult;
+  adoptionDropPct: number;
+}) {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<RenewalRiskResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -118,9 +170,15 @@ export function RenewalRiskPanel({ windowDays, rules, upcoming }: { windowDays: 
         }
       />
       <div className="space-y-6">
+        <DownsellSummary result={renewalDeals} />
         {error && <ErrorNote message={error} />}
         {busy && <SectionSkeleton columns={8} rows={8} />}
-        {!busy && !data && <UpcomingRenewals quarters={upcoming} />}
+        {!busy && !data && (
+          <div className="space-y-8">
+            <UpcomingRenewals quarters={upcoming} />
+            <RenewalDeals result={renewalDeals} adoptionDropPct={adoptionDropPct} />
+          </div>
+        )}
 
         {!busy && data && (
           <>

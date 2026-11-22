@@ -1322,6 +1322,125 @@ export function calcContractLineMetrics(lines: ContractLineRow[], usage: Feature
 }
 
 // ---------------------------------------------------------------------------
+// Renewal deals with their contract lines (joined on opportunities.contract_id)
+// ---------------------------------------------------------------------------
+
+export type RenewalDealInput = {
+  id: string;
+  account_id: string;
+  stage: string;
+  amount_usd: number;
+  close_date: string;
+  contract_id: string | null;
+};
+
+export type AdoptionStatus = "Adoption drop" | "Not adopted" | "In use";
+
+export type RenewalDealLine = {
+  lineId: string;
+  product: string;
+  arr: number;
+  adoptionStatus: AdoptionStatus;
+  usageChange: number | null;
+  /** The line has an adoption drop (usage down more than 30%). */
+  downsellRisk: boolean;
+};
+
+export type RenewalDealRow = {
+  opportunityId: string;
+  accountId: string;
+  accountName: string;
+  owner: string;
+  stage: string;
+  open: boolean;
+  closeDate: string;
+  amount: number;
+  contractId: string | null;
+  /** The contract's active lines, in product order. Empty for a churned contract. */
+  lines: RenewalDealLine[];
+  linesArr: number;
+  /** amount - linesArr. Positive = uplift, negative = reduction. Null when there are no active lines to compare with. */
+  difference: number | null;
+  differenceKind: "uplift" | "reduction" | "matches" | "no active lines";
+  downsellRiskArr: number;
+};
+
+export type DownsellRiskSummary = { arr: number; lines: number; deals: number };
+
+function adoptionStatus(m: ContractLineMetrics): AdoptionStatus {
+  if (m.notAdopted) return "Not adopted";
+  if (m.adoptionDrop) return "Adoption drop";
+  return "In use";
+}
+
+/**
+ * One row per renewal deal with its full amount, and the active lines of the
+ * contract it renews. Lines are found by joining the deal's contract_id to the
+ * lines' contract_id. Differences under $1 count as "matches" (cents rounding);
+ * a deal whose contract has no active lines (churned, or not linked) has no difference.
+ */
+export function calcRenewalDeals(deals: RenewalDealInput[], lineMetrics: ContractLineMetrics[], accounts: AccountRow[]): RenewalDealRow[] {
+  const account = new Map(accounts.map((a) => [a.id, a]));
+  const linesByContract = new Map<string, ContractLineMetrics[]>();
+  for (const m of lineMetrics) {
+    if (m.status !== "active") continue;
+    const list = linesByContract.get(m.contractId);
+    if (list) list.push(m);
+    else linesByContract.set(m.contractId, [m]);
+  }
+  return deals.map((d) => {
+    const lines: RenewalDealLine[] = (d.contract_id ? linesByContract.get(d.contract_id) ?? [] : [])
+      .slice()
+      .sort((a, b) => PRODUCT_ORDER(a.product) - PRODUCT_ORDER(b.product))
+      .map((m) => ({
+        lineId: m.lineId,
+        product: m.product,
+        arr: m.arr,
+        adoptionStatus: adoptionStatus(m),
+        usageChange: m.usageChange,
+        downsellRisk: m.adoptionDrop,
+      }));
+    const linesArr = lines.reduce((s, l) => s + l.arr, 0);
+    const difference = lines.length > 0 ? d.amount_usd - linesArr : null;
+    const a = account.get(d.account_id);
+    return {
+      opportunityId: d.id,
+      accountId: d.account_id,
+      accountName: a?.name ?? d.account_id,
+      owner: a?.owner ?? "",
+      stage: d.stage,
+      open: (OPEN_STAGES as readonly string[]).includes(d.stage),
+      closeDate: day(d.close_date),
+      amount: d.amount_usd,
+      contractId: d.contract_id,
+      lines,
+      linesArr,
+      difference,
+      differenceKind: difference === null ? "no active lines" : Math.abs(difference) < 1 ? "matches" : difference > 0 ? "uplift" : "reduction",
+      downsellRiskArr: lines.filter((l) => l.downsellRisk).reduce((s, l) => s + l.arr, 0),
+    };
+  });
+}
+
+/** ARR on lines with an adoption drop, across the given deals. A contract is counted once even if two deals point at it. */
+export function calcDownsellRisk(rows: RenewalDealRow[]): DownsellRiskSummary {
+  const seen = new Set<string>();
+  let arr = 0;
+  let lines = 0;
+  let deals = 0;
+  for (const r of rows) {
+    if (r.downsellRiskArr > 0) deals++;
+    for (const l of r.lines) {
+      if (!l.downsellRisk || seen.has(l.lineId)) continue;
+      seen.add(l.lineId);
+      arr += l.arr;
+      lines++;
+    }
+  }
+  return { arr, lines, deals };
+}
+
+// ---------------------------------------------------------------------------
 // Loaders: read from Supabase (server-side only) and run the calculators
 // ---------------------------------------------------------------------------
 
@@ -1573,12 +1692,12 @@ export async function getCrmSyncData(asOf: string = AS_OF_DATE): Promise<CrmSync
 // Account page: one account with its contract lines
 // ---------------------------------------------------------------------------
 
-async function loadContractLines(accountId: string): Promise<ContractLineRow[]> {
+async function loadContractLines(accountId?: string): Promise<ContractLineRow[]> {
   const rows = await fetchAll(
     "contract_lines",
     "id, account_id, contract_id, product, quantity, unit_price_usd, arr_usd, purchase_date, renewal_date, term_months, auto_renew, status, included_tokens_monthly",
     ["id"],
-    (q) => q.eq("account_id", accountId),
+    accountId ? (q) => q.eq("account_id", accountId) : undefined,
   );
   return rows.map((r) => ({
     id: str(r.id),
@@ -1597,28 +1716,20 @@ async function loadContractLines(accountId: string): Promise<ContractLineRow[]> 
   }));
 }
 
-export type AccountPageData = {
-  account: AccountRow & { seats: number | null; arr: number };
-  renewalRiskLevel: RenewalRiskLevel | null; // null when not renewing within the risk window
-  products: ContractLineMetrics[];
-};
-
-/** One account, its renewal-risk level and its contract lines with per-line usage. Null if the account doesn't exist. */
-export async function getAccountPageData(accountId: string, asOf: string = AS_OF_DATE): Promise<AccountPageData | null> {
+/** Usage by feature for the last 60 days (the two 30-day windows), with active users. */
+async function loadFeatureUsage(asOf: string, accountId?: string): Promise<FeatureUsageRow[]> {
   const prior = priorUsageWindow(asOf);
   const last = usageWindow(asOf);
-  const [accounts, seatRows, lines, usageRows, risk] = await Promise.all([
-    loadAccounts((q) => q.eq("id", accountId)),
-    fetchAll("accounts", "id, seats", ["id"], (q) => q.eq("id", accountId)),
-    loadContractLines(accountId),
-    fetchAll("usage_daily", "account_id, date, feature, input_tokens, output_tokens, active_users", ["date", "feature", "model"], (q) =>
-      q.eq("account_id", accountId).gte("date", prior.start).lte("date", last.end),
-    ),
-    getRenewalRisk(asOf),
-  ]);
-  const account = accounts[0];
-  if (!account) return null;
-  const usage: FeatureUsageRow[] = usageRows.map((r) => ({
+  const rows = await fetchAll(
+    "usage_daily",
+    "account_id, date, feature, input_tokens, output_tokens, active_users",
+    ["account_id", "date", "feature", "model"],
+    (q) => {
+      const ranged = q.gte("date", prior.start).lte("date", last.end);
+      return accountId ? ranged.eq("account_id", accountId) : ranged;
+    },
+  );
+  return rows.map((r) => ({
     account_id: str(r.account_id),
     date: str(r.date),
     feature: str(r.feature),
@@ -1626,11 +1737,82 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
     output_tokens: num(r.output_tokens),
     active_users: r.active_users === null || r.active_users === undefined ? null : num(r.active_users),
   }));
+}
+
+/** Renewal deals with the contract they renew (reads opportunities.contract_id; adds no columns). */
+async function loadRenewalDeals(filter?: (q: Query) => Query): Promise<RenewalDealInput[]> {
+  const rows = await fetchAll("opportunities", "id, account_id, stage, amount_usd, close_date, contract_id", ["id"], (q) => {
+    const renewals = q.eq("type", "renewal");
+    return filter ? filter(renewals) : renewals;
+  });
+  return rows.map((r) => ({
+    id: str(r.id),
+    account_id: str(r.account_id),
+    stage: str(r.stage),
+    amount_usd: num(r.amount_usd),
+    close_date: str(r.close_date),
+    contract_id: strOrNull(r.contract_id),
+  }));
+}
+
+export type RenewalDealsResult = {
+  deals: RenewalDealRow[]; // open renewal deals, soonest close first
+  downsellRisk: DownsellRiskSummary; // on the contracts these open deals renew
+  downsellRiskAllCustomers: { arr: number; lines: number; contracts: number }; // every active line with an adoption drop, for context
+};
+
+/** Open renewal deals with their contract lines, and the ARR at downsell risk. */
+export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<RenewalDealsResult> {
+  const [accounts, deals, lines, usage] = await Promise.all([
+    loadAccounts(),
+    loadRenewalDeals((q) => q.in("stage", [...OPEN_STAGES])),
+    loadContractLines(),
+    loadFeatureUsage(asOf),
+  ]);
+  const metrics = calcContractLineMetrics(lines, usage, asOf);
+  const rows = calcRenewalDeals(deals, metrics, accounts).sort(
+    (a, b) => a.closeDate.localeCompare(b.closeDate) || b.amount - a.amount || a.opportunityId.localeCompare(b.opportunityId),
+  );
+  const allActive = metrics.filter((m) => m.status === "active" && m.adoptionDrop);
+  return {
+    deals: rows,
+    downsellRisk: calcDownsellRisk(rows),
+    downsellRiskAllCustomers: {
+      arr: allActive.reduce((s, m) => s + m.arr, 0),
+      lines: allActive.length,
+      contracts: new Set(allActive.map((m) => m.contractId)).size,
+    },
+  };
+}
+
+export type AccountPageData = {
+  account: AccountRow & { seats: number | null; arr: number };
+  renewalRiskLevel: RenewalRiskLevel | null; // null when not renewing within the risk window
+  products: ContractLineMetrics[];
+  renewalDeals: RenewalDealRow[]; // every renewal deal for this account, latest close first
+};
+
+/** One account, its renewal-risk level, its contract lines with per-line usage, and its renewal deals. Null if the account doesn't exist. */
+export async function getAccountPageData(accountId: string, asOf: string = AS_OF_DATE): Promise<AccountPageData | null> {
+  const [accounts, seatRows, lines, usage, deals, risk] = await Promise.all([
+    loadAccounts((q) => q.eq("id", accountId)),
+    fetchAll("accounts", "id, seats", ["id"], (q) => q.eq("id", accountId)),
+    loadContractLines(accountId),
+    loadFeatureUsage(asOf, accountId),
+    loadRenewalDeals((q) => q.eq("account_id", accountId)),
+    getRenewalRisk(asOf),
+  ]);
+  const account = accounts[0];
+  if (!account) return null;
   const seats = seatRows[0]?.seats;
+  const products = calcContractLineMetrics(lines, usage, asOf);
   return {
     account: { ...account, seats: seats === null || seats === undefined ? null : num(seats), arr: account.status === "customer" ? account.mrr_usd * 12 : 0 },
     renewalRiskLevel: risk.rows.find((r) => r.accountId === accountId)?.level ?? null,
-    products: calcContractLineMetrics(lines, usage, asOf),
+    products,
+    renewalDeals: calcRenewalDeals(deals, products, accounts).sort(
+      (a, b) => b.closeDate.localeCompare(a.closeDate) || a.opportunityId.localeCompare(b.opportunityId),
+    ),
   };
 }
 

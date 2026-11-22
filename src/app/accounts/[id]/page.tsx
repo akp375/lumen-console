@@ -7,8 +7,9 @@ import { ADOPTION_DROP_BELOW, getAccountPageData, type ContractLineMetrics } fro
 import { pct, pctChange, segmentLabel, shortDate, usd } from "@/lib/format";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { PageHeader } from "@/components/PageHeader";
-import { RiskBadge, SectionHeading, Stat } from "@/components/RiskUi";
+import { RiskBadge, RuleNote, SectionHeading, Stat } from "@/components/RiskUi";
 import { SectionSkeleton } from "@/components/Skeleton";
+import { RenewalDealsTable } from "@/components/RenewalDealsTable";
 
 export const metadata: Metadata = { title: tabTitle("Account") };
 
@@ -30,7 +31,7 @@ async function AccountContent({ params }: Params) {
   const { id } = await params;
   const data = await getAccountPageData(id);
   if (!data) notFound();
-  const { account: a, renewalRiskLevel, products } = data;
+  const { account: a, renewalRiskLevel, products, renewalDeals } = data;
   const isCustomer = a.status === "customer";
 
   const description = [segmentLabel(a.segment), a.owner, a.status === "customer" ? "Customer" : a.status === "churned" ? "Churned" : "Prospect"].join(" · ");
@@ -59,7 +60,23 @@ async function AccountContent({ params }: Params) {
         </div>
       </div>
 
-      <ProductsSection products={products} />
+      <div className="space-y-8">
+        <ProductsSection products={products} />
+        <section>
+          <SectionHeading
+            title="Renewal Deals"
+            detail="Every renewal deal for this account at its full amount, latest close first. Expand a row to see the contract's active lines."
+          />
+          <RenewalDealsTable rows={renewalDeals} showAccount={false} empty="No renewal deals for this account yet." />
+          <div className="mt-2">
+            <RuleNote>
+              Difference = deal amount minus the sum of the contract&apos;s active lines: uplift when the deal is higher, reduction when lower. Downsell
+              risk = a line whose usage fell more than {Math.abs(ADOPTION_DROP_BELOW * 100)}% (last 30 days vs the 30 before). Won renewals are
+              compared with today&apos;s lines, so seat changes since the renewal show as a difference.
+            </RuleNote>
+          </div>
+        </section>
+      </div>
     </>
   );
 }
