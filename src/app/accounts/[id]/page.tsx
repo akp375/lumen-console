@@ -1,0 +1,150 @@
+import { Suspense } from "react";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { connection } from "next/server";
+import { ADOPTION_DROP_BELOW, getAccountPageData, type ContractLineMetrics } from "@/lib/metrics";
+import { pct, pctChange, segmentLabel, shortDate, usd } from "@/lib/format";
+import { PAGES, tabTitle } from "@/lib/pages";
+import { PageHeader } from "@/components/PageHeader";
+import { RiskBadge, SectionHeading, Stat } from "@/components/RiskUi";
+import { SectionSkeleton } from "@/components/Skeleton";
+
+export const metadata: Metadata = { title: tabTitle("Account") };
+
+type Params = { params: Promise<{ id: string }> };
+
+export default function AccountPage({ params }: Params) {
+  return (
+    <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+      <Suspense fallback={<Loading />}>
+        <AccountContent params={params} />
+      </Suspense>
+    </main>
+  );
+}
+
+// Reads live data on each request (server-side only).
+async function AccountContent({ params }: Params) {
+  await connection();
+  const { id } = await params;
+  const data = await getAccountPageData(id);
+  if (!data) notFound();
+  const { account: a, renewalRiskLevel, products } = data;
+  const isCustomer = a.status === "customer";
+
+  const description = [segmentLabel(a.segment), a.owner, a.status === "customer" ? "Customer" : a.status === "churned" ? "Churned" : "Prospect"].join(" · ");
+
+  return (
+    <>
+      <div className="mb-3 text-sm">
+        <Link href={PAGES.overview.href} className="text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
+          ← {PAGES.overview.title}
+        </Link>
+      </div>
+      <PageHeader title={a.name} description={description} />
+
+      <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="ARR" value={isCustomer ? usd(a.arr) : "n/a"} detail={isCustomer ? `MRR ${usd(a.mrr_usd)}` : "Not a current customer"} />
+        <Stat label="Seats" value={a.seats === null ? "n/a" : String(a.seats)} detail="On the contract" />
+        <Stat
+          label={a.status === "churned" ? "Churned" : "Renewal date"}
+          value={a.status === "churned" && a.churn_date ? shortDate(a.churn_date) : a.renewal_date ? shortDate(a.renewal_date) : "n/a"}
+          detail={a.start_date ? `Customer since ${shortDate(a.start_date)}` : "No contract"}
+        />
+        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="text-sm text-zinc-500 dark:text-zinc-400">Renewal risk</div>
+          <div className="mt-2">{isCustomer ? <RiskBadge level={renewalRiskLevel ?? "Low"} /> : <span className="text-2xl font-semibold text-zinc-400">n/a</span>}</div>
+          <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Same level the HubSpot sync sends</div>
+        </div>
+      </div>
+
+      <ProductsSection products={products} />
+    </>
+  );
+}
+
+function ProductsSection({ products }: { products: ContractLineMetrics[] }) {
+  return (
+    <section>
+      <SectionHeading
+        title="Products"
+        detail={`Each line on the contract. Adoption = tokens in the last 30 days as a share of the line's monthly allowance; red when usage fell more than ${Math.abs(ADOPTION_DROP_BELOW * 100)}% against the 30 days before, amber when over the allowance.`}
+      />
+      {products.length === 0 ? (
+        <p className="rounded-lg border border-zinc-200 bg-white p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+          No contract lines. Prospects have none until they sign.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+          <table className="w-full text-sm">
+            <thead className="border-b border-zinc-200 text-left text-xs font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+              <tr>
+                <th className="px-4 py-2">Product</th>
+                <th className="px-4 py-2">Purchased</th>
+                <th className="px-4 py-2 text-right">ARR</th>
+                <th className="px-4 py-2">Renews</th>
+                <th className="px-4 py-2">Adoption</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {products.map((p) => (
+                <tr key={p.lineId} className="align-top">
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-zinc-900 dark:text-zinc-100">{p.product}</div>
+                    {p.status !== "active" && <div className="text-xs capitalize text-zinc-500">{p.status}</div>}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 tabular-nums">{shortDate(p.purchaseDate)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{usd(p.arr)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 tabular-nums">{shortDate(p.renewalDate)}</td>
+                  <td className="px-4 py-3">
+                    <AdoptionBar line={p} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AdoptionBar({ line: p }: { line: ContractLineMetrics }) {
+  if (p.notAdopted) {
+    return (
+      <div className="w-56">
+        <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800" />
+        <div className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">Not adopted: no usage in 60 days</div>
+      </div>
+    );
+  }
+  const width = Math.min(1, p.capacityUsed ?? 0) * 100;
+  const fill = p.adoptionDrop ? "bg-red-500" : (p.capacityUsed ?? 0) > 1 ? "bg-amber-500" : "bg-zinc-700 dark:bg-zinc-300";
+  return (
+    <div className="w-56">
+      <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" title={`${pct(p.capacityUsed)} of allowance`}>
+        <div className={`h-full rounded-full ${fill}`} style={{ width: `${width}%` }} />
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <span className="tabular-nums">{pct(p.capacityUsed)} of allowance</span>
+        <span className="tabular-nums">· usage {pctChange(p.usageChange)}</span>
+        <span className="tabular-nums">
+          · {p.avgUsersLast30d.toFixed(1)} users/day ({pctChange(p.usersChange)})
+        </span>
+      </div>
+      {p.adoptionDrop && (
+        <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">Adoption drop</span>
+      )}
+    </div>
+  );
+}
+
+function Loading() {
+  return (
+    <>
+      <PageHeader title="Account" description="Loading…" />
+      <SectionSkeleton columns={5} rows={3} />
+    </>
+  );
+}

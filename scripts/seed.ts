@@ -23,6 +23,9 @@
  *     fields (sponsor, stage entered, last activity, next step), and every
  *     customer gets at least 2 NPS responses in the last 6 months; both are
  *     added on their own random streams, so existing rows and IDs stay the same.
+ *   - contract_lines: cleared, then refilled; usage_daily.active_users and
+ *     opportunities.contract_id are filled. Built by scripts/contracts-lib.ts, the
+ *     same code as `npm run contracts:backfill` (needs the 20261121 migration).
  *   - seed_runs: one row added per run (when it was seeded, for the Integrations page).
  *   - health_scores, expansion_plays, briefings, llm_calls: never touched.
  *
@@ -38,6 +41,7 @@ import { createHash } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "../src/lib/as-of-date.ts";
+import { buildContractLayer, contractLayerFingerprint, usageKey, type ContractLayer } from "./contracts-lib.ts";
 
 // ---------------------------------------------------------------------------
 // Fixed-seed random numbers
@@ -1299,7 +1303,7 @@ async function clear(db: SupabaseClient, table: string, column: string): Promise
   if (error) throw new Error(`Clearing ${table} failed: ${error.message}`);
 }
 
-async function writeToSupabase(d: Dataset): Promise<void> {
+async function writeToSupabase(d: Dataset, contracts: ContractLayer): Promise<void> {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const missing = [!url && "SUPABASE_URL", !key && "SUPABASE_SERVICE_ROLE_KEY"].filter(Boolean);
@@ -1316,6 +1320,7 @@ async function writeToSupabase(d: Dataset): Promise<void> {
     ["support_tickets", "id"],
     ["nps_responses", "id"],
     ["model_prices", "model"],
+    ["contract_lines", "id"],
   ] as const) {
     await clear(db, table, column);
   }
@@ -1328,9 +1333,10 @@ async function writeToSupabase(d: Dataset): Promise<void> {
   }
   console.log(`  accounts: ${accountRows.length} rows`);
   await insertAll(db, "model_prices", d.modelPrices);
-  await insertAll(db, "opportunities", d.opportunities);
+  await insertAll(db, "opportunities", d.opportunities.map((o) => ({ ...o, contract_id: contracts.dealContract.get(o.id) ?? null })));
   await insertAll(db, "invoices", d.invoices);
-  await insertAll(db, "usage_daily", d.usage);
+  await insertAll(db, "usage_daily", d.usage.map((u) => ({ ...u, active_users: contracts.activeUsers.get(usageKey(u)) ?? null })));
+  await insertAll(db, "contract_lines", contracts.lines);
   await insertAll(db, "support_tickets", d.tickets);
   await insertAll(db, "nps_responses", d.nps);
 
@@ -1362,13 +1368,25 @@ async function main(): Promise<void> {
   }));
 
   const data: Dataset = { accounts, modelPrices, opportunities, invoices, usage, tickets, nps };
-  printCheck(data);
+  printCheck(data); // the data fingerprint covers the core data only, so it stays comparable with earlier runs
+
+  // Contract layer (contract_lines, usage_daily.active_users, opportunities.contract_id), built
+  // by the same code as `npm run contracts:backfill`, so a reseed reproduces it exactly.
+  const contracts = buildContractLayer({
+    accounts: accounts.map((a) => a.row),
+    usage,
+    opportunities,
+    invoices,
+    usageStart: isoDate(USAGE_START),
+  });
+  console.log(`Contract layer: ${contracts.lines.length} lines, ${contracts.dealContract.size} renewal deals linked, ` +
+    `${contracts.unusedCore.length} customers with unused Core. Fingerprint: ${contractLayerFingerprint(contracts)}\n`);
 
   if (dryRun) {
     console.log("Dry run: nothing was written to the database.");
     return;
   }
-  await writeToSupabase(data);
+  await writeToSupabase(data, contracts);
 }
 
 main().catch((err: unknown) => {

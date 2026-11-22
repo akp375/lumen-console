@@ -313,3 +313,40 @@ The live results table in section 1 shows the figures from before this fix. Over
 - **Contact email fix.** Each prospect gets one made-up contact. What broke: HubSpot rejected emails ending in a bare `.example`. They now use `<company>.example.com`, a reserved domain that can't receive mail. The made-up names also repeated too often, so they now vary more.
 - **Percent check.** As decided on 19 Nov, one record went first: 0.7186 showed as 71.86% in HubSpot. Percentages go as decimals, unchanged.
 - **Note and task test.** This answers the 19 Nov question of whether the app's access covers notes and tasks. `npm run hubspot:test-activity` created one note and one task on the test company, Ionic Logistics, and both attached correctly. No extra access is needed.
+
+## 2026-11-21 (Saturday)
+
+### Contract layer under accounts
+
+**The challenge.** Accounts held one ARR figure and one renewal date. To see which products a customer owns and whether each is being used, Cockpit needed contract line items, built from existing data, with no full reseed and no existing number moving (ARR, MRR, margins, renewal risk, the 6 High-risk accounts).
+
+**How we solved it.**
+
+1. **Agreed the plan first**, including 3 products mapped from the 4 usage features: **Core** (chat assistant, document summary) is the base product every customer owns; **Extract** (data extraction) and **Code Review** (code review) are add-ons.
+2. **Took a "before" snapshot** with `npm run contracts:check -- --save-before` (read-only). It records total ARR, every account's MRR and renewal date, every gross margin, every renewal-risk level, and fingerprints of all usage tokens and deal amounts.
+3. **Ran a migration** (`supabase/migrations/20261121000000_add_contract_lines.sql`): a new `contract_lines` table, plus nullable `usage_daily.active_users` and `opportunities.contract_id`. What broke: the first run went into a different Supabase project, so the app couldn't see the table. Re-running it in the project whose ID starts `htvo` fixed it. This is probably why `sync_runs` was "not visible" on 21 Nov too.
+4. **Dry-ran, then ran, `npm run contracts:backfill`.** It wrote 314 contract lines (150 customer contracts, 10 churned, none for prospects), set `contract_id` on all 105 renewal deals and filled `active_users` on all 38,394 usage rows. Each customer's lines sum exactly to MRR × 12.
+5. **Ran the "after" check.** Every number matched the snapshot: ARR $3,069,960, all 190 MRRs and renewal dates, all 150 margins, all 16 risk levels, the same 6 High-risk accounts, and identical usage and deal fingerprints.
+
+**Decision (owner).** For the 26 customers who own Core but never use its features, Core is a small line (10–15% of ARR, rounded to $120) and the rest goes to the add-ons they use, so shelfware shows as a signal without dominating their ARR.
+
+**Simplifications to know about.**
+
+- **Invoices don't reflect mid-contract add-ons.** 40 of 149 add-ons have a purchase date after their contract started, but invoices were left untouched (that is what keeps MRR and NRR unchanged). An invoice history won't show a step-up on the purchase date.
+- **One user split across two models.** `active_users` is stored per usage row, and a row is per model. When a feature has only 1 user on a day but used two models, that user goes on the model with more tokens and the other row shows 0 users. 1,205 rows look like this. Adding up a feature's rows still gives the right count.
+- **acc_0047's users don't fall.** 15 customers have usage down more than 20%; 14 show users falling too. The exception, acc_0047 (5 seats), already has 1 user per feature per day, so its users can't fall without showing usage by nobody. Its tokens fall 36% because that person uses it less.
+- **Add-on purchase dates come before the usage history (15 Aug)**, so every add-on has usage from day one. That is why only 1 add-on is dated by a won expansion deal; the others closed later.
+
+**Report only, not fixed.** 11 won renewal deals are more than 10% away from their contract's ARR (from −50.6% for Larkspur Bio to +32.6% for Redwoodly Legal). Renewal deals were priced at the ARR on the renewal day; seat changes since then moved MRR. `npm run contracts:check` lists them.
+
+**Lessons.**
+
+- Check which Supabase project the SQL Editor is in before running a migration. The project ID is in the address bar after `/project/`.
+- A before/after fingerprint is the quickest proof that a backfill didn't touch existing numbers.
+
+**Other work today.**
+
+- **Account page** (`/accounts/<id>`): ARR, seats, renewal date, renewal-risk badge and a **Products** section listing each line with purchase date, ARR, renewal date and an adoption bar (tokens vs the line's allowance; red on an adoption drop, amber over the allowance, "Not adopted" for unused lines). Account names in the Overview table link to it.
+- **Per-line metrics** in `src/lib/metrics.ts` (`calcContractLineMetrics`): usage last 30 days vs prior 30, capacity used, average daily active users and their change, and an **adoption drop** flag when line usage falls more than 30%. 8 new tests (61 in total). Account-level metrics are unchanged.
+- **`npm run seed` rebuilds the contract layer** with the same code as the backfill. A seed dry run and a backfill dry run on live data print the same contract-layer fingerprint (`640e3ebf199b`), so a future reseed reproduces today's data.
+- **Nav bar fix.** The account page is the first page with an ID in its address, and Next.js wanted the nav bar (which reads the address) inside a loading boundary. It now is; while loading it shows the same bar with no tab highlighted.

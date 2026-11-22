@@ -1195,6 +1195,133 @@ export function calcCrmSyncData(
 }
 
 // ---------------------------------------------------------------------------
+// Contract lines: usage, capacity and active users per product line
+// (account-level metrics above are unchanged; this only adds a per-line view)
+// ---------------------------------------------------------------------------
+
+export const PRODUCTS = ["Core", "Extract", "Code Review"] as const;
+export type Product = (typeof PRODUCTS)[number];
+
+/** Each usage feature belongs to exactly one product. */
+export const PRODUCT_OF_FEATURE: Record<string, Product> = {
+  chat_assistant: "Core",
+  document_summary: "Core",
+  data_extraction: "Extract",
+  code_review: "Code Review",
+};
+
+export const ADOPTION_DROP_BELOW = -0.3; // adoption drop when line usage falls more than 30%, last 30 days vs prior 30
+
+export type ContractLineRow = {
+  id: string;
+  account_id: string;
+  contract_id: string;
+  product: string;
+  quantity: number;
+  unit_price_usd: number;
+  arr_usd: number;
+  purchase_date: string;
+  renewal_date: string;
+  term_months: number;
+  auto_renew: boolean;
+  status: "active" | "expired" | "churned";
+  included_tokens_monthly: number;
+};
+
+export type FeatureUsageRow = {
+  account_id: string;
+  date: string;
+  feature: string;
+  input_tokens: number;
+  output_tokens: number;
+  active_users: number | null;
+};
+
+export type ContractLineMetrics = {
+  lineId: string;
+  accountId: string;
+  contractId: string;
+  product: string;
+  arr: number;
+  purchaseDate: string;
+  renewalDate: string;
+  status: ContractLineRow["status"];
+  tokensLast30d: number;
+  tokensPrior30d: number;
+  /** (last - prior) / prior; null when there was no prior usage. */
+  usageChange: number | null;
+  /** 30-day tokens / the line's included monthly tokens; null when the allowance is 0. */
+  capacityUsed: number | null;
+  /** Average daily active users (sum over the line's features), last 30 days and prior 30. */
+  avgUsersLast30d: number;
+  avgUsersPrior30d: number;
+  usersChange: number | null;
+  /** Usage fell more than 30%. */
+  adoptionDrop: boolean;
+  /** No usage at all in the last 60 days (owned but not used). */
+  notAdopted: boolean;
+};
+
+const PRODUCT_ORDER = (p: string) => {
+  const i = (PRODUCTS as readonly string[]).indexOf(p);
+  return i === -1 ? PRODUCTS.length : i;
+};
+
+/** One row per contract line: usage and active users from the line's features, last 30 days vs prior 30. */
+export function calcContractLineMetrics(lines: ContractLineRow[], usage: FeatureUsageRow[], asOf: string): ContractLineMetrics[] {
+  const last = usageWindow(asOf);
+  const prior = priorUsageWindow(asOf);
+  type T = { tl: number; tp: number; ul: number; up: number };
+  const totals = new Map<string, T>(); // `${account}|${product}`
+  for (const u of usage) {
+    const product = PRODUCT_OF_FEATURE[u.feature];
+    if (!product) throw new Error(`Usage feature "${u.feature}" has no product in PRODUCT_OF_FEATURE`);
+    const d = day(u.date);
+    const inLast = d >= last.start && d <= last.end;
+    const inPrior = d >= prior.start && d <= prior.end;
+    if (!inLast && !inPrior) continue;
+    const k = `${u.account_id}|${product}`;
+    const t = totals.get(k) ?? { tl: 0, tp: 0, ul: 0, up: 0 };
+    const tokens = u.input_tokens + u.output_tokens;
+    const users = u.active_users ?? 0;
+    if (inLast) {
+      t.tl += tokens;
+      t.ul += users;
+    } else {
+      t.tp += tokens;
+      t.up += users;
+    }
+    totals.set(k, t);
+  }
+  const change = (now: number, before: number) => (before > 0 ? (now - before) / before : null);
+  return [...lines]
+    .sort((a, b) => a.account_id.localeCompare(b.account_id) || PRODUCT_ORDER(a.product) - PRODUCT_ORDER(b.product))
+    .map((l) => {
+      const t = totals.get(`${l.account_id}|${l.product}`) ?? { tl: 0, tp: 0, ul: 0, up: 0 };
+      const usageChange = change(t.tl, t.tp);
+      return {
+        lineId: l.id,
+        accountId: l.account_id,
+        contractId: l.contract_id,
+        product: l.product,
+        arr: l.arr_usd,
+        purchaseDate: day(l.purchase_date),
+        renewalDate: day(l.renewal_date),
+        status: l.status,
+        tokensLast30d: t.tl,
+        tokensPrior30d: t.tp,
+        usageChange,
+        capacityUsed: l.included_tokens_monthly > 0 ? t.tl / l.included_tokens_monthly : null,
+        avgUsersLast30d: t.ul / USAGE_WINDOW_DAYS,
+        avgUsersPrior30d: t.up / USAGE_WINDOW_DAYS,
+        usersChange: change(t.ul, t.up),
+        adoptionDrop: usageChange !== null && usageChange < ADOPTION_DROP_BELOW,
+        notAdopted: t.tl === 0 && t.tp === 0,
+      };
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Loaders: read from Supabase (server-side only) and run the calculators
 // ---------------------------------------------------------------------------
 
@@ -1440,6 +1567,71 @@ export async function getCrmSyncData(asOf: string = AS_OF_DATE): Promise<CrmSync
     loadNps(),
   ]);
   return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf);
+}
+
+// ---------------------------------------------------------------------------
+// Account page: one account with its contract lines
+// ---------------------------------------------------------------------------
+
+async function loadContractLines(accountId: string): Promise<ContractLineRow[]> {
+  const rows = await fetchAll(
+    "contract_lines",
+    "id, account_id, contract_id, product, quantity, unit_price_usd, arr_usd, purchase_date, renewal_date, term_months, auto_renew, status, included_tokens_monthly",
+    ["id"],
+    (q) => q.eq("account_id", accountId),
+  );
+  return rows.map((r) => ({
+    id: str(r.id),
+    account_id: str(r.account_id),
+    contract_id: str(r.contract_id),
+    product: str(r.product),
+    quantity: num(r.quantity),
+    unit_price_usd: num(r.unit_price_usd),
+    arr_usd: num(r.arr_usd),
+    purchase_date: str(r.purchase_date),
+    renewal_date: str(r.renewal_date),
+    term_months: num(r.term_months),
+    auto_renew: Boolean(r.auto_renew),
+    status: str(r.status) as ContractLineRow["status"],
+    included_tokens_monthly: num(r.included_tokens_monthly),
+  }));
+}
+
+export type AccountPageData = {
+  account: AccountRow & { seats: number | null; arr: number };
+  renewalRiskLevel: RenewalRiskLevel | null; // null when not renewing within the risk window
+  products: ContractLineMetrics[];
+};
+
+/** One account, its renewal-risk level and its contract lines with per-line usage. Null if the account doesn't exist. */
+export async function getAccountPageData(accountId: string, asOf: string = AS_OF_DATE): Promise<AccountPageData | null> {
+  const prior = priorUsageWindow(asOf);
+  const last = usageWindow(asOf);
+  const [accounts, seatRows, lines, usageRows, risk] = await Promise.all([
+    loadAccounts((q) => q.eq("id", accountId)),
+    fetchAll("accounts", "id, seats", ["id"], (q) => q.eq("id", accountId)),
+    loadContractLines(accountId),
+    fetchAll("usage_daily", "account_id, date, feature, input_tokens, output_tokens, active_users", ["date", "feature", "model"], (q) =>
+      q.eq("account_id", accountId).gte("date", prior.start).lte("date", last.end),
+    ),
+    getRenewalRisk(asOf),
+  ]);
+  const account = accounts[0];
+  if (!account) return null;
+  const usage: FeatureUsageRow[] = usageRows.map((r) => ({
+    account_id: str(r.account_id),
+    date: str(r.date),
+    feature: str(r.feature),
+    input_tokens: num(r.input_tokens),
+    output_tokens: num(r.output_tokens),
+    active_users: r.active_users === null || r.active_users === undefined ? null : num(r.active_users),
+  }));
+  const seats = seatRows[0]?.seats;
+  return {
+    account: { ...account, seats: seats === null || seats === undefined ? null : num(seats), arr: account.status === "customer" ? account.mrr_usd * 12 : 0 },
+    renewalRiskLevel: risk.rows.find((r) => r.accountId === accountId)?.level ?? null,
+    products: calcContractLineMetrics(lines, usage, asOf),
+  };
 }
 
 // ---------------------------------------------------------------------------

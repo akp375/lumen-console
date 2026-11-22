@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import type { AccountEconomicsRow } from "@/lib/metrics";
 import { pct, segmentLabel, shortDate, tenureLabel, usd } from "@/lib/format";
 import { LIFECYCLE_COLORS } from "./chart-colors";
@@ -13,7 +14,11 @@ const COLUMNS: Column<AccountEconomicsRow>[] = [
   {
     key: "name",
     label: "Account",
-    render: (r) => <span className="whitespace-nowrap font-medium text-zinc-900 dark:text-zinc-100">{r.name}</span>,
+    render: (r) => (
+      <Link href={`/accounts/${r.accountId}`} className="whitespace-nowrap font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100">
+        {r.name}
+      </Link>
+    ),
     sortValue: (r) => r.name.toLowerCase(),
   },
   { key: "segment", label: "Segment", render: (r) => segmentLabel(r.segment), sortValue: (r) => segmentLabel(r.segment) },

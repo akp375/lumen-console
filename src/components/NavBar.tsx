@@ -5,7 +5,15 @@ import { usePathname } from "next/navigation";
 import { NAV, PRODUCT_NAME } from "@/lib/pages";
 
 export function NavBar() {
-  const path = usePathname();
+  return <NavBarView path={usePathname()} />;
+}
+
+/** The same bar with no tab highlighted: shown for a moment while a page with an ID in its address loads. */
+export function NavBarPlaceholder() {
+  return <NavBarView path={null} />;
+}
+
+function NavBarView({ path }: { path: string | null }) {
   return (
     <nav aria-label="Main" className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <div className="mx-auto flex h-14 w-full max-w-6xl items-stretch gap-8 px-4 sm:px-6">
@@ -14,7 +22,7 @@ export function NavBar() {
         </Link>
         <div className="flex items-stretch gap-1 overflow-x-auto">
           {NAV.map((p) => {
-            const active = p.href === "/" ? path === "/" : path.startsWith(p.href);
+            const active = path !== null && (p.href === "/" ? path === "/" : path.startsWith(p.href));
             return (
               <Link
                 key={p.href}
