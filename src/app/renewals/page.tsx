@@ -19,7 +19,8 @@ const RULES =
   `with underwater margin (below ${R.underwaterMarginBelow * 100}%), health down ${R.healthDropOf}+ points on last week, or ${R.downsellShareFrom * 100}%+ of ` +
   `contract ARR at downsell risk. Medium = health ${R.highHealthBelow}–${R.mediumHealthBelow - 1}, or health ${R.mediumHealthBelow}+ with underwater margin ` +
   `or any line at downsell risk (usage down more than ${Math.abs(ADOPTION_DROP_BELOW * 100)}%, last 30 days vs prior 30), or NPS down ` +
-  `${R.npsDropOf}+ points since the previous survey. Otherwise NPS and usage count inside the health score.`;
+  `${R.npsDropOf}+ points since the previous survey. Enterprise and mid-market with no executive sponsor, or one who left: ` +
+  `Medium on its own, High when health is below ${R.mediumHealthBelow}. Otherwise NPS and usage count inside the health score.`;
 
 export default function RenewalsPage() {
   return (

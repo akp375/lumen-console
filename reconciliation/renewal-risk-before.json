@@ -1,6 +1,6 @@
 {
   "asOf": "2026-11-13",
-  "takenAt": "2026-11-22T06:19:09.231Z",
+  "takenAt": "2026-11-22T06:20:08.004Z",
   "rows": {
     "acc_0135": {
       "name": "Vantagely Energy",
@@ -52,7 +52,8 @@
       "segment": "mid-market",
       "level": "Medium",
       "reasons": [
-        "Health 50–69"
+        "Health 50–69",
+        "NPS down 3+"
       ],
       "renewalDate": "2026-11-26",
       "daysToRenewal": 13,
@@ -80,12 +81,24 @@
       "daysToRenewal": 37,
       "arr": 2640
     },
+    "acc_0131": {
+      "name": "Granitebay Health",
+      "segment": "SMB",
+      "level": "Medium",
+      "reasons": [
+        "NPS down 3+"
+      ],
+      "renewalDate": "2026-12-29",
+      "daysToRenewal": 46,
+      "arr": 3000
+    },
     "acc_0074": {
       "name": "Quillon Retail",
       "segment": "mid-market",
       "level": "Medium",
       "reasons": [
-        "Health 50–69"
+        "Health 50–69",
+        "NPS down 3+"
       ],
       "renewalDate": "2027-01-02",
       "daysToRenewal": 50,
@@ -118,11 +131,34 @@
       "segment": "SMB",
       "level": "Medium",
       "reasons": [
-        "Health 50–69"
+        "Health 50–69",
+        "NPS down 3+"
       ],
       "renewalDate": "2027-01-17",
       "daysToRenewal": 65,
       "arr": 6480
+    },
+    "acc_0016": {
+      "name": "Fjordway Health",
+      "segment": "mid-market",
+      "level": "Medium",
+      "reasons": [
+        "NPS down 3+"
+      ],
+      "renewalDate": "2027-02-03",
+      "daysToRenewal": 82,
+      "arr": 33000
+    },
+    "acc_0128": {
+      "name": "Yarrow Energy",
+      "segment": "enterprise",
+      "level": "Medium",
+      "reasons": [
+        "NPS down 3+"
+      ],
+      "renewalDate": "2027-04-28",
+      "daysToRenewal": 166,
+      "arr": 87000
     }
   }
 }

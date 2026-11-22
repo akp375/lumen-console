@@ -2,7 +2,15 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { ADOPTION_DROP_BELOW, HEALTH_RULES, getAccountPageData, type ContractLineMetrics, type HealthTrendRow } from "@/lib/metrics";
+import {
+  ADOPTION_DROP_BELOW,
+  HEALTH_RULES,
+  RENEWAL_RISK_RULES,
+  getAccountPageData,
+  type AccountPageData,
+  type ContractLineMetrics,
+  type HealthTrendRow,
+} from "@/lib/metrics";
 import { pct, pctChange, segmentLabel, shortDate, usd } from "@/lib/format";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { PageHeader } from "@/components/PageHeader";
@@ -45,7 +53,7 @@ async function AccountContent({ params }: Params) {
       </div>
       <PageHeader title={a.name} description={description} />
 
-      <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label="ARR" value={isCustomer ? usd(a.arr) : "n/a"} detail={isCustomer ? `MRR ${usd(a.mrr_usd)}` : "Not a current customer"} />
         <Stat label="Seats" value={a.seats === null ? "n/a" : String(a.seats)} detail="On the contract" />
         <Stat
@@ -58,6 +66,7 @@ async function AccountContent({ params }: Params) {
           <div className="mt-2">{isCustomer ? <RiskBadge level={renewalRiskLevel ?? "Low"} /> : <span className="text-2xl font-semibold text-zinc-400">n/a</span>}</div>
           <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Same level the HubSpot sync sends</div>
         </div>
+        <SponsorStat sponsor={a.executiveSponsor} segment={a.segment} isCustomer={isCustomer} />
       </div>
 
       <div className="space-y-8">
@@ -79,6 +88,35 @@ async function AccountContent({ params }: Params) {
         </section>
       </div>
     </>
+  );
+}
+
+function SponsorStat({ sponsor, segment, isCustomer }: { sponsor: AccountPageData["account"]["executiveSponsor"]; segment: string; isCustomer: boolean }) {
+  const tracked = isCustomer && RENEWAL_RISK_RULES.sponsorRequiredSegments.includes(segment);
+  let value = "Not tracked";
+  let detail = isCustomer ? `Not tracked for ${segmentLabel(segment)}` : "Customers only";
+  let tone = "text-zinc-400";
+  if (tracked && sponsor) {
+    if (sponsor.status === "active") {
+      value = sponsor.name ?? "Active";
+      detail = sponsor.title ?? "Active";
+      tone = "text-zinc-900 dark:text-zinc-50";
+    } else if (sponsor.status === "left") {
+      value = "Sponsor left";
+      detail = `${sponsor.name}, ${sponsor.title}${sponsor.leftDate ? `, left ${shortDate(sponsor.leftDate)}` : ""}`;
+      tone = "text-red-600 dark:text-red-400";
+    } else {
+      value = "None";
+      detail = "No executive sponsor identified";
+      tone = "text-red-600 dark:text-red-400";
+    }
+  }
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="text-sm text-zinc-500 dark:text-zinc-400">Executive sponsor</div>
+      <div className={`mt-1 truncate text-lg font-semibold ${tone}`}>{value}</div>
+      <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{detail}</div>
+    </div>
   );
 }
 

@@ -52,6 +52,7 @@ export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiN
       health_score: r.healthScore,
       health_change_vs_last_week: r.healthChange,
       nps_change_vs_previous_survey: r.npsChange,
+      executive_sponsor: r.sponsorStatus,
       arr_at_downsell_risk_usd: r.downsellArr,
       gross_margin: r.grossMargin === null ? null : `${(r.grossMargin * 100).toFixed(0)}%`,
       reasons: r.reasons,

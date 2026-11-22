@@ -71,8 +71,18 @@ export type DealOwners = { ae_id: string | null; adr_id: string | null; csm_id: 
 /** How an account is doing today, judged only from existing data. Seeding only: not an app metric. */
 export type SeedTier = "healthy" | "middle" | "declining-quiet" | "declining-burst";
 
+export type SponsorStatus = "active" | "left" | "none";
+export type AccountSponsor = {
+  executive_sponsor_name: string | null;
+  executive_sponsor_title: string | null;
+  sponsor_status: SponsorStatus;
+  sponsor_left_date: string | null;
+};
+
 export type HealthInputs = {
   team: TeamRow[];
+  /** Executive sponsor per enterprise or mid-market customer. Every other account is left empty (not tracked). */
+  sponsors: Map<string, AccountSponsor>;
   /** csm_id per account id (customers and churned accounts; prospects have none). */
   accountCsm: Map<string, string | null>;
   /** ae_id, adr_id and csm_id per opportunity id. */
@@ -151,6 +161,18 @@ const TOUCH_GAP: Record<"healthy" | "middle" | "declining", Record<"enterprise" 
   declining: { enterprise: [35, 60], commercial: [40, 70] },
 };
 const EMAIL_GAP: readonly [number, number] = [25, 50];
+
+// Executive sponsors (enterprise and mid-market customers only)
+const SPONSOR_SEGMENTS = ["enterprise", "mid-market"];
+const SPONSOR_NONE_SHARE = 0.15; // about 15% have no sponsor
+const SPONSOR_LEFT = { fromLowerHealth: 4, fromHealthy: 1 }; // a few left, mostly at lower-health accounts
+const SPONSOR_LEFT_DAYS: readonly [number, number] = [5, 85]; // left within the last 90 days
+const SPONSOR_FIRST = ["Dana", "Morgan", "Priyanka", "Owen", "Lena", "Rafael", "Grace", "Tobias", "Mei", "Victor", "Sana", "Elliot", "Ines", "Kwame", "Nora", "Julian", "Farah", "Henrik", "Amara", "Caleb"];
+const SPONSOR_LAST = ["Whitfield", "Okonkwo", "Lindqvist", "Ramirez", "Castellano", "Moreau", "Nakamura", "Brennan", "Adeyemi", "Halvorsen", "Iyer", "Fischer", "Delacroix", "Osei", "Varga", "Mahler", "Quinlan", "Sorensen", "Tanaka", "Abara"];
+const SPONSOR_TITLES: Record<string, readonly string[]> = {
+  enterprise: ["CTO", "COO", "CFO", "Chief Data Officer", "General Counsel", "SVP Operations"],
+  "mid-market": ["CTO", "COO", "VP Engineering", "VP Operations", "Head of Legal Ops", "VP Data"],
+};
 
 // Thresholds for sorting accounts into seeding tiers (the old renewal-risk signs, kept here so the
 // seeded data never changes when the app's rules do).
@@ -331,6 +353,43 @@ export function buildHealthInputs(input: {
     buildAccountActivities(a, csm, tier, asOf).forEach((x, k) => activities.push({ id: `csa_${num}_${String(k + 1).padStart(3, "0")}`, ...x }));
   }
 
+  // Executive sponsors: enterprise and mid-market customers. A few "left" in the last 90 days, mostly at
+  // lower-health accounts (by seeding tier); about 15% "none", spread across all; the rest "active".
+  const sponsors = new Map<string, AccountSponsor>();
+  {
+    const r = makeRng("sponsors");
+    const eligible = accounts.filter((a) => a.status === "customer" && SPONSOR_SEGMENTS.includes(a.segment));
+    const key = new Map(eligible.map((a) => [a.id, r.next()]));
+    const byKey = (x: HealthAccount, y: HealthAccount) => key.get(x.id)! - key.get(y.id)!;
+    const isLower = (a: HealthAccount) => tiers.get(a.id) !== "healthy";
+    const left = [
+      ...eligible.filter(isLower).sort(byKey).slice(0, SPONSOR_LEFT.fromLowerHealth),
+      ...eligible.filter((a) => !isLower(a)).sort(byKey).slice(0, SPONSOR_LEFT.fromHealthy),
+    ];
+    const leftIds = new Set(left.map((a) => a.id));
+    const noneCount = Math.round(eligible.length * SPONSOR_NONE_SHARE);
+    const noneIds = new Set(
+      eligible
+        .filter((a) => !leftIds.has(a.id))
+        .sort((x, y) => makeRng(`sponsor-none:${x.id}`).next() - makeRng(`sponsor-none:${y.id}`).next())
+        .slice(0, noneCount)
+        .map((a) => a.id),
+    );
+    for (const a of eligible) {
+      const ar = makeRng(`sponsor:${a.id}`);
+      const name = `${ar.pick(SPONSOR_FIRST)} ${ar.pick(SPONSOR_LAST)}`;
+      const title = ar.pick(SPONSOR_TITLES[a.segment]);
+      const leftDays = ar.int(SPONSOR_LEFT_DAYS[0], SPONSOR_LEFT_DAYS[1]);
+      if (noneIds.has(a.id)) {
+        sponsors.set(a.id, { executive_sponsor_name: null, executive_sponsor_title: null, sponsor_status: "none", sponsor_left_date: null });
+      } else if (leftIds.has(a.id)) {
+        sponsors.set(a.id, { executive_sponsor_name: name, executive_sponsor_title: title, sponsor_status: "left", sponsor_left_date: addDays(asOf, -leftDays) });
+      } else {
+        sponsors.set(a.id, { executive_sponsor_name: name, executive_sponsor_title: title, sponsor_status: "active", sponsor_left_date: null });
+      }
+    }
+  }
+
   // CSAT on closed tickets: about 70% answer; declining accounts score lower on recent tickets.
   const csat = new Map<string, number>();
   for (const t of input.tickets) {
@@ -343,7 +402,7 @@ export function buildHealthInputs(input: {
     csat.set(t.id, r.weighted(CSAT_SCORES[base]));
   }
 
-  return { team: TEAM, accountCsm, dealOwners, activities, csat, tiers, unknownOwners };
+  return { team: TEAM, sponsors, accountCsm, dealOwners, activities, csat, tiers, unknownOwners };
 }
 
 /** Short code that changes whenever any built row changes. */
@@ -354,6 +413,9 @@ export function healthInputsFingerprint(h: HealthInputs): string {
     ...[...h.dealOwners].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `opp|${k}|${v.ae_id}|${v.adr_id}|${v.csm_id}`),
     ...h.activities.map((x) => `act|${x.id}|${x.account_id}|${x.csm_id}|${x.activity_date}|${x.type}|${x.attendee_level}`),
     ...[...h.csat].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `csat|${k}|${v}`),
+    ...[...h.sponsors]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `sponsor|${k}|${v.sponsor_status}|${v.executive_sponsor_name}|${v.executive_sponsor_title}|${v.sponsor_left_date}`),
   ];
   return createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 12);
 }

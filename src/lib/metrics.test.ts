@@ -597,6 +597,44 @@ test("Renewal risk: health drives the level, inside each segment's window", () =
   assert.equal(result.atRiskArr, 7 * 12_000);
 });
 
+test("Renewal risk: no exec sponsor or sponsor left (enterprise and mid-market only)", () => {
+  const dec = (healthScore: number | null, sponsorGap: "none" | "left" | null, extra: Partial<Parameters<typeof decideRenewalRisk>[0]> = {}) =>
+    decideRenewalRisk({ healthScore, healthChange: 0, underwater: false, downsellShare: 0, sponsorGap, ...extra });
+  // Health 70+: Medium on its own
+  assert.deepEqual(dec(70, "none"), { level: "Medium", reasons: ["No exec sponsor"] });
+  assert.deepEqual(dec(85, "left"), { level: "Medium", reasons: ["Exec sponsor left"] });
+  assert.deepEqual(dec(85, "none", { underwater: true }), { level: "Medium", reasons: ["Underwater margin", "No exec sponsor"] });
+  // Health below 70: High
+  assert.deepEqual(dec(69.9, "none"), { level: "High", reasons: ["Health 50–69", "No exec sponsor"] });
+  assert.deepEqual(dec(45, "left"), { level: "High", reasons: ["Health below 50", "Exec sponsor left"] });
+  // No health score: still Medium on its own
+  assert.equal(dec(null, "none").level, "Medium");
+  // Active sponsor (no gap): the health rule alone
+  assert.equal(dec(85, null).level, "Low");
+  // With an NPS drop as well, a Medium account lists both
+  assert.deepEqual(dec(85, "none", { npsChange: -4 }), { level: "Medium", reasons: ["No exec sponsor", "NPS down 3+"] });
+
+  // End to end: the segment and the window decide whether the sponsor counts
+  const base = { status: "customer" as const, mrr_usd: 1000 };
+  const accounts = [
+    acc({ id: "S1", ...base, segment: "enterprise", renewal_date: "2027-04-01", sponsor_status: "left" }), // 139 days: inside 180
+    acc({ id: "S2", ...base, segment: "mid-market", renewal_date: "2026-12-20", sponsor_status: "none" }),
+    acc({ id: "S3", ...base, segment: "mid-market", renewal_date: "2026-12-20", sponsor_status: "active" }),
+    acc({ id: "S4", ...base, segment: "SMB", renewal_date: "2026-12-20", sponsor_status: "none" }), // SMB: never penalised
+    acc({ id: "S5", ...base, segment: "mid-market", renewal_date: "2027-04-01", sponsor_status: "none" }), // 139 days: past mid-market 120
+  ];
+  const lines = [{ arr: 12_000, adoptionDrop: false }];
+  const health = new Map(["S1", "S2", "S3", "S4", "S5"].map((id) => [id, { score: id === "S2" ? 60 : 85, change: 0, npsChange: null, lines }]));
+  const byId = Object.fromEntries(calcRenewalRisk(accounts, [], PRICES, health, TODAY).all.map((r) => [r.accountId, r]));
+  assert.deepEqual([byId.S1.level, byId.S1.reasons], ["Medium", ["Exec sponsor left"]]);
+  assert.deepEqual([byId.S2.level, byId.S2.reasons], ["High", ["Health 50–69", "No exec sponsor"]]);
+  assert.equal(byId.S3.level, "Low");
+  assert.equal(byId.S4.level, "Low");
+  assert.equal(byId.S5.level, "Low");
+  assert.equal(byId.S1.sponsorStatus, "left");
+  assert.deepEqual(RENEWAL_RISK_RULES.sponsorRequiredSegments, ["enterprise", "mid-market"]);
+});
+
 test("Renewal risk: NPS down 3+ since the previous survey is Medium, inside the window only", () => {
   const base = { status: "customer" as const, mrr_usd: 1000, segment: "SMB" };
   const accounts = [

@@ -38,7 +38,7 @@ const TABLES: Record<string, string[]> = {
 };
 // health_scores is left out: `npm run health:backfill` writes it on purpose.
 const NEW_COLUMNS: Record<string, string[]> = {
-  accounts: ["csm_id"],
+  accounts: ["csm_id", "executive_sponsor_name", "executive_sponsor_title", "sponsor_status", "sponsor_left_date"],
   opportunities: ["ae_id", "adr_id", "csm_id"],
   support_tickets: ["csat_score"],
 };
@@ -218,6 +218,33 @@ async function main() {
     ),
     check("Every activity's CSM is the account's CSM", activities.filter((x) => x.csm_id !== accById.get(String(x.account_id))?.csm_id).map((x) => `${x.id} ${x.account_id}`)),
     check("No activity on a prospect or after the as-of date", activities.filter((x) => accById.get(String(x.account_id))?.status === "prospect" || String(x.activity_date) > AS_OF_DATE).map((x) => `${x.id} ${x.activity_date}`)),
+    check(
+      "Sponsor only on enterprise and mid-market customers, every one of them",
+      accounts
+        .filter((a) => {
+          const wants = a.status === "customer" && (a.segment === "enterprise" || a.segment === "mid-market");
+          return wants ? !a.sponsor_status : a.sponsor_status != null || a.executive_sponsor_name != null;
+        })
+        .map((a) => `${a.id} ${a.segment} ${a.status}: ${a.sponsor_status}`),
+    ),
+    check(
+      "Active and left sponsors have a name and title; none has neither",
+      accounts
+        .filter((a) => a.sponsor_status)
+        .filter((a) => (a.sponsor_status === "none") !== (a.executive_sponsor_name == null && a.executive_sponsor_title == null))
+        .map((a) => `${a.id} ${a.sponsor_status}`),
+    ),
+    check(
+      "Left date only on 'left', within the last 90 days",
+      accounts
+        .filter((a) => {
+          const d = a.sponsor_left_date == null ? null : String(a.sponsor_left_date);
+          if (a.sponsor_status !== "left") return d !== null;
+          const ninetyAgo = new Date(Date.parse(`${AS_OF_DATE}T00:00:00Z`) - 90 * 86_400_000).toISOString().slice(0, 10);
+          return d === null || d > AS_OF_DATE || d < ninetyAgo;
+        })
+        .map((a) => `${a.id} ${a.sponsor_status} ${a.sponsor_left_date}`),
+    ),
     check("CSAT only on closed tickets", tickets.filter((t) => t.csat_score != null && t.status !== "closed").map((t) => String(t.id))),
   ];
 
@@ -244,6 +271,9 @@ async function main() {
   const rated = closed.filter((t) => t.csat_score != null);
   const byType = new Map<string, number>();
   for (const x of activities) byType.set(String(x.type), (byType.get(String(x.type)) ?? 0) + 1);
+  const sponsorCount = new Map<string, number>();
+  for (const a of accounts.filter((x) => x.sponsor_status)) sponsorCount.set(String(a.sponsor_status), (sponsorCount.get(String(a.sponsor_status)) ?? 0) + 1);
+  console.log(`\n  Executive sponsors: ${[...sponsorCount].map(([k, n]) => `${n} ${k}`).join(", ")}`);
   console.log(`\n  CS activities: ${activities.length} (${[...byType].map(([t, n]) => `${n} ${t}`).join(", ")})`);
   console.log(`  CSAT: ${rated.length} of ${closed.length} closed tickets rated (${closed.length ? Math.round((rated.length / closed.length) * 100) : 0}%)`);
 

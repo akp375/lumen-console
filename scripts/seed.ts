@@ -26,7 +26,7 @@
  *   - contract_lines: cleared, then refilled; usage_daily.active_users and
  *     opportunities.contract_id are filled. Built by scripts/contracts-lib.ts, the
  *     same code as `npm run contracts:backfill` (needs the 20261121 migration).
- *   - team (upserted), accounts.csm_id, opportunities.ae_id / adr_id / csm_id,
+ *   - team (upserted), accounts.csm_id and executive sponsor, opportunities.ae_id / adr_id / csm_id,
  *     cs_activities (cleared, then refilled) and support_tickets.csat_score.
  *     Built by scripts/health-inputs-lib.ts, the same code as
  *     `npm run health-inputs:backfill` (needs the 20261122 migration).
@@ -1335,7 +1335,8 @@ async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: Hea
   const { error: teamError } = await db.from("team").upsert(health.team, { onConflict: "id" });
   if (teamError) throw new Error(`Writing team failed: ${teamError.message}`);
   console.log(`  team: ${health.team.length} rows`);
-  const accountRows = d.accounts.map((a) => ({ ...a.row, csm_id: health.accountCsm.get(a.row.id) ?? null }));
+  const noSponsor = { executive_sponsor_name: null, executive_sponsor_title: null, sponsor_status: null, sponsor_left_date: null };
+  const accountRows = d.accounts.map((a) => ({ ...a.row, csm_id: health.accountCsm.get(a.row.id) ?? null, ...(health.sponsors.get(a.row.id) ?? noSponsor) }));
   for (let i = 0; i < accountRows.length; i += BATCH) {
     const { error } = await db.from("accounts").upsert(accountRows.slice(i, i + BATCH), { onConflict: "id" });
     if (error) throw new Error(`Writing accounts failed: ${error.message}`);

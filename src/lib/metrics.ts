@@ -31,6 +31,8 @@ export type AccountRow = {
   renewal_date: string | null; // next renewal; empty for prospects and churned accounts
   churn_date: string | null;
   owner: string; // account owner
+  /** Executive sponsor status: enterprise and mid-market customers only; empty (not tracked) for everyone else. */
+  sponsor_status?: "active" | "left" | "none" | null;
 };
 
 export type OpportunityRow = {
@@ -813,6 +815,7 @@ export function calcUsageTrend(accounts: AccountRow[], usage: UsageRow[], asOf: 
  *              or 25%+ of contract ARR at downsell risk
  *     Medium = health 50-69, or health 70+ with underwater margin or any line at downsell risk,
  *              or NPS down 3+ points since the previous survey (any health)
+ *   Enterprise and mid-market with no executive sponsor, or one who left: Medium on its own, High when health is below 70.
  *     Low    = everything else
  *   Outside the window: Low. Prospects and churned accounts: no level.
  * NPS and usage are not separate signs any more: they live inside the health score.
@@ -825,6 +828,9 @@ export const RENEWAL_RISK_RULES = {
   downsellShareFrom: 0.25, // share of contract ARR on lines with an adoption drop
   underwaterMarginBelow: UNDERWATER_MARGIN_BELOW,
   npsDropOf: 3, // latest NPS 3+ points below the previous survey: a Medium trigger on its own
+  // No executive sponsor, or the sponsor left, in these segments: Medium on its own, High when health is below mediumHealthBelow.
+  // Other segments don't track a sponsor and are never penalised.
+  sponsorRequiredSegments: ["enterprise", "mid-market"] as readonly string[],
 } as const;
 
 /** Renewal window for a segment, in days from the as-of date. */
@@ -842,6 +848,8 @@ export const RENEWAL_RISK_REASONS = [
   "25%+ ARR at downsell risk",
   "Downsell risk",
   "NPS down 3+",
+  "No exec sponsor",
+  "Exec sponsor left",
 ] as const;
 export type RenewalRiskReason = (typeof RENEWAL_RISK_REASONS)[number];
 
@@ -856,13 +864,26 @@ export function decideRenewalRisk(input: {
   underwater: boolean;
   downsellShare: number | null;
   npsChange?: number | null;
+  /** "none" or "left" only for a segment in sponsorRequiredSegments; null otherwise. */
+  sponsorGap?: "none" | "left" | null;
 }): { level: RenewalRiskLevel; reasons: RenewalRiskReason[] } {
-  const byHealth = decideByHealth(input);
+  const R = RENEWAL_RISK_RULES;
+  let { level, reasons } = decideByHealth(input);
+  // Sponsor gap: Medium on its own, High when health is also below 70.
+  if (input.sponsorGap) {
+    const chip: RenewalRiskReason = input.sponsorGap === "left" ? "Exec sponsor left" : "No exec sponsor";
+    const healthBelow70 = input.healthScore !== null && input.healthScore < R.mediumHealthBelow;
+    if (healthBelow70) {
+      if (level !== "High") reasons = reasons.filter((x) => x === "Health 50–69");
+      level = "High";
+    } else if (level === "Low") level = "Medium";
+    reasons = [...reasons, chip];
+  }
   // NPS down 3+ since the previous survey: Medium on its own. It never raises an account to High,
   // so a High account's reasons stay the conditions that made it High.
-  const npsDrop = input.npsChange !== null && input.npsChange !== undefined && input.npsChange <= -RENEWAL_RISK_RULES.npsDropOf;
-  if (!npsDrop || byHealth.level === "High") return byHealth;
-  return { level: "Medium", reasons: [...byHealth.reasons, "NPS down 3+"] };
+  const npsDrop = input.npsChange !== null && input.npsChange !== undefined && input.npsChange <= -R.npsDropOf;
+  if (npsDrop && level !== "High") return { level: "Medium", reasons: [...reasons, "NPS down 3+"] };
+  return { level, reasons };
 }
 
 function decideByHealth(input: { healthScore: number | null; healthChange: number | null; underwater: boolean; downsellShare: number | null }): {
@@ -904,6 +925,8 @@ export type RenewalRiskRow = {
   healthChange: number | null;
   /** Latest NPS minus the previous survey's. */
   npsChange: number | null;
+  /** Executive sponsor status (enterprise and mid-market only). */
+  sponsorStatus: "active" | "left" | "none" | null;
   grossMargin: number | null;
   /** ARR on lines with an adoption drop, and its share of the account's line ARR. */
   downsellArr: number;
@@ -923,6 +946,12 @@ export type RenewalRiskResult = {
   byLevel: Record<"High" | "Medium", { count: number; arr: number }>;
 };
 
+/** "none" or "left" for a customer in a segment that needs a sponsor; null otherwise. */
+function sponsorGap(a: AccountRow): "none" | "left" | null {
+  if (!RENEWAL_RISK_RULES.sponsorRequiredSegments.includes(a.segment)) return null;
+  return a.sponsor_status === "none" || a.sponsor_status === "left" ? a.sponsor_status : null;
+}
+
 export function calcRenewalRisk(accounts: AccountRow[], usage: UsageRow[], prices: ModelPriceRow[], health: RenewalHealth, asOf: string): RenewalRiskResult {
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r]));
   const all: RenewalRiskRow[] = customersOnly(accounts)
@@ -937,7 +966,14 @@ export function calcRenewalRisk(accounts: AccountRow[], usage: UsageRow[], price
       const downsellShare = lineArr > 0 ? downsellArr / lineArr : null;
       const m = margin.get(a.id);
       const decided = inWindow
-        ? decideRenewalRisk({ healthScore: h?.score ?? null, healthChange: h?.change ?? null, underwater: m?.underwater ?? false, downsellShare, npsChange: h?.npsChange ?? null })
+        ? decideRenewalRisk({
+            healthScore: h?.score ?? null,
+            healthChange: h?.change ?? null,
+            underwater: m?.underwater ?? false,
+            downsellShare,
+            npsChange: h?.npsChange ?? null,
+            sponsorGap: sponsorGap(a),
+          })
         : { level: "Low" as const, reasons: [] };
       return {
         accountId: a.id,
@@ -952,6 +988,7 @@ export function calcRenewalRisk(accounts: AccountRow[], usage: UsageRow[], price
         healthScore: h?.score ?? null,
         healthChange: h?.change ?? null,
         npsChange: h?.npsChange ?? null,
+        sponsorStatus: a.sponsor_status ?? null,
         grossMargin: m?.grossMargin ?? null,
         downsellArr,
         downsellShare,
@@ -2066,7 +2103,7 @@ const strOrNull = (v: unknown): string | null => (v === null || v === undefined 
 async function loadAccounts(filter?: (q: Query) => Query): Promise<AccountRow[]> {
   const rows = await fetchAll(
     "accounts",
-    "id, name, status, segment, mrr_usd, included_tokens_monthly, start_date, renewal_date, churn_date, owner",
+    "id, name, status, segment, mrr_usd, included_tokens_monthly, start_date, renewal_date, churn_date, owner, sponsor_status",
     ["id"],
     filter,
   );
@@ -2081,6 +2118,7 @@ async function loadAccounts(filter?: (q: Query) => Query): Promise<AccountRow[]>
     renewal_date: strOrNull(r.renewal_date),
     churn_date: strOrNull(r.churn_date),
     owner: str(r.owner),
+    sponsor_status: strOrNull(r.sponsor_status) as AccountRow["sponsor_status"],
   }));
 }
 
@@ -2450,7 +2488,11 @@ export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<Renewa
 }
 
 export type AccountPageData = {
-  account: AccountRow & { seats: number | null; arr: number };
+  account: AccountRow & {
+    seats: number | null;
+    arr: number;
+    executiveSponsor: { name: string | null; title: string | null; status: "active" | "left" | "none"; leftDate: string | null } | null;
+  };
   renewalRiskLevel: RenewalRiskLevel | null; // null for prospects and churned accounts
   products: ContractLineMetrics[];
   renewalDeals: RenewalDealRow[]; // every renewal deal for this account, latest close first
@@ -2461,7 +2503,7 @@ export type AccountPageData = {
 export async function getAccountPageData(accountId: string, asOf: string = AS_OF_DATE): Promise<AccountPageData | null> {
   const [accounts, seatRows, lines, usage, deals, risk, healthInput] = await Promise.all([
     loadAccounts((q) => q.eq("id", accountId)),
-    fetchAll("accounts", "id, seats", ["id"], (q) => q.eq("id", accountId)),
+    fetchAll("accounts", "id, seats, executive_sponsor_name, executive_sponsor_title, sponsor_status, sponsor_left_date", ["id"], (q) => q.eq("id", accountId)),
     loadContractLines(accountId),
     loadFeatureUsage(asOf, accountId),
     loadRenewalDeals((q) => q.eq("account_id", accountId)),
@@ -2473,7 +2515,19 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
   const seats = seatRows[0]?.seats;
   const products = calcContractLineMetrics(lines, usage, asOf);
   return {
-    account: { ...account, seats: seats === null || seats === undefined ? null : num(seats), arr: account.status === "customer" ? account.mrr_usd * 12 : 0 },
+    account: {
+      ...account,
+      seats: seats === null || seats === undefined ? null : num(seats),
+      arr: account.status === "customer" ? account.mrr_usd * 12 : 0,
+      executiveSponsor: seatRows[0]?.sponsor_status
+        ? {
+            name: strOrNull(seatRows[0].executive_sponsor_name),
+            title: strOrNull(seatRows[0].executive_sponsor_title),
+            status: str(seatRows[0].sponsor_status) as "active" | "left" | "none",
+            leftDate: strOrNull(seatRows[0].sponsor_left_date),
+          }
+        : null,
+    },
     renewalRiskLevel: risk.all.find((r) => r.accountId === accountId)?.level ?? null,
     products,
     renewalDeals: calcRenewalDeals(deals, products, accounts).sort(

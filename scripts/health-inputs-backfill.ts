@@ -7,7 +7,7 @@
  *
  * Writes only:
  *   - team: added or updated by id
- *   - accounts.csm_id (no other account column)
+ *   - accounts.csm_id and the executive sponsor columns (no other account column)
  *   - opportunities.ae_id, adr_id, csm_id (no other deal column)
  *   - cs_activities: added or updated by id (never deleted)
  *   - support_tickets.csat_score on closed tickets (no other ticket column)
@@ -73,6 +73,11 @@ function summarize(h: HealthInputs, accounts: AccountRow[], tickets: Row[]) {
   console.log(`Accounts with a CSM: ${[...h.accountCsm.values()].filter(Boolean).length} (customers and churned); prospects: none`);
 
   const deals = [...h.dealOwners.values()];
+  const sponsorStatus = count([...h.sponsors.values()].map((x) => x.sponsor_status));
+  console.log(`Executive sponsors (enterprise and mid-market customers): ${h.sponsors.size}; ${fmt(sponsorStatus)}`);
+  for (const [id, x] of h.sponsors) {
+    if (x.sponsor_status === "left") console.log(`  left: ${id} (${h.tiers.get(id)} tier), ${x.executive_sponsor_name}, ${x.executive_sponsor_title}, left ${x.sponsor_left_date}`);
+  }
   console.log(`Deals: ${deals.length}; with an AE ${deals.filter((d) => d.ae_id).length}, with an ADR ${deals.filter((d) => d.adr_id).length}, with a CSM ${deals.filter((d) => d.csm_id).length}`);
 
   const customerTiers = [...h.tiers].filter(([id]) => status.get(id) === "customer").map(([, t]) => t);
@@ -162,6 +167,9 @@ async function main() {
 
   for (const { value, ids } of groupBy([...h.accountCsm], (v) => String(v)).values()) await setWhereIn("accounts", { csm_id: value }, ids);
   console.log(`  accounts.csm_id: ${h.accountCsm.size} accounts`);
+
+  for (const [id, sponsor] of h.sponsors) await setWhereIn("accounts", sponsor, [id]);
+  console.log(`  accounts executive sponsor: ${h.sponsors.size} enterprise and mid-market customers`);
 
   for (const { value, ids } of groupBy([...h.dealOwners], (v) => JSON.stringify(v)).values()) await setWhereIn("opportunities", value, ids);
   console.log(`  opportunities.ae_id / adr_id / csm_id: ${h.dealOwners.size} deals`);

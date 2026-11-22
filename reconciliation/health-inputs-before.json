@@ -1,33 +1,29 @@
 {
   "asOf": "2026-11-13",
-  "takenAt": "2026-11-22T04:46:59.352Z",
+  "takenAt": "2026-11-22T06:20:06.711Z",
   "totalArr": 3069960,
   "customerCount": 150,
   "highRisk": [
-    "acc_0054 Larkspur Systems",
     "acc_0059 Cedarline Legal",
-    "acc_0074 Quillon Retail",
-    "acc_0083 Umbra Energy",
-    "acc_0123 Larkspur Analytics",
+    "acc_0069 Copperleaf Labs",
+    "acc_0089 Ionic Retail",
     "acc_0135 Vantagely Energy"
   ],
   "riskLevel": {
-    "acc_0054": "High",
-    "acc_0083": "High",
-    "acc_0013": "Medium",
+    "acc_0135": "High",
+    "acc_0059": "High",
+    "acc_0089": "High",
+    "acc_0069": "High",
+    "acc_0054": "Medium",
+    "acc_0083": "Medium",
     "acc_0039": "Medium",
     "acc_0131": "Medium",
-    "acc_0135": "High",
-    "acc_0074": "High",
+    "acc_0074": "Medium",
     "acc_0147": "Medium",
     "acc_0125": "Medium",
-    "acc_0130": "Medium",
-    "acc_0112": "Medium",
-    "acc_0123": "High",
+    "acc_0123": "Medium",
     "acc_0016": "Medium",
-    "acc_0059": "High",
-    "acc_0108": "Medium",
-    "acc_0031": "Medium"
+    "acc_0128": "Medium"
   },
   "tables": {
     "accounts": {
@@ -145,11 +141,6 @@
         "unit_price_usd"
       ],
       "fingerprint": "7fd2a9280666"
-    },
-    "health_scores": {
-      "rows": 0,
-      "columns": [],
-      "fingerprint": "e3b0c44298fc"
     }
   }
 }
