@@ -201,14 +201,15 @@ test("Renewal deals: only active lines; no contract or a churned contract means 
 });
 
 // ---------------------------------------------------------------------------
-// Next 180 days: downsell risk; missing renewal deals by segment window
+// Downsell risk and missing renewal deals, by segment renewal window
 //
-// Today = 2026-11-13, so today + 180 days = 2027-05-12 (inside); 2027-05-13 is day 181.
+// Today = 2026-11-13: + 90 days = 2027-02-11, + 120 = 2027-03-13, + 180 = 2027-05-12.
 // ---------------------------------------------------------------------------
 
 function metric(lineId: string, accountId: string, contractId: string, arr: number, renewalDate: string, adoptionDrop: boolean, status: ContractLineMetrics["status"] = "active"): ContractLineMetrics {
   return { ...rows[0], lineId, accountId, contractId, product: "Core", arr, renewalDate, adoptionDrop, status, notAdopted: false };
 }
+const seg = (id: string, segment: string): AccountRow => ({ ...account(id, `Acct ${id}`), segment });
 const AHEAD = [
   metric("C1-core", "A1", "C1", 9_600, "2027-01-01", true), // day 49, drop
   metric("C1-extract", "A1", "C1", 2_400, "2027-01-01", false), // day 49, no drop
@@ -220,17 +221,34 @@ const AHEAD = [
   metric("C9-core", "A9", "C9", 8_000, "2027-01-01", true, "churned"), // churned line
 ];
 
-test("ARR at downsell risk, next 180 days: adoption-drop lines renewing from today to day 180", () => {
-  // C1 Core 9,600 (day 49) + C4 Core 5,000 (day 180). Not C5 (day 181), C6 (past) or C9 (churned).
-  assert.deepEqual(calcDownsellRiskNext(AHEAD, AS_OF), { arr: 14_600, lines: 2, contracts: 2 });
-  // Small print, all customers: every active drop line, any date: 9,600 + 5,000 + 3,000 + 4,000
-  assert.deepEqual(calcDownsellRiskNext(AHEAD, AS_OF, null), { arr: 21_600, lines: 4, contracts: 4 });
+test("ARR at downsell risk: adoption-drop lines renewing inside their segment's renewal window", () => {
+  // Same windows as missing renewal deals: enterprise 180, mid-market 120, SMB 90 days.
+  const accts = [
+    seg("A1", "enterprise"), // C1 Core 9,600 drop, day 49: inside
+    seg("A4", "enterprise"), // C4 Core 5,000 drop, day 180: inside
+    seg("A5", "enterprise"), // C5 Core 3,000 drop, day 181: outside
+    seg("A6", "enterprise"), // C6 Core 4,000 drop, yesterday: outside
+    seg("S3", "SMB"), // S3 Core 3,500 drop, day 108: outside the SMB 90 days (was inside the old flat 180)
+    seg("M3", "mid-market"), // M3 Core 2,200 drop, day 120: inside
+    seg("M4", "mid-market"), // M4 Core 1,800 drop, day 121: outside
+    seg("S4", "SMB"), // S4 Core 1,100 drop, day 90: inside
+  ];
+  const lines = [
+    ...AHEAD,
+    metric("S3-core", "S3", "S3", 3_500, "2027-03-01", true),
+    metric("M3-core", "M3", "M3", 2_200, "2027-03-13", true),
+    metric("M4-core", "M4", "M4", 1_800, "2027-03-14", true),
+    metric("S4-core", "S4", "S4", 1_100, "2027-02-11", true),
+  ];
+  // Inside: C1 9,600 + C4 5,000 + M3 2,200 + S4 1,100. Not C5, C6, S3, M4, or C9 (churned).
+  assert.deepEqual(calcDownsellRiskNext(lines, accts, AS_OF), { arr: 17_900, lines: 4, contracts: 4 });
+  // Small print, all customers: every active drop line, any date: 9,600 + 5,000 + 3,000 + 4,000 + 3,500 + 2,200 + 1,800 + 1,100
+  assert.deepEqual(calcDownsellRiskNext(lines, accts, AS_OF, false), { arr: 30_200, lines: 8, contracts: 8 });
 });
 
 // Missing renewal deal uses each segment's renewal window (RENEWAL_RISK_RULES.windowDays),
 // the same window as the account page: enterprise 180, mid-market 120, SMB 90 days.
 // Today + 90 = 2027-02-11, + 120 = 2027-03-13, + 180 = 2027-05-12.
-const seg = (id: string, segment: string): AccountRow => ({ ...account(id, `Acct ${id}`), segment });
 const MISSING = [
   ...AHEAD.filter((m) => m.contractId !== "C7"),
   metric("C7-core", "A7", "C7", 7_000, "2027-02-20", false), // mid-market day 99, has an open renewal deal

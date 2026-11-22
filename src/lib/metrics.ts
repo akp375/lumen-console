@@ -1973,8 +1973,6 @@ export function calcRenewalDeals(deals: RenewalDealInput[], lineMetrics: Contrac
   });
 }
 
-export const RENEWAL_LOOKAHEAD_DAYS = 180; // "next 180 days" for downsell risk (missing renewal deals use the segment windows)
-
 export type DownsellRiskSummary = { arr: number; lines: number; contracts: number };
 
 /** True when the date falls from today to today + `days`, inclusive. `days` null = any date. */
@@ -1985,12 +1983,24 @@ function renewsWithin(date: string, asOf: string, days: number | null): boolean 
 }
 
 /**
- * ARR at downsell risk: active contract lines with an adoption drop whose
- * renewal date is within `days` of today, whether or not a renewal deal exists.
- * `days` null = every active line with an adoption drop, whatever its renewal date.
+ * ARR at downsell risk: active lines of customer contracts with an adoption drop
+ * whose renewal date is inside the customer's segment renewal window
+ * (RENEWAL_RISK_RULES.windowDays, the same window as renewal risk and missing
+ * renewal deals), whether or not a renewal deal exists.
+ * `inWindowOnly` false = every active line with an adoption drop, whatever its renewal date.
  */
-export function calcDownsellRiskNext(lineMetrics: ContractLineMetrics[], asOf: string, days: number | null = RENEWAL_LOOKAHEAD_DAYS): DownsellRiskSummary {
-  const atRisk = lineMetrics.filter((m) => m.status === "active" && m.adoptionDrop && renewsWithin(m.renewalDate, asOf, days));
+export function calcDownsellRiskNext(
+  lineMetrics: ContractLineMetrics[],
+  accounts: AccountRow[],
+  asOf: string,
+  inWindowOnly = true,
+): DownsellRiskSummary {
+  const customers = new Map(customersOnly(accounts).map((a) => [a.id, a]));
+  const inWindow = (m: ContractLineMetrics) => {
+    const a = customers.get(m.accountId);
+    return a !== undefined && renewsWithin(m.renewalDate, asOf, renewalWindowDays(a.segment));
+  };
+  const atRisk = lineMetrics.filter((m) => m.status === "active" && m.adoptionDrop && (!inWindowOnly || inWindow(m)));
   return {
     arr: atRisk.reduce((s, m) => s + m.arr, 0),
     lines: atRisk.length,
@@ -2484,10 +2494,9 @@ async function loadRenewalDeals(filter?: (q: Query) => Query): Promise<RenewalDe
 
 export type RenewalDealsResult = {
   deals: RenewalDealRow[]; // open renewal deals, soonest close first
-  downsellRiskNext: DownsellRiskSummary; // adoption-drop lines renewing in the next 180 days, deal or not
+  downsellRiskNext: DownsellRiskSummary; // adoption-drop lines renewing inside their segment window, deal or not
   downsellRiskAllCustomers: DownsellRiskSummary; // every active line with an adoption drop, for context
   missingRenewalDeals: MissingRenewalDealsResult; // contracts renewing inside their segment window with no open renewal deal
-  lookaheadDays: number;
 };
 
 /** Open renewal deals with their contract lines, ARR at downsell risk, and contracts missing a renewal deal. */
@@ -2507,10 +2516,9 @@ export async function getRenewalDeals(asOf: string = AS_OF_DATE): Promise<Renewa
   const levels = new Map(risk.all.map((r) => [r.accountId, r.level]));
   return {
     deals: rows,
-    downsellRiskNext: calcDownsellRiskNext(metrics, asOf),
-    downsellRiskAllCustomers: calcDownsellRiskNext(metrics, asOf, null),
+    downsellRiskNext: calcDownsellRiskNext(metrics, accounts, asOf),
+    downsellRiskAllCustomers: calcDownsellRiskNext(metrics, accounts, asOf, false),
     missingRenewalDeals: calcMissingRenewalDeals(accounts, metrics, deals, levels, asOf),
-    lookaheadDays: RENEWAL_LOOKAHEAD_DAYS,
   };
 }
 

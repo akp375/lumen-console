@@ -444,4 +444,6 @@ The live results table in section 1 shows the figures from before this fix. Over
 
 **Tests:** 79 in total. The missing-deal test now covers each window's edge (SMB day 90/91, mid-market 120/121, enterprise 180/181).
 
+**Downsell card too.** "ARR at downsell risk" on the Renewals page now uses the same segment windows instead of a flat 180 days, and is renamed "ARR at downsell risk, inside renewal window". It went from $216K (9 lines on 5 contracts, see 21 Nov) to **$208,800 (7 lines on 3 contracts)**: Ionic Retail $99,600, Cedarline Legal $74,400 and Vantagely Energy $34,800. Orchardly Labs (136 days) and Orchardly Logistics (175 days) dropped out because they are SMB, with a 90-day window. The "across all customers" small print is unchanged at $298K. The downsell test now covers the 90/91, 120/121 and 180/181 day edges. Nothing on the Renewals page looks a flat 180 days ahead any more.
+
 **Open item.** HubSpot has not been re-synced since the renewal-risk rule changed, so the Renewal risk values there are out of date (6 High before, 4 now). Run a dry run, then `npm run hubspot:sync`, when ready.

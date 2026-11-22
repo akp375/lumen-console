@@ -65,13 +65,12 @@ function DownsellSummary({ result }: { result: RenewalDealsResult }) {
   const all = result.downsellRiskAllCustomers;
   const m = result.missingRenewalDeals;
   const openAmount = result.deals.reduce((s, r) => s + r.amount, 0);
-  const days = result.lookaheadDays;
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <Stat
-        label={`ARR at downsell risk, next ${days} days`}
+        label="ARR at downsell risk, inside renewal window"
         value={usdCompact(d.arr)}
-        detail={`${d.lines} ${d.lines === 1 ? "line" : "lines"} with an adoption drop on ${d.contracts} ${d.contracts === 1 ? "contract" : "contracts"} renewing in ${days} days, deal or not · ${usdCompact(all.arr)} across all customers`}
+        detail={`${d.lines} ${d.lines === 1 ? "line" : "lines"} with an adoption drop on ${d.contracts} ${d.contracts === 1 ? "contract" : "contracts"} renewing inside the renewal window, deal or not · ${usdCompact(all.arr)} across all customers`}
         tone={d.arr > 0 ? "alert" : "default"}
       />
       <Stat
