@@ -26,6 +26,10 @@
  *   - contract_lines: cleared, then refilled; usage_daily.active_users and
  *     opportunities.contract_id are filled. Built by scripts/contracts-lib.ts, the
  *     same code as `npm run contracts:backfill` (needs the 20261121 migration).
+ *   - team (upserted), accounts.csm_id, opportunities.ae_id / adr_id / csm_id,
+ *     cs_activities (cleared, then refilled) and support_tickets.csat_score.
+ *     Built by scripts/health-inputs-lib.ts, the same code as
+ *     `npm run health-inputs:backfill` (needs the 20261122 migration).
  *   - seed_runs: one row added per run (when it was seeded, for the Integrations page).
  *   - health_scores, expansion_plays, briefings, llm_calls: never touched.
  *
@@ -42,6 +46,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "../src/lib/as-of-date.ts";
 import { buildContractLayer, contractLayerFingerprint, usageKey, type ContractLayer } from "./contracts-lib.ts";
+import { buildHealthInputs, healthInputsFingerprint, type HealthInputs } from "./health-inputs-lib.ts";
 
 // ---------------------------------------------------------------------------
 // Fixed-seed random numbers
@@ -1303,7 +1308,7 @@ async function clear(db: SupabaseClient, table: string, column: string): Promise
   if (error) throw new Error(`Clearing ${table} failed: ${error.message}`);
 }
 
-async function writeToSupabase(d: Dataset, contracts: ContractLayer): Promise<void> {
+async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: HealthInputs): Promise<void> {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const missing = [!url && "SUPABASE_URL", !key && "SUPABASE_SERVICE_ROLE_KEY"].filter(Boolean);
@@ -1321,24 +1326,29 @@ async function writeToSupabase(d: Dataset, contracts: ContractLayer): Promise<vo
     ["nps_responses", "id"],
     ["model_prices", "model"],
     ["contract_lines", "id"],
+    ["cs_activities", "id"],
   ] as const) {
     await clear(db, table, column);
   }
 
   console.log("Writing...");
-  const accountRows = d.accounts.map((a) => a.row);
+  const { error: teamError } = await db.from("team").upsert(health.team, { onConflict: "id" });
+  if (teamError) throw new Error(`Writing team failed: ${teamError.message}`);
+  console.log(`  team: ${health.team.length} rows`);
+  const accountRows = d.accounts.map((a) => ({ ...a.row, csm_id: health.accountCsm.get(a.row.id) ?? null }));
   for (let i = 0; i < accountRows.length; i += BATCH) {
     const { error } = await db.from("accounts").upsert(accountRows.slice(i, i + BATCH), { onConflict: "id" });
     if (error) throw new Error(`Writing accounts failed: ${error.message}`);
   }
   console.log(`  accounts: ${accountRows.length} rows`);
   await insertAll(db, "model_prices", d.modelPrices);
-  await insertAll(db, "opportunities", d.opportunities.map((o) => ({ ...o, contract_id: contracts.dealContract.get(o.id) ?? null })));
+  await insertAll(db, "opportunities", d.opportunities.map((o) => ({ ...o, contract_id: contracts.dealContract.get(o.id) ?? null, ...health.dealOwners.get(o.id) })));
   await insertAll(db, "invoices", d.invoices);
   await insertAll(db, "usage_daily", d.usage.map((u) => ({ ...u, active_users: contracts.activeUsers.get(usageKey(u)) ?? null })));
   await insertAll(db, "contract_lines", contracts.lines);
-  await insertAll(db, "support_tickets", d.tickets);
+  await insertAll(db, "support_tickets", d.tickets.map((t) => ({ ...t, csat_score: health.csat.get(t.id) ?? null })));
   await insertAll(db, "nps_responses", d.nps);
+  await insertAll(db, "cs_activities", health.activities);
 
   // Record the run for the Integrations page. Optional: older databases may not have the table yet.
   const { error: runError } = await db.from("seed_runs").insert({ as_of_date: AS_OF_DATE });
@@ -1382,11 +1392,24 @@ async function main(): Promise<void> {
   console.log(`Contract layer: ${contracts.lines.length} lines, ${contracts.dealContract.size} renewal deals linked, ` +
     `${contracts.unusedCore.length} customers with unused Core. Fingerprint: ${contractLayerFingerprint(contracts)}\n`);
 
+  // Health-score inputs (team, ownership, CSM activities, CSAT), built by the same code as
+  // `npm run health-inputs:backfill`, so a reseed reproduces them exactly.
+  const health = buildHealthInputs({
+    accounts: accounts.map((a) => a.row),
+    opportunities,
+    tickets,
+    usage,
+    nps,
+    asOf: AS_OF_DATE,
+  });
+  console.log(`Health inputs: ${health.team.length} team, ${health.activities.length} CS activities, ${health.csat.size} CSAT answers. ` +
+    `Fingerprint: ${healthInputsFingerprint(health)}\n`);
+
   if (dryRun) {
     console.log("Dry run: nothing was written to the database.");
     return;
   }
-  await writeToSupabase(data, contracts);
+  await writeToSupabase(data, contracts, health);
 }
 
 main().catch((err: unknown) => {

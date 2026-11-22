@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-// Banner date is display text only, set by the owner. The app's calculations use AS_OF_DATE (src/lib/as-of-date.ts).
+// The banner carries no date on purpose. "Today" for every calculation is AS_OF_DATE (src/lib/as-of-date.ts).
 import { NavBar, NavBarPlaceholder } from "@/components/NavBar";
 import { PAGES, PRODUCT_NAME, tabTitle } from "@/lib/pages";
 
@@ -30,7 +30,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col bg-zinc-50 dark:bg-black">
         <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-          Demo data: Lumen AI is a fictional company with seeded synthetic data. As of 15 September 2026.
+          Demo data: Lumen AI is a fictional company.
         </div>
         <Suspense fallback={<NavBarPlaceholder />}>
           <NavBar />

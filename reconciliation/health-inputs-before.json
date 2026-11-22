@@ -1,0 +1,155 @@
+{
+  "asOf": "2026-11-13",
+  "takenAt": "2026-11-22T04:46:59.352Z",
+  "totalArr": 3069960,
+  "customerCount": 150,
+  "highRisk": [
+    "acc_0054 Larkspur Systems",
+    "acc_0059 Cedarline Legal",
+    "acc_0074 Quillon Retail",
+    "acc_0083 Umbra Energy",
+    "acc_0123 Larkspur Analytics",
+    "acc_0135 Vantagely Energy"
+  ],
+  "riskLevel": {
+    "acc_0054": "High",
+    "acc_0083": "High",
+    "acc_0013": "Medium",
+    "acc_0039": "Medium",
+    "acc_0131": "Medium",
+    "acc_0135": "High",
+    "acc_0074": "High",
+    "acc_0147": "Medium",
+    "acc_0125": "Medium",
+    "acc_0130": "Medium",
+    "acc_0112": "Medium",
+    "acc_0123": "High",
+    "acc_0016": "Medium",
+    "acc_0059": "High",
+    "acc_0108": "Medium",
+    "acc_0031": "Medium"
+  },
+  "tables": {
+    "accounts": {
+      "rows": 190,
+      "columns": [
+        "churn_date",
+        "id",
+        "included_tokens_monthly",
+        "mrr_usd",
+        "name",
+        "owner",
+        "plan",
+        "renewal_date",
+        "seats",
+        "segment",
+        "start_date",
+        "status"
+      ],
+      "fingerprint": "392842b47a24"
+    },
+    "opportunities": {
+      "rows": 207,
+      "columns": [
+        "account_id",
+        "amount_usd",
+        "close_date",
+        "contract_id",
+        "created_date",
+        "executive_sponsor",
+        "forecast_category",
+        "id",
+        "last_activity_date",
+        "next_step",
+        "probability",
+        "source",
+        "stage",
+        "stage_entered_date",
+        "type"
+      ],
+      "fingerprint": "b3cb88ef4b7e"
+    },
+    "invoices": {
+      "rows": 1901,
+      "columns": [
+        "account_id",
+        "amount_usd",
+        "month",
+        "status"
+      ],
+      "fingerprint": "52eed8c4d1d8"
+    },
+    "usage_daily": {
+      "rows": 38394,
+      "columns": [
+        "account_id",
+        "active_users",
+        "date",
+        "feature",
+        "input_tokens",
+        "model",
+        "output_tokens",
+        "requests"
+      ],
+      "fingerprint": "0dd525ce8775"
+    },
+    "model_prices": {
+      "rows": 3,
+      "columns": [
+        "as_of",
+        "input_usd_per_million",
+        "model",
+        "output_usd_per_million",
+        "provider"
+      ],
+      "fingerprint": "315466865910"
+    },
+    "support_tickets": {
+      "rows": 957,
+      "columns": [
+        "account_id",
+        "closed_at",
+        "id",
+        "opened_at",
+        "severity",
+        "status"
+      ],
+      "fingerprint": "aba01b8a760c"
+    },
+    "nps_responses": {
+      "rows": 328,
+      "columns": [
+        "account_id",
+        "comment",
+        "id",
+        "responded_at",
+        "score"
+      ],
+      "fingerprint": "a64561fee71f"
+    },
+    "contract_lines": {
+      "rows": 314,
+      "columns": [
+        "account_id",
+        "arr_usd",
+        "auto_renew",
+        "contract_id",
+        "id",
+        "included_tokens_monthly",
+        "product",
+        "purchase_date",
+        "quantity",
+        "renewal_date",
+        "status",
+        "term_months",
+        "unit_price_usd"
+      ],
+      "fingerprint": "7fd2a9280666"
+    },
+    "health_scores": {
+      "rows": 0,
+      "columns": [],
+      "fingerprint": "e3b0c44298fc"
+    }
+  }
+}
