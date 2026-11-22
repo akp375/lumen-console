@@ -53,6 +53,43 @@ export function decimal(n: number | null): string {
   return n === null ? "" : String(Math.round(n * 10_000) / 10_000);
 }
 
+/** A HubSpot checkbox (booleancheckbox) stores "true" / "false"; blank when the value doesn't apply. */
+export function checkbox(b: boolean | null): string {
+  return b === null ? "" : String(b);
+}
+
+/** Renewal-risk reasons as one line of text, e.g. "Health below 50; Downsell risk". Blank when not a customer. */
+export function reasonsText(reasons: readonly string[] | null): string {
+  return reasons ? reasons.join("; ") : "";
+}
+
+/** Our sponsor status -> the label of the Executive sponsor status option. */
+export const SPONSOR_STATUS_LABEL: Record<string, string> = { active: "Active", left: "Left", none: "None" };
+
+/** A HubSpot multi-select (checkbox) stores the chosen option values joined by ";". */
+export function multiSelect(labels: readonly string[] | null): string {
+  return labels ? labels.map(optionValue).join(";") : "";
+}
+
+/** "Executive sponsor" for a current sponsor, "Former sponsor" for one who left (the Lumen role contact property). */
+export function sponsorRoleLabel(status: "active" | "left"): string {
+  return status === "active" ? "Executive sponsor" : "Former sponsor";
+}
+
+/** The executive sponsor as a HubSpot contact. The email is made up, at <company>.example.com
+ *  (reserved for examples, can't receive mail), and stays the same every run so the contact is matched on it. */
+export function sponsorContact(a: Pick<CrmAccountRow, "name">, sponsor: { name: string; title: string | null }): {
+  firstname: string;
+  lastname: string;
+  jobtitle: string;
+  email: string;
+} {
+  const [firstname, ...rest] = sponsor.name.trim().split(/\s+/);
+  const lastname = rest.join(" ");
+  const local = [firstname, lastname].filter(Boolean).map(slug).join(".");
+  return { firstname, lastname, jobtitle: sponsor.title ?? "", email: `${local}@${slug(a.name)}.example.com` };
+}
+
 /** The single account used by --one: the largest-ARR customer that has an open deal and both a margin and capacity figure. */
 export function pickTestAccount(data: CrmSyncData): CrmAccountRow | undefined {
   return data.accounts

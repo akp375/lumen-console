@@ -1,0 +1,961 @@
+{
+  "takenAt": "2026-11-22T22:49:00.633Z",
+  "note": "HubSpot lumen_renewal_risk before the 22 Nov sync (values from the 20 Nov sync)",
+  "counts": {
+    "low": 134,
+    "medium": 10,
+    "high": 6
+  },
+  "rows": {
+    "acc_0001": {
+      "name": "Tidewater Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0002": {
+      "name": "Driftwood Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0003": {
+      "name": "Quillon Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0004": {
+      "name": "Alderbrook Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0005": {
+      "name": "Larkspur Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0006": {
+      "name": "Driftwood Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0007": {
+      "name": "Meridian Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0008": {
+      "name": "Granitebay Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0009": {
+      "name": "Cedarline Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0010": {
+      "name": "Saltmarsh Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0011": {
+      "name": "Harborview Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0012": {
+      "name": "Nimbus Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0013": {
+      "name": "Copperleaf Media",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0014": {
+      "name": "Ionic Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0015": {
+      "name": "Beaconfield Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0016": {
+      "name": "Fjordway Health",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0017": {
+      "name": "Bluefin Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0018": {
+      "name": "Fjordway Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0019": {
+      "name": "Meridian Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0020": {
+      "name": "Umbra Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0021": {
+      "name": "Juniper Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0022": {
+      "name": "Vantagely Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0023": {
+      "name": "Granitebay Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0024": {
+      "name": "Nimbus Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0025": {
+      "name": "Nimbus Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0026": {
+      "name": "Nimbus Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0027": {
+      "name": "Beaconfield Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0028": {
+      "name": "Saltmarsh Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0029": {
+      "name": "Pinecrest Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0030": {
+      "name": "Redwoodly Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0031": {
+      "name": "Willowmere Analytics",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0032": {
+      "name": "Alderbrook Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0033": {
+      "name": "Aster Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0034": {
+      "name": "Quillon Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0035": {
+      "name": "Orchardly Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0036": {
+      "name": "Aster Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0037": {
+      "name": "Deltaform Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0038": {
+      "name": "Willowmere Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0039": {
+      "name": "Deltaform Legal",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0040": {
+      "name": "Nimbus Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0041": {
+      "name": "Emberly Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0042": {
+      "name": "Driftwood Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0043": {
+      "name": "Tidewater Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0044": {
+      "name": "Aster Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0045": {
+      "name": "Larkspur Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0046": {
+      "name": "Umbra Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0047": {
+      "name": "Xylo Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0048": {
+      "name": "Vantagely Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0049": {
+      "name": "Juniper Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0050": {
+      "name": "Orchardly Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0051": {
+      "name": "Yarrow Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0052": {
+      "name": "Saltmarsh Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0053": {
+      "name": "Tidewater Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0054": {
+      "name": "Larkspur Systems",
+      "status": "customer",
+      "renewalRisk": "high"
+    },
+    "acc_0055": {
+      "name": "Alderbrook Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0056": {
+      "name": "Tidewater Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0057": {
+      "name": "Copperleaf Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0058": {
+      "name": "Aster Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0059": {
+      "name": "Cedarline Legal",
+      "status": "customer",
+      "renewalRisk": "high"
+    },
+    "acc_0060": {
+      "name": "Willowmere Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0061": {
+      "name": "Nimbus Energy",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0062": {
+      "name": "Driftwood Energy",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0063": {
+      "name": "Kestrel Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0064": {
+      "name": "Quillon Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0065": {
+      "name": "Harborview Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0066": {
+      "name": "Fjordway Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0067": {
+      "name": "Alderbrook Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0068": {
+      "name": "Juniper Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0069": {
+      "name": "Copperleaf Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0070": {
+      "name": "Emberly Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0071": {
+      "name": "Deltaform Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0072": {
+      "name": "Xylo Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0073": {
+      "name": "Pinecrest Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0074": {
+      "name": "Quillon Retail",
+      "status": "customer",
+      "renewalRisk": "high"
+    },
+    "acc_0075": {
+      "name": "Larkspur Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0076": {
+      "name": "Driftwood Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0077": {
+      "name": "Bluefin Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0078": {
+      "name": "Aster Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0079": {
+      "name": "Harborview Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0080": {
+      "name": "Emberly Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0081": {
+      "name": "Quillon Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0082": {
+      "name": "Alderbrook Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0083": {
+      "name": "Umbra Energy",
+      "status": "customer",
+      "renewalRisk": "high"
+    },
+    "acc_0084": {
+      "name": "Aster Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0085": {
+      "name": "Copperleaf Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0086": {
+      "name": "Cedarline Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0087": {
+      "name": "Deltaform Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0088": {
+      "name": "Deltaform Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0089": {
+      "name": "Ionic Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0090": {
+      "name": "Willowmere Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0091": {
+      "name": "Saltmarsh Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0092": {
+      "name": "Beaconfield Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0093": {
+      "name": "Beaconfield Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0094": {
+      "name": "Willowmere Energy",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0095": {
+      "name": "Beaconfield Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0096": {
+      "name": "Kestrel Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0097": {
+      "name": "Larkspur Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0098": {
+      "name": "Vantagely Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0099": {
+      "name": "Nimbus Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0100": {
+      "name": "Redwoodly Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0101": {
+      "name": "Orchardly Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0102": {
+      "name": "Aster Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0103": {
+      "name": "Emberly Energy",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0104": {
+      "name": "Redwoodly Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0105": {
+      "name": "Vantagely Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0106": {
+      "name": "Juniper Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0107": {
+      "name": "Fjordway Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0108": {
+      "name": "Zephyrine Legal",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0109": {
+      "name": "Bluefin Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0110": {
+      "name": "Fjordway Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0111": {
+      "name": "Ionic Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0112": {
+      "name": "Juniper Labs",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0113": {
+      "name": "Xylo Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0114": {
+      "name": "Willowmere Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0115": {
+      "name": "Ionic Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0116": {
+      "name": "Alderbrook Systems",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0117": {
+      "name": "Zephyrine Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0118": {
+      "name": "Ionic Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0119": {
+      "name": "Quillon Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0120": {
+      "name": "Pinecrest Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0121": {
+      "name": "Zephyrine Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0122": {
+      "name": "Zephyrine Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0123": {
+      "name": "Larkspur Analytics",
+      "status": "customer",
+      "renewalRisk": "high"
+    },
+    "acc_0124": {
+      "name": "Driftwood Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0125": {
+      "name": "Harborview Logistics",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0126": {
+      "name": "Harborview Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0127": {
+      "name": "Alderbrook Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0128": {
+      "name": "Yarrow Energy",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0129": {
+      "name": "Tidewater Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0131": {
+      "name": "Granitebay Health",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0132": {
+      "name": "Granitebay Robotics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0133": {
+      "name": "Quillon Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0134": {
+      "name": "Juniper Energy",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0135": {
+      "name": "Vantagely Energy",
+      "status": "customer",
+      "renewalRisk": "high"
+    },
+    "acc_0136": {
+      "name": "Bluefin Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0137": {
+      "name": "Cedarline Labs",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0138": {
+      "name": "Granitebay Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0139": {
+      "name": "Nimbus Media",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0140": {
+      "name": "Redwoodly Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0141": {
+      "name": "Cedarline Logistics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0142": {
+      "name": "Vantagely Legal",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0143": {
+      "name": "Granitebay Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0144": {
+      "name": "Meridian Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0145": {
+      "name": "Fjordway Finance",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0146": {
+      "name": "Bluefin Analytics",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0147": {
+      "name": "Zephyrine Health",
+      "status": "customer",
+      "renewalRisk": "medium"
+    },
+    "acc_0148": {
+      "name": "Redwoodly Retail",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0149": {
+      "name": "Yarrow Health",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0150": {
+      "name": "Beaconfield Bio",
+      "status": "customer",
+      "renewalRisk": "low"
+    },
+    "acc_0151": {
+      "name": "Larkspur Labs",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0152": {
+      "name": "Tidewater Bio",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0153": {
+      "name": "Deltaform Analytics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0154": {
+      "name": "Bluefin Finance",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0155": {
+      "name": "Orchardly Media",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0156": {
+      "name": "Larkspur Media",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0157": {
+      "name": "Juniper Health",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0158": {
+      "name": "Yarrow Analytics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0159": {
+      "name": "Kestrel Labs",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0160": {
+      "name": "Tidewater Health",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0161": {
+      "name": "Umbra Legal",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0162": {
+      "name": "Kestrel Logistics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0163": {
+      "name": "Pinecrest Systems",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0164": {
+      "name": "Yarrow Bio",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0165": {
+      "name": "Yarrow Retail",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0166": {
+      "name": "Copperleaf Finance",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0167": {
+      "name": "Alderbrook Robotics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0168": {
+      "name": "Fjordway Analytics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0169": {
+      "name": "Emberly Health",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0170": {
+      "name": "Copperleaf Analytics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0171": {
+      "name": "Beaconfield Robotics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0172": {
+      "name": "Cedarline Robotics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0173": {
+      "name": "Xylo Finance",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0174": {
+      "name": "Tidewater Logistics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0175": {
+      "name": "Kestrel Retail",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0176": {
+      "name": "Willowmere Retail",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0177": {
+      "name": "Nimbus Systems",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0178": {
+      "name": "Tidewater Legal",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0179": {
+      "name": "Ionic Analytics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0180": {
+      "name": "Quillon Analytics",
+      "status": "prospect",
+      "renewalRisk": null
+    },
+    "acc_0181": {
+      "name": "Bluefin Media",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0182": {
+      "name": "Vantagely Labs",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0183": {
+      "name": "Deltaform Bio",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0184": {
+      "name": "Cedarline Media",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0185": {
+      "name": "Zephyrine Systems",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0186": {
+      "name": "Kestrel Finance",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0187": {
+      "name": "Orchardly Bio",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0188": {
+      "name": "Xylo Robotics",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0189": {
+      "name": "Cedarline Bio",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0190": {
+      "name": "Ionic Robotics",
+      "status": "churned",
+      "renewalRisk": null
+    },
+    "acc_0130": {
+      "name": "Ionic Logistics",
+      "status": "customer",
+      "renewalRisk": "medium"
+    }
+  }
+}

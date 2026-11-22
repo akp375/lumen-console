@@ -37,6 +37,7 @@ import {
   calcRenewalDealCoverage,
   RENEWAL_RISK_RULES,
   dealRiskLevel,
+  type ContractLineRow,
   type DealRiskInput,
   usageWindow,
   type AccountRow,
@@ -766,11 +767,12 @@ test("Deal risk levels: 0 = None, 1 = Amber, 2+ = Red", () => {
 test("CRM sync: customer-only values, risk levels for every customer and open deal", () => {
   const accounts = [
     // K1: enterprise, renews in 49 days, health 45 = High
-    acc({ id: "K1", name: "Kilo", status: "customer", segment: "enterprise", mrr_usd: 1000, included_tokens_monthly: 10_000_000, renewal_date: "2027-01-01" }),
+    acc({ id: "K1", name: "Kilo", status: "customer", segment: "enterprise", mrr_usd: 1000, included_tokens_monthly: 10_000_000, renewal_date: "2027-01-01", sponsor_status: "active", csm_id: "T1", owner: "Ana AE", executive_sponsor_name: "Sam Sponsor", executive_sponsor_title: "CTO" }),
     // K2: health 30 but renews in 200 days, outside every window: Low
     acc({ id: "K2", status: "customer", mrr_usd: 500, renewal_date: "2027-06-01" }),
     // K3: renews in 32 days, health 60 = Medium
-    acc({ id: "K3", status: "customer", mrr_usd: 200, renewal_date: "2026-12-15" }),
+    // K3 is SMB: a sponsor name on file is ignored (SMB doesn't track sponsors)
+    acc({ id: "K3", status: "customer", mrr_usd: 200, renewal_date: "2026-12-15", sponsor_status: "left", executive_sponsor_name: "Old Name" }),
     acc({ id: "P1", status: "prospect" }), // has an open deal
     acc({ id: "P2", status: "prospect" }), // closed deal only
     acc({ id: "C1", status: "churned", churn_date: "2026-09-01" }),
@@ -790,8 +792,8 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
     ...o,
   });
   const deals = [
-    deal({ id: "E1", account_id: "P1", stage: "Proposal", executive_sponsor: null, next_step: null }), // 2 signals: Red
-    deal({ id: "E2", account_id: "K1", stage: "Negotiation", forecast_category: "Commit" }), // healthy: None
+    deal({ id: "E1", account_id: "P1", stage: "Proposal", executive_sponsor: null, next_step: null, adr_id: "T2" }), // 2 signals: Red
+    deal({ id: "E2", account_id: "K1", type: "renewal", stage: "Negotiation", forecast_category: "Commit", csm_id: "T1" }), // healthy: None; K1's open renewal deal
     deal({ id: "E3", account_id: "K2", stage: "Demo", next_step: null }), // 1 signal: Amber
     deal({ id: "E4", account_id: "P2", stage: "Closed Lost", forecast_category: "Omitted", executive_sponsor: null }), // closed: no risk, no days
   ];
@@ -799,10 +801,22 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
   const lines = [{ arr: 1000, adoptionDrop: false }];
   const health = new Map([
     ["K1", { score: 45, change: 0, npsChange: null, lines }],
-    ["K2", { score: 30, change: 0, npsChange: null, lines }],
+    // K2: a 6,000 line with an adoption drop and down 12 points, but outside its window, so still Low
+    ["K2", { score: 30.4, change: -12, npsChange: null, lines: [{ arr: 6_000, adoptionDrop: true }] }],
     ["K3", { score: 60, change: 0, npsChange: null, lines }],
   ]);
-  const { accounts: a, deals: d } = calcCrmSyncData(accounts, deals, usage, PRICES, nps, TODAY, health);
+  const team = new Map([["T1", "Casey CSM"], ["T2", "Drew ADR"]]);
+  const line = (id: string, account_id: string, product: string, arr_usd: number, status: ContractLineRow["status"] = "active"): ContractLineRow => ({
+    id, account_id, contract_id: `C-${account_id}`, product, quantity: 1, unit_price_usd: arr_usd, arr_usd,
+    purchase_date: "2026-01-01", renewal_date: "2027-01-01", term_months: 12, auto_renew: true, status, included_tokens_monthly: 0,
+  });
+  const contractLines = [
+    line("L1", "K1", "Extract", 3_000),
+    line("L2", "K1", "Core", 9_000),
+    line("L3", "K1", "Code Review", 500, "churned"), // ended: not owned
+    line("L4", "C1", "Core", 4_000, "churned"),
+  ];
+  const { accounts: a, deals: d } = calcCrmSyncData(accounts, deals, usage, PRICES, nps, TODAY, health, team, contractLines);
   const A = Object.fromEntries(a.map((r) => [r.accountId, r]));
   const D = Object.fromEntries(d.map((r) => [r.opportunityId, r]));
 
@@ -817,6 +831,26 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
   assert.deepEqual([A.K1.renewalRisk, A.K2.renewalRisk, A.K3.renewalRisk], ["High", "Low", "Medium"]);
   assert.equal(A.K1.hasOpenDeal, true);
 
+  // Health, reasons, downsell, missing renewal deal, sponsor and people
+  assert.deepEqual([A.K1.healthScore, A.K2.healthScore, A.K3.healthScore], [45, 30, 60]); // rounded as on the pages
+  assert.deepEqual([A.K1.healthDeclining, A.K2.healthDeclining], [false, true]); // K2 down 12 on last week
+  assert.deepEqual(A.K1.renewalRiskReasons, ["Health below 50"]);
+  assert.deepEqual(A.K2.renewalRiskReasons, []); // Low
+  assert.deepEqual([A.K1.downsellArr, A.K2.downsellArr], [0, 6_000]); // any renewal date
+  // K1 has an open renewal deal; K3 (SMB, 32 days, inside 90) has none; K2 is outside its window
+  assert.deepEqual([A.K1.missingRenewalDeal, A.K2.missingRenewalDeal, A.K3.missingRenewalDeal], [false, false, true]);
+  assert.equal(A.K1.sponsorStatus, "active"); // enterprise: tracked
+  assert.equal(A.K3.sponsorStatus, null); // SMB: not tracked
+  assert.deepEqual([A.K1.ae, A.K1.csm, A.K3.csm], ["Ana AE", "Casey CSM", null]);
+
+  // Products from active lines only, in product order; ARR per product
+  assert.deepEqual(A.K1.productsOwned, ["Core", "Extract"]);
+  assert.deepEqual(A.K1.productArr, { Core: 9_000, Extract: 3_000, "Code Review": 0 });
+  assert.deepEqual([A.K2.productsOwned, A.K2.productArr], [[], { Core: 0, Extract: 0, "Code Review": 0 }]); // customer with no lines
+  // Executive sponsor contact: enterprise / mid-market only
+  assert.deepEqual(A.K1.sponsor, { name: "Sam Sponsor", title: "CTO", status: "active" });
+  assert.equal(A.K3.sponsor, null);
+
   // The Renewals page and the sync must never disagree: every flagged row's level is what the sync sends.
   const page = calcRenewalRisk(accounts, usage, PRICES, health, TODAY);
   assert.deepEqual(page.rows.map((r) => [r.accountId, r.level]), [["K1", "High"], ["K3", "Medium"]]); // High first
@@ -828,6 +862,12 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
     assert.equal(A[id].arr, null);
     assert.equal(A[id].grossMargin, null);
     assert.equal(A[id].renewalRisk, null);
+    assert.equal(A[id].healthScore, null);
+    assert.equal(A[id].missingRenewalDeal, null);
+    assert.equal(A[id].downsellArr, null);
+    assert.equal(A[id].productsOwned, null); // churned C1's ended line doesn't count
+    assert.equal(A[id].productArr, null);
+    assert.equal(A[id].sponsor, null);
   }
   assert.equal(A.P1.hasOpenDeal, true);
   assert.equal(A.P2.hasOpenDeal, false);
@@ -838,6 +878,7 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
   assert.equal(D.E4.daysInStage, null);
   assert.equal(D.E2.forecastCategory, "Commit");
   assert.equal(D.E1.accountName, "P1");
+  assert.deepEqual([D.E1.adr, D.E1.csm, D.E2.adr, D.E2.csm], ["Drew ADR", null, null, "Casey CSM"]);
 });
 
 test("Renewal deal coverage: missing only inside the window with no open renewal deal", () => {

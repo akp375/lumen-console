@@ -2,13 +2,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  checkbox,
   dealName,
   decimal,
   fictionalContact,
   FORECAST_TO_HUBSPOT_LABEL,
   isBackwardLifecycleMove,
   lifecycleLabel,
+  multiSelect,
   pickTestAccount,
+  reasonsText,
+  sponsorContact,
+  sponsorRoleLabel,
 } from "./hubspot-sync.ts";
 import type { CrmAccountRow } from "./metrics.ts";
 
@@ -22,7 +27,18 @@ const account = (a: Partial<CrmAccountRow> & Pick<CrmAccountRow, "accountId" | "
   latestNps: null,
   npsChange: null,
   renewalRisk: null,
+  renewalRiskReasons: null,
+  healthScore: null,
+  healthDeclining: null,
+  downsellArr: null,
+  missingRenewalDeal: null,
+  sponsorStatus: null,
   hasOpenDeal: false,
+  ae: null,
+  csm: null,
+  productsOwned: null,
+  productArr: null,
+  sponsor: null,
   ...a,
 });
 
@@ -82,4 +98,30 @@ test("Fictional contacts: names vary across accounts", () => {
   const people = ids.map((accountId) => fictionalContact({ accountId, name: accountId }));
   assert.ok(new Set(people.map((p) => p.lastname)).size >= 10, "at least 10 different last names in 30");
   assert.ok(new Set(people.map((p) => `${p.firstname} ${p.lastname}`)).size >= 25, "mostly unique full names");
+});
+
+test("Checkbox and reasons: HubSpot text values, blank when the value doesn't apply", () => {
+  assert.deepEqual([checkbox(true), checkbox(false), checkbox(null)], ["true", "false", ""]);
+  assert.equal(reasonsText(["Health below 50", "Downsell risk"]), "Health below 50; Downsell risk");
+  assert.equal(reasonsText([]), ""); // Low: no reasons
+  assert.equal(reasonsText(null), ""); // not a customer
+});
+
+test("Products owned: option values joined by semicolons", () => {
+  assert.equal(multiSelect(["Core", "Code Review"]), "core;code review");
+  assert.equal(multiSelect([]), ""); // customer with no active lines
+  assert.equal(multiSelect(null), ""); // not a customer
+});
+
+test("Sponsor contact: name split, made-up email at <company>.example.com, role by status", () => {
+  assert.deepEqual(sponsorContact({ name: "Ionic Retail" }, { name: "Priyanka Lindqvist", title: "Chief Data Officer" }), {
+    firstname: "Priyanka",
+    lastname: "Lindqvist",
+    jobtitle: "Chief Data Officer",
+    email: "priyanka.lindqvist@ionic-retail.example.com",
+  });
+  // Apostrophes and extra spaces never reach the email; a missing title is blank
+  assert.equal(sponsorContact({ name: "O'Brien & Co" }, { name: "  Liam  O'Connor ", title: null }).email, "liam.o-connor@o-brien-co.example.com");
+  assert.equal(sponsorContact({ name: "Acme" }, { name: "Cher", title: null }).email, "cher@acme.example.com");
+  assert.deepEqual([sponsorRoleLabel("active"), sponsorRoleLabel("left")], ["Executive sponsor", "Former sponsor"]);
 });

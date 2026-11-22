@@ -33,6 +33,11 @@ export type AccountRow = {
   owner: string; // account owner
   /** Executive sponsor status: enterprise and mid-market customers only; empty (not tracked) for everyone else. */
   sponsor_status?: "active" | "left" | "none" | null;
+  /** Customer success manager (team.id); prospects have none. */
+  csm_id?: string | null;
+  /** Executive sponsor's name and title (enterprise and mid-market customers with an active or former sponsor). */
+  executive_sponsor_name?: string | null;
+  executive_sponsor_title?: string | null;
 };
 
 export type OpportunityRow = {
@@ -1057,6 +1062,9 @@ export type DealRiskInput = OpportunityRow & {
   stage_entered_date: string | null;
   last_activity_date: string | null;
   next_step: string | null;
+  /** People on the deal (team.id). */
+  adr_id?: string | null;
+  csm_id?: string | null;
 };
 
 export type DealRiskRow = {
@@ -1247,7 +1255,26 @@ export type CrmAccountRow = {
   latestNps: number | null;
   npsChange: number | null;
   renewalRisk: RenewalRiskLevel | null;
+  /** The conditions that set the renewal-risk level (empty for Low). */
+  renewalRiskReasons: RenewalRiskReason[] | null;
+  healthScore: number | null; // 0-100, rounded as on the pages
+  healthDeclining: boolean | null; // down HEALTH_RULES.decliningDrop+ points on last week
+  /** ARR on the account's lines with an adoption drop, whatever the renewal date. */
+  downsellArr: number | null;
+  /** Inside the renewal window with no open renewal deal (same as the account page and Renewals page). */
+  missingRenewalDeal: boolean | null;
+  /** Enterprise and mid-market customers only; null where a sponsor isn't tracked. */
+  sponsorStatus: "active" | "left" | "none" | null;
   hasOpenDeal: boolean;
+  /** People (names from the team table): the AE is the account owner. */
+  ae: string | null;
+  csm: string | null;
+  /** Products on active contract lines, in product order; null when not a customer. */
+  productsOwned: Product[] | null;
+  /** ARR per product from active contract lines (0 when not owned); null when not a customer. */
+  productArr: Record<Product, number> | null;
+  /** The executive sponsor as a CRM contact: tracked segments only, active or former, with a name. */
+  sponsor: { name: string; title: string | null; status: "active" | "left" } | null;
 };
 
 export type CrmDealRow = {
@@ -1263,6 +1290,9 @@ export type CrmDealRow = {
   /** Open deals only; null for closed deals. */
   daysInStage: number | null;
   dealRisk: DealRiskLevel | null;
+  /** People (names from the team table); null when the deal has none. */
+  adr: string | null;
+  csm: string | null;
 };
 
 export type CrmSyncData = { accounts: CrmAccountRow[]; deals: CrmDealRow[] };
@@ -1276,12 +1306,26 @@ export function calcCrmSyncData(
   nps: NpsResponseRow[],
   asOf: string,
   health: RenewalHealth,
+  teamNames: Map<string, string> = new Map(),
+  contractLines: ContractLineRow[] = [],
 ): CrmSyncData {
   const margin = new Map(calcGrossMargin(accounts, usage, prices, asOf).map((r) => [r.accountId, r.grossMargin]));
   const capacity = new Map(calcCapacity(accounts, usage, prices, asOf).map((r) => [r.accountId, r.capacityUsed]));
   const sentiment = new Map(calcNpsTrend(accounts, nps, asOf).map((r) => [r.accountId, r]));
   // Same level the Renewals page shows: both read RenewalRiskRow.level.
-  const renewalLevels = new Map(calcRenewalRisk(accounts, usage, prices, health, asOf).all.map((r) => [r.accountId, r.level]));
+  const renewalRows = new Map(calcRenewalRisk(accounts, usage, prices, health, asOf).all.map((r) => [r.accountId, r]));
+  // Missing renewal deal: the same rule as the account page (calcRenewalDealCoverage on the account's renewal deals).
+  const renewalDealsOf = (accountId: string) => deals.filter((o) => o.account_id === accountId && o.type === "renewal");
+  const person = (id: string | null | undefined) => (id ? (teamNames.get(id) ?? null) : null);
+  // Products and ARR per product, from active contract lines.
+  const productArrOf = new Map<string, Record<Product, number>>();
+  for (const l of contractLines) {
+    if (l.status !== "active" || !(PRODUCTS as readonly string[]).includes(l.product)) continue;
+    const t = productArrOf.get(l.account_id) ?? { Core: 0, Extract: 0, "Code Review": 0 };
+    t[l.product as Product] += l.arr_usd;
+    productArrOf.set(l.account_id, t);
+  }
+  const ownedOf = (accountId: string) => new Set(contractLines.filter((l) => l.account_id === accountId && l.status === "active").map((l) => l.product));
   const dealSignals = new Map(calcDealRisk(deals, accounts, asOf).rows.map((r) => [r.opportunityId, r.signals.length]));
   const withOpenDeal = new Set(deals.filter(isOpen).map((o) => o.account_id));
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
@@ -1290,6 +1334,8 @@ export function calcCrmSyncData(
     accounts: accounts.map((a) => {
       const isCustomer = a.status === "customer";
       const s = sentiment.get(a.id);
+      const h = health.get(a.id);
+      const row = renewalRows.get(a.id);
       return {
         accountId: a.id,
         name: a.name,
@@ -1301,8 +1347,25 @@ export function calcCrmSyncData(
         capacityUsed: isCustomer ? (capacity.get(a.id) ?? null) : null,
         latestNps: isCustomer ? (s?.latestNps ?? null) : null,
         npsChange: isCustomer ? (s?.npsChange ?? null) : null,
-        renewalRisk: isCustomer ? (renewalLevels.get(a.id) ?? "Low") : null,
+        renewalRisk: isCustomer ? (renewalRows.get(a.id)?.level ?? "Low") : null,
+        renewalRiskReasons: isCustomer ? (renewalRows.get(a.id)?.reasons ?? []) : null,
+        healthScore: isCustomer && h ? Math.round(h.score) : null,
+        healthDeclining: isCustomer && h ? h.change !== null && h.change <= -HEALTH_RULES.decliningDrop : null,
+        downsellArr: isCustomer ? (renewalRows.get(a.id)?.downsellArr ?? 0) : null,
+        missingRenewalDeal: isCustomer ? (row ? calcRenewalDealCoverage(row, renewalDealsOf(a.id)).missing : false) : null,
+        sponsorStatus: isCustomer ? (row?.conditions.sponsorTracked ? (a.sponsor_status ?? null) : null) : null,
         hasOpenDeal: withOpenDeal.has(a.id),
+        ae: a.owner || null,
+        csm: person(a.csm_id),
+        productsOwned: isCustomer ? PRODUCTS.filter((p) => ownedOf(a.id).has(p)) : null,
+        productArr: isCustomer ? (productArrOf.get(a.id) ?? { Core: 0, Extract: 0, "Code Review": 0 }) : null,
+        sponsor:
+          isCustomer &&
+          RENEWAL_RISK_RULES.sponsorRequiredSegments.includes(a.segment) &&
+          (a.sponsor_status === "active" || a.sponsor_status === "left") &&
+          a.executive_sponsor_name
+            ? { name: a.executive_sponsor_name, title: a.executive_sponsor_title ?? null, status: a.sponsor_status }
+            : null,
       };
     }),
     deals: deals.map((o) => {
@@ -1319,6 +1382,8 @@ export function calcCrmSyncData(
         executiveSponsor: o.executive_sponsor,
         daysInStage: open ? dealDaysInStage(o, asOf) : null,
         dealRisk: open ? dealRiskLevel(dealSignals.get(o.id) ?? 0) : null,
+        adr: person(o.adr_id),
+        csm: person(o.csm_id),
       };
     }),
   };
@@ -2140,7 +2205,7 @@ const strOrNull = (v: unknown): string | null => (v === null || v === undefined 
 async function loadAccounts(filter?: (q: Query) => Query): Promise<AccountRow[]> {
   const rows = await fetchAll(
     "accounts",
-    "id, name, status, segment, mrr_usd, included_tokens_monthly, start_date, renewal_date, churn_date, owner, sponsor_status",
+    "id, name, status, segment, mrr_usd, included_tokens_monthly, start_date, renewal_date, churn_date, owner, sponsor_status, csm_id, executive_sponsor_name, executive_sponsor_title",
     ["id"],
     filter,
   );
@@ -2156,6 +2221,9 @@ async function loadAccounts(filter?: (q: Query) => Query): Promise<AccountRow[]>
     churn_date: strOrNull(r.churn_date),
     owner: str(r.owner),
     sponsor_status: strOrNull(r.sponsor_status) as AccountRow["sponsor_status"],
+    csm_id: strOrNull(r.csm_id),
+    executive_sponsor_name: strOrNull(r.executive_sponsor_name),
+    executive_sponsor_title: strOrNull(r.executive_sponsor_title),
   }));
 }
 
@@ -2288,7 +2356,7 @@ async function loadOpenDealsWithRiskFields(): Promise<DealRiskInput[]> {
 async function loadDealsWithRiskFields(filter?: (q: Query) => Query): Promise<DealRiskInput[]> {
   const rows = await fetchAll(
     "opportunities",
-    "id, account_id, type, source, stage, forecast_category, amount_usd, probability, created_date, close_date, executive_sponsor, stage_entered_date, last_activity_date, next_step",
+    "id, account_id, type, source, stage, forecast_category, amount_usd, probability, created_date, close_date, executive_sponsor, stage_entered_date, last_activity_date, next_step, adr_id, csm_id",
     ["id"],
     filter,
   );
@@ -2307,6 +2375,8 @@ async function loadDealsWithRiskFields(filter?: (q: Query) => Query): Promise<De
     stage_entered_date: strOrNull(r.stage_entered_date),
     last_activity_date: strOrNull(r.last_activity_date),
     next_step: strOrNull(r.next_step),
+    adr_id: strOrNull(r.adr_id),
+    csm_id: strOrNull(r.csm_id),
   }));
 }
 
@@ -2317,14 +2387,16 @@ export async function getDealRisk(asOf: string = AS_OF_DATE): Promise<DealRiskRe
 
 /** All accounts and all deals with the values the HubSpot sync sends. */
 export async function getCrmSyncData(asOf: string = AS_OF_DATE): Promise<CrmSyncData> {
-  const [accounts, deals, { usage, prices }, nps, health] = await Promise.all([
+  const [accounts, deals, { usage, prices }, nps, health, team, lines] = await Promise.all([
     loadAccounts(),
     loadDealsWithRiskFields(),
     loadUsageAndPrices(asOf, priorUsageWindow(asOf).start),
     loadNps(),
     loadRenewalHealth(asOf),
+    fetchAll("team", "id, name", ["id"]),
+    loadContractLines(),
   ]);
-  return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf, health);
+  return calcCrmSyncData(accounts, deals, usage, prices, nps, asOf, health, new Map(team.map((t) => [str(t.id), str(t.name)])), lines);
 }
 
 // ---------------------------------------------------------------------------

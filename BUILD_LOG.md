@@ -447,3 +447,30 @@ The live results table in section 1 shows the figures from before this fix. Over
 **Downsell card too.** "ARR at downsell risk" on the Renewals page now uses the same segment windows instead of a flat 180 days, and is renamed "ARR at downsell risk, inside renewal window". It went from $216K (9 lines on 5 contracts, see 21 Nov) to **$208,800 (7 lines on 3 contracts)**: Ionic Retail $99,600, Cedarline Legal $74,400 and Vantagely Energy $34,800. Orchardly Labs (136 days) and Orchardly Logistics (175 days) dropped out because they are SMB, with a 90-day window. The "across all customers" small print is unchanged at $298K. The downsell test now covers the 90/91, 120/121 and 180/181 day edges. Nothing on the Renewals page looks a flat 180 days ahead any more.
 
 **Open item.** HubSpot has not been re-synced since the renewal-risk rule changed, so the Renewal risk values there are out of date (6 High before, 4 now). Run a dry run, then `npm run hubspot:sync`, when ready.
+
+### HubSpot: health, renewal signals, people, products and sponsor contacts
+
+**What we did.** Extended the HubSpot sync so the CRM shows what Cockpit now knows, and added a button to run it.
+
+1. **New values, all from `metrics.ts`** (`calcCrmSyncData`):
+   - Company: health score, health declining, renewal-risk reasons, ARR at downsell risk, missing renewal deal, executive sponsor status, AE and CSM names, products owned, and Core / Extract / Code Review ARR.
+   - Deal: ADR and CSM names.
+   - Contacts: each enterprise and mid-market customer's executive sponsor (current or former) as a contact with job title and a new **Lumen role** property (Executive sponsor / Former sponsor).
+2. **14 new HubSpot properties**, created with `npm run hubspot:setup` after a dry run (no warnings). Setup now creates proper HubSpot checkboxes for yes/no fields, and created the Lumen Console group on contacts.
+3. **Shared sync code** (`src/lib/hubspot-sync-run.ts`), used by `npm run hubspot:sync` and a new **Sync to HubSpot** button on the Integrations page, which shows each step and the result. New `--account <id>` option to sync one chosen customer.
+4. **Checked on one record first.** Ionic Retail (`--account acc_0089`) went first, twice, and the owner checked it in HubSpot before the full sync.
+5. **Full sync:** 190 companies and 207 deals updated, 81 contacts (50 new sponsor contacts). No errors.
+
+**Result.** Renewal risk in HubSpot went from 6 High, 10 Medium, 134 Low (set by the 20 Nov rules) to **4 High, 13 Medium, 133 Low**. That matches Cockpit on every customer. 13 customers changed level, for example Ionic Retail and Copperleaf Labs Low → High, Larkspur Systems and Quillon Retail High → Medium. 19 companies have Missing renewal deal ticked and 2 have Health declining, matching the Renewals and Health pages. Spot checks of a deal's ADR and CSM names and the 5 former-sponsor contacts matched Cockpit.
+
+**Decisions (owner).**
+
+- **ARR at downsell risk per company** counts every product line with an adoption drop, whatever the renewal date. The Renewals card only counts lines inside the renewal window.
+- **The button only works locally** (on this Mac with `npm run dev`) until Cockpit has a login, because anyone with the link could otherwise write to HubSpot. Elsewhere it is greyed out with "Available locally until login is added".
+- **AE, CSM and ADR are text fields**, not HubSpot's Owner field: the team is fictional and Owner only accepts real HubSpot users.
+- **Sponsor emails use `<company>.example.com`**, not a bare `.example` domain, which HubSpot rejects.
+
+**Not tested.** The sync endpoint refuses requests that don't come from the Integrations page (a custom header and an origin check). An automated safety check blocked the test request, so that guard hasn't been tried. The button's full run also hasn't been clicked; the same code ran from the command line.
+
+**Still open.** Sync runs aren't recorded (`sync_runs` is still parked), so the HubSpot card keeps saying "Synced manually; see BUILD_LOG.md", and the button's result disappears on reload.
+

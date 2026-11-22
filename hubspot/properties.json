@@ -33,6 +33,17 @@
       "fieldType": "select",
       "options": ["Low", "Medium", "High"]
     },
+    { "object": "companies", "label": "Health declining", "name": "lumen_health_declining", "type": "enumeration", "fieldType": "booleancheckbox", "options": ["Yes", "No"] },
+    { "object": "companies", "label": "Renewal risk reasons", "name": "lumen_renewal_risk_reasons", "type": "string", "fieldType": "textarea" },
+    { "object": "companies", "label": "ARR at downsell risk", "name": "lumen_arr_at_downsell_risk", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
+    { "object": "companies", "label": "Missing renewal deal", "name": "lumen_missing_renewal_deal", "type": "enumeration", "fieldType": "booleancheckbox", "options": ["Yes", "No"] },
+    { "object": "companies", "label": "Executive sponsor status", "name": "lumen_executive_sponsor_status", "type": "enumeration", "fieldType": "select", "options": ["Active", "Left", "None"] },
+    { "object": "companies", "label": "CSM name", "name": "lumen_csm_name", "type": "string", "fieldType": "text" },
+    { "object": "companies", "label": "AE name", "name": "lumen_ae_name", "type": "string", "fieldType": "text" },
+    { "object": "companies", "label": "Products owned", "name": "lumen_products_owned", "type": "enumeration", "fieldType": "checkbox", "options": ["Core", "Extract", "Code Review"] },
+    { "object": "companies", "label": "Core ARR", "name": "lumen_core_arr", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
+    { "object": "companies", "label": "Extract ARR", "name": "lumen_extract_arr", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
+    { "object": "companies", "label": "Code Review ARR", "name": "lumen_code_review_arr", "type": "number", "fieldType": "number", "numberDisplayHint": "currency" },
     { "object": "deals", "label": "Lumen opportunity ID", "name": "lumen_opportunity_id", "unique": true, "type": "string", "fieldType": "text" },
     { "object": "deals", "label": "Forecast category", "name": "hs_manual_forecast_category", "builtIn": true, "type": "enumeration", "fieldType": "select" },
     { "object": "deals", "label": "Deal type", "name": "dealtype", "builtIn": true, "type": "enumeration", "fieldType": "radio" },
@@ -45,6 +56,9 @@
       "type": "enumeration",
       "fieldType": "select",
       "options": ["None", "Amber", "Red"]
-    }
+    },
+    { "object": "deals", "label": "ADR name", "name": "lumen_adr_name", "type": "string", "fieldType": "text" },
+    { "object": "deals", "label": "CSM name", "name": "lumen_csm_name", "type": "string", "fieldType": "text" },
+    { "object": "contacts", "label": "Lumen role", "name": "lumen_role", "type": "enumeration", "fieldType": "select", "options": ["Executive sponsor", "Former sponsor"] }
   ]
 }

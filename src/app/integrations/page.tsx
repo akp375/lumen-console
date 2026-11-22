@@ -1,11 +1,14 @@
 import { Suspense, type ReactNode } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
+import { headers } from "next/headers";
 import { getClaudeStatus, getHubSpotStatus, getSupabaseStatus } from "@/lib/integrations";
 import { PAGES, tabTitle } from "@/lib/pages";
 import { shortDate, usd } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { BlockSkeleton } from "@/components/Skeleton";
+import { HubSpotSyncButton } from "@/components/HubSpotSyncButton";
+import { isLocalDev, LOCAL_ONLY_NOTE } from "@/lib/local-only";
 
 export const metadata: Metadata = { title: tabTitle(PAGES.integrations.title) };
 
@@ -139,6 +142,7 @@ async function ClaudeCard() {
 async function HubSpotCard() {
   await connection();
   const h = await getHubSpotStatus();
+  const canSync = h.connected && isLocalDev((await headers()).get("host"));
   return (
     <Card name="HubSpot" initial="H" color="bg-orange-500" kind="CRM" connected={h.connected}>
       {h.connected ? (
@@ -155,6 +159,9 @@ async function HubSpotCard() {
       )}
       {/* Sync runs aren't recorded yet (sync_runs is on the BUILD_LOG.md to-do list). */}
       <Detail label="Last sync" value="Synced manually; see BUILD_LOG.md" />
+      <div className="mt-auto pt-2">
+        <HubSpotSyncButton available={canSync} unavailableNote={h.connected ? LOCAL_ONLY_NOTE : "HubSpot isn't connected"} />
+      </div>
     </Card>
   );
 }

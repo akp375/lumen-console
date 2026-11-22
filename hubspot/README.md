@@ -129,7 +129,9 @@ npm run hubspot:sync -- --dry-run
 npm run hubspot:sync
 ```
 
-The first command shows what would be sent, with nothing sent; the second sends it. Add `--one` to either to sync a single customer and its deals (useful for checking a change on one record first).
+The first command shows what would be sent, with nothing sent; the second sends it. To check a change on one record first, add `--account <Lumen account ID>` (for example `--account acc_0089` for Ionic Retail) to sync one customer, its deals and its sponsor contact. `--one` does the same for a default test customer.
+
+**Sync to HubSpot button.** The HubSpot card on the Integrations page has a **Sync to HubSpot** button that runs the same full sync (the code is shared, in `src/lib/hubspot-sync-run.ts`). It shows each step as it happens, then the companies, deals and contacts created or updated, or the error that stopped it. One run at a time. Cockpit has no login yet, so the button only works when Cockpit runs on this Mac with `npm run dev`; anywhere else it is greyed out and says "Available locally until login is added".
 
 Sync runs are not recorded anywhere yet, so the HubSpot card on the Integrations page says "Synced manually; see BUILD_LOG.md". A `sync_runs` table is on the to-do list in `BUILD_LOG.md`; its migration file (`supabase/migrations/20261120000000_add_sync_runs.sql`) is in the repo but has not been run.
 
@@ -140,13 +142,20 @@ Sync runs are not recorded anywhere yet, so the HubSpot card on the Integrations
 | Every account (customers, prospects, churned) | Company | Lumen account ID |
 | Every deal | Deal, in **New business** (new deals) or **Renewals & expansion** (renewals and expansions), attached to its company | Lumen opportunity ID |
 | One made-up contact per prospect | Contact, attached to its company | Email |
+| Each enterprise and mid-market customer's executive sponsor, current or former | Contact with job title and **Lumen role** (Executive sponsor / Former sponsor), attached to its company | Email |
 
-- **All numbers come from `metrics.ts`**: ARR, margin, capacity, NPS, renewal and deal risk, days in stage. Customer-only values are left blank on prospects and churned accounts; days in stage and deal risk are blank on closed deals.
-- **Risk levels:** renewal risk is High (2+ warning signs), Medium (1) or Low (none, including renewals more than 120 days away). Deal risk is Red (2+), Amber (1) or None.
+- **All numbers come from `metrics.ts`**: ARR, margin, capacity, NPS, health score, renewal and deal risk, ARR at downsell risk, product ARR, days in stage. Customer-only values are left blank on prospects and churned accounts; days in stage and deal risk are blank on closed deals.
+- **Renewal risk** is the same health-driven level as the Renewals page (window by segment: enterprise 180 days, mid-market 120, SMB 90; Low outside it). **Renewal risk reasons** lists the conditions that set it, separated by semicolons. Deal risk is Red (2+ signals), Amber (1) or None.
+- **Health:** Health score (0–100, rounded as on the pages) and **Health declining** (ticked when down 10+ points on last week).
+- **Renewals:** **ARR at downsell risk** is the ARR on the account's product lines with an adoption drop, whatever the renewal date. **Missing renewal deal** is ticked when the renewal is inside its window with no open renewal deal, the same rule as the Renewals and account pages.
+- **Products:** **Products owned** (Core, Extract, Code Review) and **Core / Extract / Code Review ARR** come from active contract lines only.
+- **People:** **AE name** (the account owner) and **CSM name** on companies, **ADR name** and **CSM name** on deals. These are text fields, not HubSpot's Owner field, because the team is fictional and only real HubSpot users can be owners. **Executive sponsor status** (Active / Left / None) is filled for enterprise and mid-market customers only.
 - **Lifecycle stage:** customer → Customer; prospect with an open deal → Opportunity, otherwise Lead; churned → Other. HubSpot won't move a stage backwards, so the sync clears it first when needed. After the first sync, HubSpot's own automation moved 12 Lead companies to Opportunity when their (closed) deals were attached; the next run set them back. Expect this once whenever deals are first attached.
 - **Forecast category** uses HubSpot's built-in field. Ours → HubSpot: Pipeline → Pipeline, Best Case → Best case, Commit → Commit, Closed → Closed won, Omitted → Not forecasted. The sync reads HubSpot's options each run and stops if one is missing.
-- **Made-up contacts** have fictional names and emails at `<company>.example.com`. example.com is reserved for examples, so these can never reach a real inbox. (HubSpot rejects the bare `.example` domain.)
+- **Made-up contacts** (prospect contacts and executive sponsors) have fictional names and emails at `<company>.example.com`. example.com is reserved for examples, so these can never reach a real inbox. (HubSpot rejects the bare `.example` domain.) The sync stops before sending anything if two contacts would share an email. It never deletes, so if a sponsor changes, the old contact stays with its old role.
 
 **First full sync (20 Nov 2026):** 190 companies, 207 deals (62 New business, 145 Renewals & expansion) and 30 contacts. A re-run created nothing new. Counts and risk levels in HubSpot matched Cockpit's Renewals and Deal Risk pages.
+
+**Second full sync (22 Nov 2026), with the new fields:** 190 companies and 207 deals updated, 81 contacts (30 prospect, 51 executive sponsors: 46 current, 5 former; 50 of them new). Renewal risk on customers went from 6 High, 10 Medium, 134 Low (the 20 Nov rules) to **4 High, 13 Medium, 133 Low**, matching Cockpit on every account. The "before" is saved in `reconciliation/hubspot-renewal-risk-before.json`.
 
 **Notes and tasks test:** `npm run hubspot:test-activity` adds one labelled note and task to the `--one` test company, to check the app may write them.

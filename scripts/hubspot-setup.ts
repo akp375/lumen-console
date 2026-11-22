@@ -87,7 +87,10 @@ function createBody(p: Spec, name: string) {
     ...(p.numberDisplayHint ? { numberDisplayHint: p.numberDisplayHint } : {}),
     ...(p.numberDisplayHint === "currency" ? { showCurrencySymbol: true } : {}),
     ...(p.options
-      ? { options: p.options.map((label, i) => ({ label, value: label.toLowerCase(), displayOrder: i, hidden: false })) }
+      ? {
+          // A HubSpot checkbox (booleancheckbox) must store "true" / "false"; our other dropdowns store the label in lower case.
+          options: p.options.map((label, i) => ({ label, value: p.fieldType === "booleancheckbox" ? String(i === 0) : label.toLowerCase(), displayOrder: i, hidden: false })),
+        }
       : {}),
   };
 }
