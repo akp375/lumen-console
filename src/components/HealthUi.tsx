@@ -1,4 +1,5 @@
-import { HEALTH_CATEGORIES, HEALTH_CATEGORY_LABELS, HEALTH_WEIGHTS, type HealthBand, type HealthCategory } from "@/lib/metrics";
+import type { HealthBand, HealthCategory } from "@/lib/metrics";
+import { healthBreakdown, pts } from "@/lib/health-format";
 
 // Health score building blocks. Display only: every number comes from metrics.ts.
 
@@ -43,39 +44,69 @@ const CATEGORY_COLOR: Record<HealthCategory, string> = {
   financial: "bg-zinc-500",
 };
 
-export const categoryMax = (c: HealthCategory) => Object.values(HEALTH_WEIGHTS[c]).reduce((s: number, w) => s + w, 0);
-
-/** One bar of 100 points: each category's contribution, then the points missed. */
-export function ContributionBar({ points }: { points: Record<HealthCategory, number> }) {
-  const total = HEALTH_CATEGORIES.reduce((s, c) => s + points[c], 0);
+function ProgressBar({ earned, possible, category }: { earned: number; possible: number; category: HealthCategory }) {
+  const width = possible > 0 ? Math.min(100, (earned / possible) * 100) : 0;
   return (
-    <div>
-      <div className="flex h-4 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" role="img" aria-label="Points each category contributed">
-        {HEALTH_CATEGORIES.map((c) => (
-          <div key={c} className={CATEGORY_COLOR[c]} style={{ width: `${points[c]}%` }} title={`${HEALTH_CATEGORY_LABELS[c]}: ${points[c].toFixed(1)} of ${categoryMax(c)}`} />
-        ))}
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
-        {HEALTH_CATEGORIES.map((c) => (
-          <div key={c} className="flex items-center gap-2">
-            <span className={`h-2.5 w-2.5 shrink-0 rounded-sm ${CATEGORY_COLOR[c]}`} />
-            <span className="text-zinc-600 dark:text-zinc-400">
-              {HEALTH_CATEGORY_LABELS[c]}{" "}
-              <span className="font-medium tabular-nums text-zinc-900 dark:text-zinc-100">
-                {points[c].toFixed(1)}
-              </span>
-              <span className="tabular-nums"> / {categoryMax(c)}</span>
+    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+      <div className={`h-full rounded-full ${CATEGORY_COLOR[category]}`} style={{ width: `${width}%` }} />
+    </div>
+  );
+}
+
+/** Account page: one row per category (earned / possible as a bar). Hover or focus a row for the metric-by-metric reasons. */
+export function HealthCategoryRows({ row }: { row: Parameters<typeof healthBreakdown>[0] }) {
+  return (
+    <ul className="space-y-1">
+      {healthBreakdown(row).map((c) => (
+        <li key={c.category} className="group relative">
+          <div
+            tabIndex={0}
+            className="grid cursor-help grid-cols-[110px_1fr_64px] items-center gap-3 rounded-md px-2 py-1.5 outline-none hover:bg-zinc-50 focus:bg-zinc-50 dark:hover:bg-zinc-800/50 dark:focus:bg-zinc-800/50"
+          >
+            <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{c.label}</span>
+            <ProgressBar earned={c.earned} possible={c.possible} category={c.category} />
+            <span className="text-right text-sm tabular-nums text-zinc-600 dark:text-zinc-400">
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100">{pts(c.earned)}</span> / {c.possible}
             </span>
           </div>
-        ))}
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-zinc-200 dark:bg-zinc-700" />
-          <span className="text-zinc-600 dark:text-zinc-400">
-            Missed <span className="font-medium tabular-nums text-zinc-900 dark:text-zinc-100">{(100 - total).toFixed(1)}</span>
+          <div
+            role="tooltip"
+            className="pointer-events-none absolute left-2 top-full z-20 mt-1 hidden w-[min(44rem,calc(100vw-3rem))] rounded-lg border border-zinc-200 bg-white p-3 text-xs shadow-lg group-focus-within:block group-hover:block dark:border-zinc-700 dark:bg-zinc-900"
+          >
+            <div className="mb-2 font-semibold text-zinc-900 dark:text-zinc-100">
+              {c.label}: {pts(c.earned)} / {c.possible}
+            </div>
+            <ul className="space-y-1.5">
+              {c.items.map((it, k) => (
+                <li key={k} className="flex justify-between gap-4 text-zinc-600 dark:text-zinc-400">
+                  <span>{it.text}</span>
+                  <span className="shrink-0 tabular-nums text-zinc-900 dark:text-zinc-100">
+                    → {pts(it.earned)} / {pts(it.possible)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Compact five-category summary (used in the score-badge popup on /health). */
+export function HealthCategorySummary({ row }: { row: Parameters<typeof healthBreakdown>[0] }) {
+  return (
+    <ul className="space-y-1.5">
+      {healthBreakdown(row).map((c) => (
+        <li key={c.category} className="grid grid-cols-[88px_96px_48px] items-center gap-2 text-xs">
+          <span className="text-zinc-600 dark:text-zinc-400">{c.label}</span>
+          <ProgressBar earned={c.earned} possible={c.possible} category={c.category} />
+          <span className="text-right tabular-nums text-zinc-600 dark:text-zinc-400">
+            <span className="font-semibold text-zinc-900 dark:text-zinc-100">{pts(c.earned)}</span> / {c.possible}
           </span>
-        </div>
-      </div>
-    </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 

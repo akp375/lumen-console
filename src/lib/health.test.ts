@@ -210,6 +210,15 @@ test("Health score: one customer by hand", () => {
     r.lines.map((l) => [l.product, l.notAdopted]),
     [["Core", false], ["Extract", true]],
   );
+  // Per line: Core's share of 35 is 35 x 9,000/10,000 = 31.5, earned 0.895 x 31.5 = 28.19; Extract 0 / 3.5
+  assert.deepEqual(r.lines.map((l) => [l.earned, l.possible]), [[28.19, 31.5], [0, 3.5]]);
+  // Per metric: earned / possible, matching the category totals above
+  assert.deepEqual(r.metricPoints.lastTouch, { earned: 4.8, possible: 8 });
+  assert.deepEqual(r.metricPoints.execMeeting, { earned: 7, possible: 7 });
+  assert.deepEqual(r.metricPoints.qbrThisTerm, { earned: 0, possible: 5 });
+  assert.deepEqual(r.metricPoints.openTickets, { earned: 6.5, possible: 10 });
+  assert.deepEqual(r.metricPoints.overdueInvoices, { earned: 2, possible: 5 });
+  assert.deepEqual(r.possible, { behavioral: 35, relationship: 20, feedback: 20, support: 15, financial: 10 });
 });
 
 test("Declining = down 10+ points on last week; poor = below 50", () => {

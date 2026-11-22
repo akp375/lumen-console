@@ -1,18 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { HealthPageData, HealthPageRow } from "@/lib/metrics";
 import { segmentLabel, usd } from "@/lib/format";
 import { ACCOUNT_LINK } from "@/lib/ui";
 import { Stat } from "./RiskUi";
-import { AdoptionDropChips, HealthBadge, TrendArrow } from "./HealthUi";
+import { AdoptionDropChips, BAND_LABEL, HealthBadge, HealthCategorySummary, TrendArrow } from "./HealthUi";
+import { pts } from "@/lib/health-format";
 
 // The Health page's cards and table, with segment and CSM filters and sorting.
 // Display only: every number (scores, ARR, totals per filter) comes from metrics.ts (getHealth).
 
 type SortKey = "score" | "arr";
+type Popup = { row: HealthPageRow; x: number; top: number; above: boolean };
+const POPUP_WIDTH = 288;
 type Sort = { key: SortKey; dir: "asc" | "desc" };
 
 const filterKey = (segment: string, csm: string) => `${segment}|${csm}`; // same as healthFilterKey in metrics.ts
@@ -22,6 +25,19 @@ export function HealthExplorer({ data, rules }: { data: HealthPageData; rules: {
   const [segment, setSegment] = useState("all");
   const [csm, setCsm] = useState("all");
   const [sort, setSort] = useState<Sort>({ key: "score", dir: "asc" });
+  const [popup, setPopup] = useState<Popup | null>(null);
+  useEffect(() => {
+    if (!popup) return;
+    const close = () => setPopup(null);
+    window.addEventListener("scroll", close, { passive: true, capture: true });
+    return () => window.removeEventListener("scroll", close, { capture: true });
+  }, [popup]);
+  const showPopup = (row: HealthPageRow, el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    const above = r.bottom + 230 > window.innerHeight;
+    const x = Math.min(Math.max(8, r.left + r.width / 2 - POPUP_WIDTH / 2), window.innerWidth - POPUP_WIDTH - 8);
+    setPopup({ row, x, top: above ? r.top - 6 : r.bottom + 6, above });
+  };
 
   const summary = data.summaries[filterKey(segment, csm)];
   const rows = useMemo(() => {
@@ -76,7 +92,10 @@ export function HealthExplorer({ data, rules }: { data: HealthPageData; rules: {
               <SortHeader label="ARR" sortKey="arr" sort={sort} onClick={toggle} align="right" />
               <SortHeader label="Health" sortKey="score" sort={sort} onClick={toggle} align="center" />
               <th className="px-4 py-2">Week</th>
-              <th className="px-4 py-2">Adoption Drop</th>
+              <th className="px-4 py-2">
+                Adoption Drop
+                <div className="font-normal">Usage down 30%+, last 30 days vs prior 30</div>
+              </th>
               <th className="px-4 py-2" />
             </tr>
           </thead>
@@ -89,16 +108,32 @@ export function HealthExplorer({ data, rules }: { data: HealthPageData; rules: {
               </tr>
             )}
             {rows.map((r) => (
-              <Row key={r.accountId} r={r} onOpen={() => router.push(`/accounts/${r.accountId}`)} />
+              <Row key={r.accountId} r={r} onOpen={() => router.push(`/accounts/${r.accountId}`)} onBadge={(el) => (el ? showPopup(r, el) : setPopup(null))} />
             ))}
           </tbody>
         </table>
       </div>
+      {popup && (
+        <div
+          role="tooltip"
+          className="pointer-events-none fixed z-30 rounded-lg border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+          style={{ left: popup.x, top: popup.top, width: POPUP_WIDTH, transform: popup.above ? "translateY(-100%)" : undefined }}
+        >
+          <div className="mb-2 flex items-baseline justify-between text-xs">
+            <span className="font-semibold text-zinc-900 dark:text-zinc-100">{popup.row.name}</span>
+            <span className="text-zinc-500">
+              {pts(popup.row.score)} / 100 · {BAND_LABEL[popup.row.band]}
+            </span>
+          </div>
+          <HealthCategorySummary row={popup.row} />
+          <div className="mt-2 text-[11px] text-zinc-500">Open the account for each metric&apos;s value and points.</div>
+        </div>
+      )}
     </>
   );
 }
 
-function Row({ r, onOpen }: { r: HealthPageRow; onOpen: () => void }) {
+function Row({ r, onOpen, onBadge }: { r: HealthPageRow; onOpen: () => void; onBadge: (el: HTMLElement | null) => void }) {
   return (
     <tr className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50" onClick={onOpen}>
       <td className="px-4 py-3">
@@ -110,7 +145,16 @@ function Row({ r, onOpen }: { r: HealthPageRow; onOpen: () => void }) {
       <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400">{r.csm ?? "None"}</td>
       <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">{usd(r.arr)}</td>
       <td className="px-4 py-3 text-center">
-        <HealthBadge score={r.score} band={r.band} />
+        <span
+          tabIndex={0}
+          className="inline-block cursor-help rounded-full outline-none focus:ring-2 focus:ring-zinc-400"
+          onMouseEnter={(e) => onBadge(e.currentTarget)}
+          onMouseLeave={() => onBadge(null)}
+          onFocus={(e) => onBadge(e.currentTarget)}
+          onBlur={() => onBadge(null)}
+        >
+          <HealthBadge score={r.score} band={r.band} />
+        </span>
       </td>
       <td className="px-4 py-3">
         <TrendArrow change={r.change} declining={r.declining} />

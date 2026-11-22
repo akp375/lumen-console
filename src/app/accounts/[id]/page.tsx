@@ -1,6 +1,5 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { ADOPTION_DROP_BELOW, HEALTH_RULES, getAccountPageData, type ContractLineMetrics, type HealthTrendRow } from "@/lib/metrics";
@@ -10,8 +9,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { RiskBadge, RuleNote, SectionHeading, Stat } from "@/components/RiskUi";
 import { SectionSkeleton } from "@/components/Skeleton";
 import { RenewalDealsTable } from "@/components/RenewalDealsTable";
-import { BAND_LABEL, BAND_TEXT, ContributionBar, TrendArrow } from "@/components/HealthUi";
+import { BAND_LABEL, BAND_TEXT, HealthCategoryRows, TrendArrow } from "@/components/HealthUi";
 import { HealthChart } from "@/components/HealthChart";
+import { BackLink } from "@/components/BackLink";
 
 export const metadata: Metadata = { title: tabTitle("Account") };
 
@@ -41,9 +41,7 @@ async function AccountContent({ params }: Params) {
   return (
     <>
       <div className="mb-3 text-sm">
-        <Link href={PAGES.overview.href} className="text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
-          ← {PAGES.overview.title}
-        </Link>
+        <BackLink fallbackHref={PAGES.overview.href} />
       </div>
       <PageHeader title={a.name} description={description} />
 
@@ -85,19 +83,12 @@ async function AccountContent({ params }: Params) {
 }
 
 function HealthSection({ health: h }: { health: HealthTrendRow }) {
-  const i = h.inputs;
-  const facts = [
-    i.lastTouchDays === null ? "No CSM touch yet" : `Last CSM touch ${i.lastTouchDays} days ago`,
-    i.execMeetingIn90d ? `exec meeting in the last ${HEALTH_RULES.lookbackDays} days` : `no exec meeting in ${HEALTH_RULES.lookbackDays} days`,
-    i.qbrThisTerm ? "QBR this term" : "no QBR this term",
-    i.latestNps === null ? "no NPS response" : `NPS ${i.latestNps}${i.npsChange === null ? "" : ` (${i.npsChange > 0 ? "+" : ""}${i.npsChange})`}`,
-    i.csatAvg === null ? "no CSAT" : `CSAT ${i.csatAvg.toFixed(1)}`,
-    `${i.openLowOrMedium + i.openHighOrUrgent} open tickets (${i.openHighOrUrgent} high or urgent)`,
-    `${i.overdueInvoices} overdue invoices`,
-  ];
   return (
     <section>
-      <SectionHeading title="Health" detail="Score out of 100 as of the app's date, the last 6 weekly snapshots, and what each category contributed." />
+      <SectionHeading
+        title="Health"
+        detail="Score out of 100 as of the app's date and the last 6 weekly snapshots. Hover a category to see each metric's value and points."
+      />
       <div className="grid gap-4 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 lg:grid-cols-[180px_1fr]">
         <div>
           <div className={`text-6xl font-semibold tabular-nums ${BAND_TEXT[h.band]}`}>{Math.round(h.score)}</div>
@@ -111,8 +102,7 @@ function HealthSection({ health: h }: { health: HealthTrendRow }) {
         </div>
         <HealthChart history={h.history} greenFrom={HEALTH_RULES.greenFrom} amberFrom={HEALTH_RULES.amberFrom} />
         <div className="lg:col-span-2">
-          <ContributionBar points={h.points} />
-          <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{facts.join(" · ")}</p>
+          <HealthCategoryRows row={h} />
         </div>
       </div>
     </section>
@@ -168,28 +158,30 @@ function ProductsSection({ products }: { products: ContractLineMetrics[] }) {
 function AdoptionBar({ line: p }: { line: ContractLineMetrics }) {
   if (p.notAdopted) {
     return (
-      <div className="w-56">
+      <div className="w-80">
         <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800" />
-        <div className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">Not adopted: no usage in 60 days</div>
+        <div className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">Not adopted: no usage in the last 60 days</div>
       </div>
     );
   }
   const width = Math.min(1, p.capacityUsed ?? 0) * 100;
   const fill = p.adoptionDrop ? "bg-red-500" : (p.capacityUsed ?? 0) > 1 ? "bg-amber-500" : "bg-zinc-700 dark:bg-zinc-300";
   return (
-    <div className="w-56">
-      <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" title={`${pct(p.capacityUsed)} of allowance`}>
+    <div className="w-80">
+      <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" title={`${pct(p.capacityUsed)} of monthly allowance, last 30 days`}>
         <div className={`h-full rounded-full ${fill}`} style={{ width: `${width}%` }} />
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500 dark:text-zinc-400">
-        <span className="tabular-nums">{pct(p.capacityUsed)} of allowance</span>
-        <span className="tabular-nums">· usage {pctChange(p.usageChange)}</span>
+        <span className="tabular-nums">{pct(p.capacityUsed)} of monthly allowance (last 30 days)</span>
+        <span className="tabular-nums">· Usage {pctChange(p.usageChange)} (last 30 days vs prior 30)</span>
         <span className="tabular-nums">
-          · {p.avgUsersLast30d.toFixed(1)} users/day ({pctChange(p.usersChange)})
+          · {p.avgUsersLast30d.toFixed(1)} active users a day, last 30 days ({pctChange(p.usersChange)} vs prior 30)
         </span>
       </div>
       {p.adoptionDrop && (
-        <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">Adoption drop</span>
+        <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+          Adoption drop: usage down {Math.abs(ADOPTION_DROP_BELOW * 100)}%+
+        </span>
       )}
     </div>
   );

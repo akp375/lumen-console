@@ -1517,8 +1517,39 @@ export type HealthScoreRow = {
     overdueInvoices: number;
     invoiceChange12m: number | null;
   };
-  lines: { product: string; arr: number; adoptionScore: number; adoptionDrop: boolean; notAdopted: boolean }[];
+  /** Each product line's adoption (last 30 days vs prior 30) and the behavioral points it earned. */
+  lines: HealthLine[];
+  /** Points earned and possible for every non-behavioral metric (behavioral is per line, above). */
+  metricPoints: Record<HealthMetric, { earned: number; possible: number }>;
+  /** Points possible per category (the weights). */
+  possible: Record<HealthCategory, number>;
 };
+
+export type HealthLine = {
+  product: string;
+  arr: number;
+  usageChange: number | null;
+  capacityUsed: number | null;
+  usersChange: number | null;
+  adoptionScore: number;
+  adoptionDrop: boolean;
+  notAdopted: boolean;
+  /** Behavioral points: adoptionScore x this line's share of the account's line ARR x 35. */
+  earned: number;
+  possible: number;
+};
+
+export type HealthMetric =
+  | "lastTouch"
+  | "execMeeting"
+  | "qbrThisTerm"
+  | "latestNps"
+  | "npsChange"
+  | "csat"
+  | "openTickets"
+  | "resolutionTime"
+  | "overdueInvoices"
+  | "netExpansion";
 
 const round = (n: number, dp: number) => Math.round(n * 10 ** dp) / 10 ** dp;
 
@@ -1574,21 +1605,33 @@ export function calcHealthScores(input: HealthInputs, asOf: string): HealthScore
     const inWindow = invoices.filter((i) => day(i.month) >= addMonths(thisMonth, -R.expansionMonths));
     const invoiceChange12m = inWindow.length >= 2 ? inWindow[inWindow.length - 1].amount_usd - inWindow[0].amount_usd : null;
 
+    const m = (possible: number, share: number) => ({ earned: possible * share, possible });
+    const metricPoints: Record<HealthMetric, { earned: number; possible: number }> = {
+      lastTouch: m(W.relationship.lastTouch, lastTouchScore(lastTouchDays)),
+      execMeeting: m(W.relationship.execMeeting, execMeetingIn90d ? 1 : 0),
+      qbrThisTerm: m(W.relationship.qbrThisTerm, qbrThisTerm ? 1 : 0),
+      latestNps: m(W.feedback.latestNps, latestNpsScore(n?.latestNps ?? null)),
+      npsChange: m(W.feedback.npsChange, npsChangeScore(n?.npsChange ?? null)),
+      csat: m(W.feedback.csat, csatScore(csatAvg)),
+      openTickets: m(W.support.openTickets, openTicketsScore(openLowOrMedium, openHighOrUrgent)),
+      resolutionTime: m(W.support.resolutionTime, resolutionScore(avgResolutionDays)),
+      overdueInvoices: m(W.financial.overdueInvoices, overdueScore(overdueInvoices)),
+      netExpansion: m(W.financial.netExpansion, netExpansionScore(invoiceChange12m)),
+    };
+    const sum = (...keys: HealthMetric[]) => keys.reduce((s, k) => s + metricPoints[k].earned, 0);
     const points: Record<HealthCategory, number> = {
       behavioral: W.behavioral.adoption * (adoption ?? 0.5),
-      relationship:
-        W.relationship.lastTouch * lastTouchScore(lastTouchDays) +
-        W.relationship.execMeeting * (execMeetingIn90d ? 1 : 0) +
-        W.relationship.qbrThisTerm * (qbrThisTerm ? 1 : 0),
-      feedback:
-        W.feedback.latestNps * latestNpsScore(n?.latestNps ?? null) +
-        W.feedback.npsChange * npsChangeScore(n?.npsChange ?? null) +
-        W.feedback.csat * csatScore(csatAvg),
-      support: W.support.openTickets * openTicketsScore(openLowOrMedium, openHighOrUrgent) + W.support.resolutionTime * resolutionScore(avgResolutionDays),
-      financial: W.financial.overdueInvoices * overdueScore(overdueInvoices) + W.financial.netExpansion * netExpansionScore(invoiceChange12m),
+      relationship: sum("lastTouch", "execMeeting", "qbrThisTerm"),
+      feedback: sum("latestNps", "npsChange", "csat"),
+      support: sum("openTickets", "resolutionTime"),
+      financial: sum("overdueInvoices", "netExpansion"),
     };
     const score = round(HEALTH_CATEGORIES.reduce((s, c) => s + points[c], 0), 1);
     for (const c of HEALTH_CATEGORIES) points[c] = round(points[c], 2);
+    for (const k of Object.keys(metricPoints) as HealthMetric[]) metricPoints[k].earned = round(metricPoints[k].earned, 2);
+    const possible = Object.fromEntries(
+      HEALTH_CATEGORIES.map((c) => [c, (Object.values(W[c]) as number[]).reduce((t, w) => t + w, 0)]),
+    ) as Record<HealthCategory, number>;
 
     return {
       accountId: a.id,
@@ -1612,7 +1655,24 @@ export function calcHealthScores(input: HealthInputs, asOf: string): HealthScore
         overdueInvoices,
         invoiceChange12m,
       },
-      lines: lines.map((l) => ({ product: l.product, arr: l.arr, adoptionScore: lineAdoptionScore(l), adoptionDrop: l.adoptionDrop, notAdopted: l.notAdopted })),
+      lines: lines.map((l) => {
+        const linePossible = lineArr > 0 ? (W.behavioral.adoption * l.arr) / lineArr : 0;
+        const adoptionScore = lineAdoptionScore(l);
+        return {
+          product: l.product,
+          arr: l.arr,
+          usageChange: l.usageChange,
+          capacityUsed: l.capacityUsed,
+          usersChange: l.usersChange,
+          adoptionScore,
+          adoptionDrop: l.adoptionDrop,
+          notAdopted: l.notAdopted,
+          earned: round(adoptionScore * linePossible, 2),
+          possible: round(linePossible, 2),
+        };
+      }),
+      metricPoints,
+      possible,
     };
   });
 }

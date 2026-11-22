@@ -133,7 +133,7 @@ export function RenewalDealsTable({ rows, showAccount, empty }: { rows: RenewalD
                               <th className="py-1.5 pr-3 font-medium">Product</th>
                               <th className="py-1.5 pr-3 text-right font-medium">ARR</th>
                               <th className="py-1.5 pr-3 font-medium">Adoption</th>
-                              <th className="py-1.5 pr-3 text-right font-medium">Usage, last 30 days</th>
+                              <th className="py-1.5 pr-3 text-right font-medium">Usage change (last 30 days vs prior 30)</th>
                               <th className="py-1.5 font-medium" />
                             </tr>
                           </thead>

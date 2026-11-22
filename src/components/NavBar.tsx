@@ -1,11 +1,15 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NAV, PRODUCT_NAME } from "@/lib/pages";
+import { rememberPage } from "./BackLink";
 
 export function NavBar() {
-  return <NavBarView path={usePathname()} />;
+  const path = usePathname();
+  useEffect(() => rememberPage(path), [path]);
+  return <NavBarView path={path} />;
 }
 
 /** The same bar with no tab highlighted: shown for a moment while a page with an ID in its address loads. */
