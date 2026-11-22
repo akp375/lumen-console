@@ -1271,8 +1271,8 @@ export type CrmAccountRow = {
   csm: string | null;
   /** Products on active contract lines, in product order; null when not a customer. */
   productsOwned: Product[] | null;
-  /** ARR per product from active contract lines (0 when not owned); null when not a customer. */
-  productArr: Record<Product, number> | null;
+  /** ARR per product from active contract lines; a product the customer doesn't own is null (blank in HubSpot). Null when not a customer. */
+  productArr: Record<Product, number | null> | null;
   /** The executive sponsor as a CRM contact: tracked segments only, active or former, with a name. */
   sponsor: { name: string; title: string | null; status: "active" | "left" } | null;
 };
@@ -1318,14 +1318,15 @@ export function calcCrmSyncData(
   const renewalDealsOf = (accountId: string) => deals.filter((o) => o.account_id === accountId && o.type === "renewal");
   const person = (id: string | null | undefined) => (id ? (teamNames.get(id) ?? null) : null);
   // Products and ARR per product, from active contract lines.
-  const productArrOf = new Map<string, Record<Product, number>>();
+  // A product is owned when the customer has an active line for it; products not owned have no ARR (null), not $0.
+  const productArrOf = new Map<string, Record<Product, number | null>>();
   for (const l of contractLines) {
     if (l.status !== "active" || !(PRODUCTS as readonly string[]).includes(l.product)) continue;
-    const t = productArrOf.get(l.account_id) ?? { Core: 0, Extract: 0, "Code Review": 0 };
-    t[l.product as Product] += l.arr_usd;
+    const t = productArrOf.get(l.account_id) ?? { Core: null, Extract: null, "Code Review": null };
+    t[l.product as Product] = (t[l.product as Product] ?? 0) + l.arr_usd;
     productArrOf.set(l.account_id, t);
   }
-  const ownedOf = (accountId: string) => new Set(contractLines.filter((l) => l.account_id === accountId && l.status === "active").map((l) => l.product));
+  const noProducts = (): Record<Product, number | null> => ({ Core: null, Extract: null, "Code Review": null });
   const dealSignals = new Map(calcDealRisk(deals, accounts, asOf).rows.map((r) => [r.opportunityId, r.signals.length]));
   const withOpenDeal = new Set(deals.filter(isOpen).map((o) => o.account_id));
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
@@ -1357,8 +1358,8 @@ export function calcCrmSyncData(
         hasOpenDeal: withOpenDeal.has(a.id),
         ae: a.owner || null,
         csm: person(a.csm_id),
-        productsOwned: isCustomer ? PRODUCTS.filter((p) => ownedOf(a.id).has(p)) : null,
-        productArr: isCustomer ? (productArrOf.get(a.id) ?? { Core: 0, Extract: 0, "Code Review": 0 }) : null,
+        productsOwned: isCustomer ? PRODUCTS.filter((p) => productArrOf.get(a.id)?.[p] != null) : null,
+        productArr: isCustomer ? (productArrOf.get(a.id) ?? noProducts()) : null,
         sponsor:
           isCustomer &&
           RENEWAL_RISK_RULES.sponsorRequiredSegments.includes(a.segment) &&

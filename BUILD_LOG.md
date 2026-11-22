@@ -472,5 +472,7 @@ The live results table in section 1 shows the figures from before this fix. Over
 
 **Not tested.** The sync endpoint refuses requests that don't come from the Integrations page (a custom header and an origin check). An automated safety check blocked the test request, so that guard hasn't been tried. The button's full run also hasn't been clicked; the same code ran from the command line.
 
+**Follow-up: blank, not $0.** Core / Extract / Code Review ARR are now blank when the customer doesn't own the product (the full sync above sent $0). On live data that is Extract on 77 customers and Code Review on 74; every customer owns Core. HubSpot shows the blanks after the next sync, which the owner will run with the button.
+
 **Still open.** Sync runs aren't recorded (`sync_runs` is still parked), so the HubSpot card keeps saying "Synced manually; see BUILD_LOG.md", and the button's result disappears on reload.
 

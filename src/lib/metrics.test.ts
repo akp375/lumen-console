@@ -845,8 +845,9 @@ test("CRM sync: customer-only values, risk levels for every customer and open de
 
   // Products from active lines only, in product order; ARR per product
   assert.deepEqual(A.K1.productsOwned, ["Core", "Extract"]);
-  assert.deepEqual(A.K1.productArr, { Core: 9_000, Extract: 3_000, "Code Review": 0 });
-  assert.deepEqual([A.K2.productsOwned, A.K2.productArr], [[], { Core: 0, Extract: 0, "Code Review": 0 }]); // customer with no lines
+  // Code Review's line ended, so it isn't owned: no ARR (blank in HubSpot), not $0
+  assert.deepEqual(A.K1.productArr, { Core: 9_000, Extract: 3_000, "Code Review": null });
+  assert.deepEqual([A.K2.productsOwned, A.K2.productArr], [[], { Core: null, Extract: null, "Code Review": null }]); // customer with no lines
   // Executive sponsor contact: enterprise / mid-market only
   assert.deepEqual(A.K1.sponsor, { name: "Sam Sponsor", title: "CTO", status: "active" });
   assert.equal(A.K3.sponsor, null);

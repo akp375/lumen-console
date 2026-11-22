@@ -196,6 +196,7 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
       lumen_ae_name: str(a.ae),
       lumen_csm_name: str(a.csm),
       lumen_products_owned: a.productsOwned ? multiSelect(a.productsOwned.filter((p) => ownOption(productOpts, p, "Products owned"))) : "", // ownOption stops on a missing option
+      // Blank (not $0) for a product the customer doesn't own; sending "" also clears an old $0 in HubSpot.
       lumen_core_arr: str(a.productArr?.Core),
       lumen_extract_arr: str(a.productArr?.Extract),
       lumen_code_review_arr: str(a.productArr?.["Code Review"]),
