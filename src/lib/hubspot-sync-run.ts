@@ -51,6 +51,7 @@ export type SyncResult = {
 };
 
 const BATCH = 100; // HubSpot batch endpoints take up to 100 records per call
+const STAGE_01 = "Stage 0.1";
 
 type Props = Record<string, string>;
 type Input = { idProperty: string; id: string; properties: Props };
@@ -127,6 +128,10 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
   // 1. Our data (all numbers from metrics.ts)
   say("Reading Cockpit data…");
   const all = await getCrmSyncData();
+  // Stage 0.1 deals ("meeting booked, qualifying") aren't in HubSpot's pipelines yet, so they stay out of the sync
+  // (owner's decision, 23 Nov 2026). Leads and sequences aren't synced either.
+  const skipped = all.deals.filter((d) => d.stage === STAGE_01).length;
+  all.deals = all.deals.filter((d) => d.stage !== STAGE_01);
   let accounts: CrmAccountRow[] = all.accounts;
   let deals: CrmDealRow[] = all.deals;
   const single = opts.accountId
@@ -249,6 +254,7 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
   if (dupe) fail(`Two contacts would share the email ${dupe}. Stopping before anything is sent.`);
   const contactInputs = contactList.map((c) => c.input);
 
+  if (skipped) say(`Left out: ${skipped} Stage 0.1 deal(s), which aren't in HubSpot's pipelines.`);
   say(
     `To sync: ${companyInputs.length} companies, ${dealInputs.length} deals, ${contactInputs.length} contacts ` +
       `(${prospects.length} prospect, ${sponsors.length} executive sponsor).`,

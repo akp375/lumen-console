@@ -32,6 +32,10 @@
  *     `npm run health-inputs:backfill` (needs the 20261122 migration).
  *   - support_tickets.description and cs_activities.note (emails get none). Built by
  *     scripts/text-lib.ts, the same code as `npm run text:backfill` (needs the 20261124 migration).
+ *   - ADR data: team.territory, adr_ae_pairings, accounts.icp_tier / target_account / territory,
+ *     leads, sequences, sequence_enrollments (cleared, then refilled) and Stage 0.1 deals
+ *     (ids opp_s01_..., added after the core deals). Built by scripts/adr-lib.ts, the same code as
+ *     `npm run adr:backfill` (needs the 20261125 migration).
  *   - seed_runs: one row added per run (when it was seeded, for the Integrations page).
  *   - health_scores, expansion_plays, briefings, llm_calls, text_signals: never touched. Text tags stay
  *     valid after a reseed because the same ticket and activity IDs get the same text.
@@ -50,6 +54,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "../src/lib/as-of-date.ts";
 import { buildContractLayer, contractLayerFingerprint, usageKey, type ContractLayer } from "./contracts-lib.ts";
 import { buildTexts, textsFingerprint, type BuiltTexts } from "./text-lib.ts";
+import { adrFingerprint, buildAdrData, type AdrData } from "./adr-lib.ts";
 import { buildHealthInputs, healthInputsFingerprint, type HealthInputs } from "./health-inputs-lib.ts";
 
 // ---------------------------------------------------------------------------
@@ -1312,7 +1317,7 @@ async function clear(db: SupabaseClient, table: string, column: string): Promise
   if (error) throw new Error(`Clearing ${table} failed: ${error.message}`);
 }
 
-async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: HealthInputs, texts: BuiltTexts): Promise<void> {
+async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: HealthInputs, texts: BuiltTexts, adr: AdrData): Promise<void> {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const missing = [!url && "SUPABASE_URL", !key && "SUPABASE_SERVICE_ROLE_KEY"].filter(Boolean);
@@ -1323,6 +1328,11 @@ async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: Hea
 
   console.log("Clearing seeded tables (accounts are updated in place, not deleted)...");
   for (const [table, column] of [
+    // ADR tables first: leads point at deals, enrollments at leads
+    ["sequence_enrollments", "id"],
+    ["leads", "id"],
+    ["sequences", "id"],
+    ["adr_ae_pairings", "adr_id"],
     ["usage_daily", "account_id"],
     ["invoices", "account_id"],
     ["opportunities", "id"],
@@ -1336,11 +1346,17 @@ async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: Hea
   }
 
   console.log("Writing...");
-  const { error: teamError } = await db.from("team").upsert(health.team, { onConflict: "id" });
+  const { error: teamError } = await db.from("team").upsert(health.team.map((t) => ({ ...t, territory: adr.teamTerritory.get(t.id) ?? null })), { onConflict: "id" });
   if (teamError) throw new Error(`Writing team failed: ${teamError.message}`);
   console.log(`  team: ${health.team.length} rows`);
   const noSponsor = { executive_sponsor_name: null, executive_sponsor_title: null, sponsor_status: null, sponsor_left_date: null };
-  const accountRows = d.accounts.map((a) => ({ ...a.row, csm_id: health.accountCsm.get(a.row.id) ?? null, ...(health.sponsors.get(a.row.id) ?? noSponsor) }));
+  const noTags = { icp_tier: null, target_account: null, territory: null };
+  const accountRows = d.accounts.map((a) => ({
+    ...a.row,
+    csm_id: health.accountCsm.get(a.row.id) ?? null,
+    ...(health.sponsors.get(a.row.id) ?? noSponsor),
+    ...(adr.accountTags.get(a.row.id) ?? noTags),
+  }));
   for (let i = 0; i < accountRows.length; i += BATCH) {
     const { error } = await db.from("accounts").upsert(accountRows.slice(i, i + BATCH), { onConflict: "id" });
     if (error) throw new Error(`Writing accounts failed: ${error.message}`);
@@ -1348,12 +1364,17 @@ async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: Hea
   console.log(`  accounts: ${accountRows.length} rows`);
   await insertAll(db, "model_prices", d.modelPrices);
   await insertAll(db, "opportunities", d.opportunities.map((o) => ({ ...o, contract_id: contracts.dealContract.get(o.id) ?? null, ...health.dealOwners.get(o.id) })));
+  await insertAll(db, "opportunities", adr.stage01Deals);
   await insertAll(db, "invoices", d.invoices);
   await insertAll(db, "usage_daily", d.usage.map((u) => ({ ...u, active_users: contracts.activeUsers.get(usageKey(u)) ?? null })));
   await insertAll(db, "contract_lines", contracts.lines);
   await insertAll(db, "support_tickets", d.tickets.map((t) => ({ ...t, csat_score: health.csat.get(t.id) ?? null, description: texts.descriptions.get(t.id) ?? null })));
   await insertAll(db, "nps_responses", d.nps);
   await insertAll(db, "cs_activities", health.activities.map((a) => ({ ...a, note: texts.notes.get(a.id) ?? null })));
+  await insertAll(db, "adr_ae_pairings", adr.pairings);
+  await insertAll(db, "leads", adr.leads);
+  await insertAll(db, "sequences", adr.sequences);
+  await insertAll(db, "sequence_enrollments", adr.enrollments);
 
   // Record the run for the Integrations page. Optional: older databases may not have the table yet.
   const { error: runError } = await db.from("seed_runs").insert({ as_of_date: AS_OF_DATE });
@@ -1414,11 +1435,20 @@ async function main(): Promise<void> {
   const texts = buildTexts({ tickets, activities: health.activities, tiers: health.tiers, asOf: AS_OF_DATE });
   console.log(`Text: ${texts.descriptions.size} ticket descriptions, ${texts.notes.size} activity notes. Fingerprint: ${textsFingerprint(texts)}\n`);
 
+  // ADR data (territories, account tags, leads, sequences, Stage 0.1 deals), built by the same code as `npm run adr:backfill`.
+  const adr = buildAdrData({
+    accounts: accounts.map((a) => ({ id: a.row.id, name: a.row.name, status: a.row.status, segment: a.row.segment, owner: a.row.owner })),
+    deals: opportunities.map((o) => ({ id: o.id, account_id: o.account_id, type: o.type, source: o.source, stage: o.stage, created_date: o.created_date, adr_id: health.dealOwners.get(o.id)?.adr_id ?? null })),
+    team: health.team,
+    asOf: AS_OF_DATE,
+  });
+  console.log(`ADR data: ${adr.leads.length} leads, ${adr.enrollments.length} enrollments, ${adr.stage01Deals.length} Stage 0.1 deals. Fingerprint: ${adrFingerprint(adr)}\n`);
+
   if (dryRun) {
     console.log("Dry run: nothing was written to the database.");
     return;
   }
-  await writeToSupabase(data, contracts, health, texts);
+  await writeToSupabase(data, contracts, health, texts, adr);
 }
 
 main().catch((err: unknown) => {

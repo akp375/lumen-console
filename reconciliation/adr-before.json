@@ -1,0 +1,82 @@
+{
+  "asOf": "2026-11-13",
+  "takenAt": "2026-11-23T02:26:02.073Z",
+  "tables": {
+    "accounts": {
+      "rows": 190,
+      "fingerprint": "f65ac9e09a72"
+    },
+    "opportunities": {
+      "rows": 207,
+      "fingerprint": "e7e15da4fc3b"
+    },
+    "invoices": {
+      "rows": 1901,
+      "fingerprint": "52eed8c4d1d8"
+    },
+    "usage_daily": {
+      "rows": 38394,
+      "fingerprint": "0dd525ce8775"
+    },
+    "model_prices": {
+      "rows": 3,
+      "fingerprint": "315466865910"
+    },
+    "support_tickets": {
+      "rows": 957,
+      "fingerprint": "0c14852267c3"
+    },
+    "nps_responses": {
+      "rows": 328,
+      "fingerprint": "a64561fee71f"
+    },
+    "contract_lines": {
+      "rows": 314,
+      "fingerprint": "7fd2a9280666"
+    },
+    "cs_activities": {
+      "rows": 4594,
+      "fingerprint": "0a0820a809ea"
+    },
+    "team": {
+      "rows": 15,
+      "fingerprint": "f4337162a2e9"
+    },
+    "health_scores": {
+      "rows": 900,
+      "fingerprint": "5385ce0f50eb"
+    }
+  },
+  "pages": {
+    "Overview: asOf": "c632fb16191a",
+    "Overview: arr": "133383e103be",
+    "Overview: pipeline": "f1cc20001902",
+    "Overview: winRate": "d9c4d6b3e6ed",
+    "Overview: accounts": "d6a1cd6c9e89",
+    "Overview: portfolio": "df079ec1952a",
+    "Overview: bySegment": "2884334d1d9c",
+    "Overview: tokenCostByModel": "32364f6b1b52",
+    "Overview: lifecycleMix": "e2ef07c68419",
+    "Overview: monthly": "e849d567f8c8",
+    "Overview: nrr": "32171741eddc",
+    "Pipeline": "f1cc20001902",
+    "Win rate and cycle": "d9c4d6b3e6ed",
+    "Upcoming deals": "c55c16ffea67",
+    "Upcoming renewals": "8f8734b0f69f",
+    "Deal Risk": "0a60d3c67a41",
+    "Renewal risk": "8b9e9d89dd60",
+    "Health": "25aa1f9bcd6d",
+    "Renewal deals": "71d7b68e1956",
+    "HubSpot sync: accounts": "46297b299a58",
+    "HubSpot sync: existing deals": "fb5bb5cddf2c",
+    "Workspace data: as_of_date": "c632fb16191a",
+    "Workspace data: notes": "2208f8833770",
+    "Workspace data: kpis": "990ad347545f",
+    "Workspace data: customer_accounts": "cc3bcd85a221",
+    "Workspace data: renewals_by_quarter": "e0a40f88df77",
+    "Workspace data: renewal_risk_flags": "b6a94c57f663",
+    "Workspace data: deals_by_quarter": "861b3c72bcd4",
+    "Workspace data: open_deals": "dc3d0b9b5694",
+    "Workspace data: deal_risk_flags": "f22e7ffa3640"
+  }
+}
