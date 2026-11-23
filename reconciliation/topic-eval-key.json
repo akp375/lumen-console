@@ -1,0 +1,181 @@
+[
+  {
+    "n": 1,
+    "id": "sig_support_ticket_tkt_00700",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": [
+      "feature_gap"
+    ]
+  },
+  {
+    "n": 2,
+    "id": "sig_support_ticket_tkt_00677",
+    "written_as": "risky",
+    "intended_topics": [
+      "implementation_issue"
+    ],
+    "tagged_topics": [
+      "implementation_issue"
+    ]
+  },
+  {
+    "n": 3,
+    "id": "sig_support_ticket_tkt_00111",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 4,
+    "id": "sig_support_ticket_tkt_00649",
+    "written_as": "risky",
+    "intended_topics": [
+      "pricing_complaint"
+    ],
+    "tagged_topics": [
+      "pricing_complaint"
+    ]
+  },
+  {
+    "n": 5,
+    "id": "sig_cs_activity_csa_0058_034",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 6,
+    "id": "sig_cs_activity_csa_0125_034",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 7,
+    "id": "sig_support_ticket_tkt_00451",
+    "written_as": "ambiguous",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 8,
+    "id": "sig_support_ticket_tkt_00449",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 9,
+    "id": "sig_support_ticket_tkt_00755",
+    "written_as": "risky",
+    "intended_topics": [
+      "competitor_mention"
+    ],
+    "tagged_topics": [
+      "competitor_mention",
+      "feature_gap"
+    ]
+  },
+  {
+    "n": 10,
+    "id": "sig_cs_activity_csa_0019_031",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 11,
+    "id": "sig_cs_activity_csa_0104_021",
+    "written_as": "risky",
+    "intended_topics": [
+      "feature_gap"
+    ],
+    "tagged_topics": [
+      "feature_gap"
+    ]
+  },
+  {
+    "n": 12,
+    "id": "sig_cs_activity_csa_0047_027",
+    "written_as": "ambiguous",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 13,
+    "id": "sig_cs_activity_csa_0043_020",
+    "written_as": "risky",
+    "intended_topics": [
+      "implementation_issue"
+    ],
+    "tagged_topics": [
+      "implementation_issue"
+    ]
+  },
+  {
+    "n": 14,
+    "id": "sig_cs_activity_csa_0120_036",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 15,
+    "id": "sig_support_ticket_tkt_00537",
+    "written_as": "risky",
+    "intended_topics": [
+      "reliability"
+    ],
+    "tagged_topics": [
+      "reliability"
+    ]
+  },
+  {
+    "n": 16,
+    "id": "sig_cs_activity_csa_0044_026",
+    "written_as": "risky",
+    "intended_topics": [
+      "reliability"
+    ],
+    "tagged_topics": [
+      "reliability"
+    ]
+  },
+  {
+    "n": 17,
+    "id": "sig_cs_activity_csa_0142_019",
+    "written_as": "risky",
+    "intended_topics": [
+      "implementation_issue"
+    ],
+    "tagged_topics": [
+      "implementation_issue"
+    ]
+  },
+  {
+    "n": 18,
+    "id": "sig_support_ticket_tkt_00843",
+    "written_as": "ambiguous",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 19,
+    "id": "sig_support_ticket_tkt_00082",
+    "written_as": "no topic",
+    "intended_topics": [],
+    "tagged_topics": []
+  },
+  {
+    "n": 20,
+    "id": "sig_support_ticket_tkt_00889",
+    "written_as": "risky",
+    "intended_topics": [
+      "feature_gap"
+    ],
+    "tagged_topics": [
+      "feature_gap"
+    ]
+  }
+]

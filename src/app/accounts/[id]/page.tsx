@@ -9,6 +9,7 @@ import {
   getAccountPageData,
   type AccountPageData,
   type ContractLineMetrics,
+  type CustomerVoice,
   type HealthTrendRow,
   type RenewalDealCoverage,
   type RenewalRiskReason,
@@ -23,6 +24,7 @@ import { RenewalDealsTable } from "@/components/RenewalDealsTable";
 import { BAND_LABEL, BAND_TEXT, HealthCategoryRows, TrendArrow } from "@/components/HealthUi";
 import { HealthChart } from "@/components/HealthChart";
 import { BackLink } from "@/components/BackLink";
+import { TOPIC_LABEL, type Sentiment } from "@/lib/signal-topics";
 
 export const metadata: Metadata = { title: tabTitle("Account") };
 
@@ -74,6 +76,7 @@ async function AccountContent({ params }: Params) {
 
       <div className="space-y-8">
         {health && <HealthSection health={health} />}
+        <CustomerVoiceSection voice={data.voice} />
         <ProductsSection products={products} />
         <section>
           <SectionHeading
@@ -294,6 +297,81 @@ function HealthSection({ health: h }: { health: HealthTrendRow }) {
           <HealthCategoryRows row={h} />
         </div>
       </div>
+    </section>
+  );
+}
+
+const SENTIMENT_DOT: Record<Sentiment, string> = {
+  positive: "bg-emerald-500",
+  neutral: "bg-zinc-400",
+  negative: "bg-red-500",
+};
+
+function CustomerVoiceSection({ voice: v }: { voice: CustomerVoice }) {
+  const mentioned = v.topics.filter((t) => t.count > 0);
+  return (
+    <section>
+      <SectionHeading
+        title="What Customers Are Saying"
+        detail={`Topics Claude found in support tickets and CSM notes, counted over the last ${v.windowDays} days (since ${shortDate(v.since)}), and the latest quotes.`}
+      />
+      {v.taggedTotal === 0 ? (
+        <p className="rounded-lg border border-zinc-200 bg-white p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+          No tagged tickets or CSM notes for this account yet.
+        </p>
+      ) : (
+        <div className="space-y-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex flex-wrap items-center gap-2">
+            {mentioned.length === 0 ? (
+              <span className="text-sm text-zinc-500 dark:text-zinc-400">No risk topics in the last {v.windowDays} days.</span>
+            ) : (
+              mentioned.map((t) => (
+                <span
+                  key={t.topic}
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-red-800 ring-1 ring-red-200 dark:bg-red-950 dark:text-red-200 dark:ring-red-900"
+                >
+                  {TOPIC_LABEL[t.topic]}
+                  <span className="rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white dark:bg-red-500">{t.count}</span>
+                </span>
+              ))
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+            <span>
+              {v.texts} {v.texts === 1 ? "text" : "texts"} in the last {v.windowDays} days
+            </span>
+            <span className="inline-flex items-center gap-3">
+              {(["negative", "neutral", "positive"] as const).map((s) => (
+                <span key={s} className="inline-flex items-center gap-1">
+                  <span aria-hidden className={`inline-block h-2 w-2 rounded-full ${SENTIMENT_DOT[s]}`} />
+                  {v.sentiment[s]} {s}
+                </span>
+              ))}
+            </span>
+            {v.competitors.length > 0 && <span>Competitors named: {v.competitors.join(", ")}</span>}
+          </div>
+          {v.quotes.length > 0 && (
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {v.quotes.map((q, i) => (
+                <li key={i} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-start sm:gap-4">
+                  <div className="w-36 shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+                    <div>{shortDate(q.date)}</div>
+                    <div>{q.source === "support_ticket" ? "Support ticket" : "CSM note"}</div>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-zinc-800 dark:text-zinc-200">
+                      <span aria-hidden className={`mr-2 inline-block h-2 w-2 rounded-full align-middle ${SENTIMENT_DOT[q.sentiment]}`} />
+                      &ldquo;{q.quote}&rdquo;
+                    </p>
+                    {q.topics.length > 0 && <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{q.topics.map((t) => TOPIC_LABEL[t]).join(" · ")}</div>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <RuleNote>Tagged by Claude Haiku 5.5 from the last 180 days of tickets and notes; each quote is copied word for word from its text.</RuleNote>
+        </div>
+      )}
     </section>
   );
 }

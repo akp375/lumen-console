@@ -15,6 +15,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "./as-of-date.ts";
+import { SIGNAL_TOPICS, type Sentiment, type SignalTopic } from "./signal-topics.ts";
 
 // ---------------------------------------------------------------------------
 // Row types (only the columns the metrics need)
@@ -2498,6 +2499,77 @@ export async function getHealth(asOf: string = AS_OF_DATE): Promise<HealthPageDa
 }
 
 // ---------------------------------------------------------------------------
+// What customers are saying: topic tags on ticket descriptions and CSM notes (text_signals)
+// ---------------------------------------------------------------------------
+
+/** The account page counts topics over the last 90 days (from the as-of date). */
+export const CUSTOMER_VOICE_DAYS = 90;
+export const CUSTOMER_VOICE_QUOTES = 5;
+
+export type TextSignalRow = {
+  id: string;
+  source: "support_ticket" | "cs_activity";
+  source_id: string;
+  account_id: string;
+  date: string;
+  topics: SignalTopic[];
+  competitor_name: string | null;
+  sentiment: Sentiment;
+  quote: string | null;
+};
+
+export type CustomerVoice = {
+  windowDays: number;
+  since: string; // first day of the window
+  /** Texts tagged in the window. */
+  texts: number;
+  /** Every topic, with how many texts in the window mention it; most mentioned first, then topic order. */
+  topics: { topic: SignalTopic; count: number }[];
+  sentiment: Record<Sentiment, number>; // in the window
+  competitors: string[]; // named in the window, A to Z
+  /** The most recent quotes, any tagged date up to today, newest first. */
+  quotes: { date: string; source: TextSignalRow["source"]; quote: string; topics: SignalTopic[]; sentiment: Sentiment }[];
+  /** All tagged texts for the account (the tagger covers the last 180 days). */
+  taggedTotal: number;
+};
+
+/** Topic counts, sentiment and named competitors over the last CUSTOMER_VOICE_DAYS, plus the latest quotes. */
+export function calcCustomerVoice(signals: TextSignalRow[], asOf: string): CustomerVoice {
+  const since = addDays(asOf, -(CUSTOMER_VOICE_DAYS - 1));
+  const upToToday = signals.filter((s) => s.date <= asOf);
+  const inWindow = upToToday.filter((s) => s.date >= since);
+  const topics = SIGNAL_TOPICS.map((topic, i) => ({ topic, i, count: inWindow.filter((s) => s.topics.includes(topic)).length }))
+    .sort((x, y) => y.count - x.count || x.i - y.i)
+    .map(({ topic, count }) => ({ topic, count }));
+  const sentiment: Record<Sentiment, number> = { positive: 0, neutral: 0, negative: 0 };
+  for (const s of inWindow) sentiment[s.sentiment]++;
+  const competitors = [...new Set(inWindow.map((s) => s.competitor_name).filter((c): c is string => !!c))].sort();
+  const quotes = upToToday
+    .filter((s) => s.quote)
+    .sort((x, y) => y.date.localeCompare(x.date) || x.id.localeCompare(y.id))
+    .slice(0, CUSTOMER_VOICE_QUOTES)
+    .map((s) => ({ date: s.date, source: s.source, quote: s.quote!, topics: s.topics, sentiment: s.sentiment }));
+  return { windowDays: CUSTOMER_VOICE_DAYS, since, texts: inWindow.length, topics, sentiment, competitors, quotes, taggedTotal: upToToday.length };
+}
+
+async function loadTextSignals(accountId: string): Promise<TextSignalRow[]> {
+  const rows = await fetchAll("text_signals", "id, source, source_id, account_id, date, topics, competitor_name, sentiment, quote", ["id"], (q) =>
+    q.eq("account_id", accountId),
+  );
+  return rows.map((r) => ({
+    id: str(r.id),
+    source: str(r.source) as TextSignalRow["source"],
+    source_id: str(r.source_id),
+    account_id: str(r.account_id),
+    date: str(r.date).slice(0, 10),
+    topics: ((r.topics as string[] | null) ?? []).filter((t): t is SignalTopic => (SIGNAL_TOPICS as readonly string[]).includes(t)),
+    competitor_name: strOrNull(r.competitor_name),
+    sentiment: str(r.sentiment) as Sentiment,
+    quote: strOrNull(r.quote),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Account page: one account with its contract lines
 // ---------------------------------------------------------------------------
 
@@ -2632,11 +2704,12 @@ export type AccountPageData = {
   products: ContractLineMetrics[];
   renewalDeals: RenewalDealRow[]; // every renewal deal for this account, latest close first
   health: HealthTrendRow | null; // customers only
+  voice: CustomerVoice;
 };
 
 /** One account, its renewal-risk level, its contract lines with per-line usage, and its renewal deals. Null if the account doesn't exist. */
 export async function getAccountPageData(accountId: string, asOf: string = AS_OF_DATE): Promise<AccountPageData | null> {
-  const [accounts, seatRows, lines, usage, deals, risk, healthInput] = await Promise.all([
+  const [accounts, seatRows, lines, usage, deals, risk, healthInput, signals] = await Promise.all([
     loadAccounts((q) => q.eq("id", accountId)),
     fetchAll("accounts", "id, seats, executive_sponsor_name, executive_sponsor_title, sponsor_status, sponsor_left_date", ["id"], (q) => q.eq("id", accountId)),
     loadContractLines(accountId),
@@ -2644,6 +2717,7 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
     loadRenewalDeals((q) => q.eq("account_id", accountId)),
     getRenewalRisk(asOf),
     loadHealthInputs(asOf, accountId),
+    loadTextSignals(accountId),
   ]);
   const account = accounts[0];
   if (!account) return null;
@@ -2674,6 +2748,7 @@ export async function getAccountPageData(accountId: string, asOf: string = AS_OF
       (a, b) => b.closeDate.localeCompare(a.closeDate) || a.opportunityId.localeCompare(b.opportunityId),
     ),
     health: calcHealthTrend(healthInput, asOf)[0] ?? null,
+    voice: calcCustomerVoice(signals, asOf),
   };
 }
 

@@ -1,0 +1,202 @@
+[
+  {
+    "n": 1,
+    "before": "feature_gap",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "What file types does extraction accept? We have some older .tif scans.",
+    "verdict": "right"
+  },
+  {
+    "n": 2,
+    "before": "implementation_issue",
+    "after": "implementation_issue",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "Webhook payloads don't match the docs, so our integration breaks on every update.",
+    "verdict": "right"
+  },
+  {
+    "n": 3,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "Can you reset the API key for our staging environment?",
+    "verdict": "right"
+  },
+  {
+    "n": 4,
+    "before": "pricing_complaint",
+    "after": "pricing_complaint",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "The per-seat price went up at renewal and nobody warned us beforehand.",
+    "verdict": "right"
+  },
+  {
+    "n": 5,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "positive",
+    "sentiment": "neutral",
+    "quote": "they're interested in the next Extract release",
+    "verdict": "wrong"
+  },
+  {
+    "n": 6,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "Monthly check-in with a new user from finance. Walked through usage; nothing new raised.",
+    "verdict": "right"
+  },
+  {
+    "n": 7,
+    "before": "none",
+    "after": "competitor_mention+feature_gap",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "whether you offer an on-prem version, as some other vendors do",
+    "verdict": "right"
+  },
+  {
+    "n": 8,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "How do I add a new user to our workspace?",
+    "verdict": "right"
+  },
+  {
+    "n": 9,
+    "before": "competitor_mention+feature_gap",
+    "after": "competitor_mention+feature_gap",
+    "competitor": "Brontide AI",
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "Brontide AI lets you bring your own model keys",
+    "verdict": "right"
+  },
+  {
+    "n": 10,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "positive",
+    "sentiment": "positive",
+    "quote": "Agreed a shared success plan for the next quarter with the ops manager.",
+    "verdict": "right"
+  },
+  {
+    "n": 11,
+    "before": "feature_gap",
+    "after": "feature_gap",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "wants multi-language summaries for the São Paulo office; told them it's not on the near-term roadmap",
+    "verdict": "right"
+  },
+  {
+    "n": 12,
+    "before": "none",
+    "after": "pricing_complaint",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "wants to understand what they're paying for before the next planning cycle",
+    "verdict": "right"
+  },
+  {
+    "n": 13,
+    "before": "implementation_issue",
+    "after": "implementation_issue",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "Rollout to the second team is stuck on SSO; their IT hasn't prioritised it.",
+    "verdict": "right"
+  },
+  {
+    "n": 14,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "positive",
+    "sentiment": "positive",
+    "quote": "The VP Operations is keen to expand to the Code Review add-on next quarter",
+    "verdict": "right"
+  },
+  {
+    "n": 15,
+    "before": "reliability",
+    "after": "reliability",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "Every code review run returned a 502 between 9 and 11am.",
+    "verdict": "right"
+  },
+  {
+    "n": 16,
+    "before": "reliability",
+    "after": "reliability",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "Complaints about slow responses at peak hours",
+    "verdict": "right"
+  },
+  {
+    "n": 17,
+    "before": "implementation_issue",
+    "after": "implementation_issue",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "Data mapping for the extraction templates is taking far longer than planned",
+    "verdict": "right"
+  },
+  {
+    "n": 18,
+    "before": "none",
+    "after": "competitor_mention+feature_gap",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "whether you offer an on-prem version, as some other vendors do",
+    "verdict": "right"
+  },
+  {
+    "n": 19,
+    "before": "none",
+    "after": "none",
+    "competitor": null,
+    "sentiment_before": "neutral",
+    "sentiment": "neutral",
+    "quote": "Please update our billing contact; Sam has moved to another team.",
+    "verdict": "right"
+  },
+  {
+    "n": 20,
+    "before": "feature_gap",
+    "after": "feature_gap",
+    "competitor": null,
+    "sentiment_before": "negative",
+    "sentiment": "negative",
+    "quote": "There's no way to set role-based access per workspace",
+    "verdict": "right"
+  }
+]

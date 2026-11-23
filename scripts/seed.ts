@@ -30,8 +30,11 @@
  *     cs_activities (cleared, then refilled) and support_tickets.csat_score.
  *     Built by scripts/health-inputs-lib.ts, the same code as
  *     `npm run health-inputs:backfill` (needs the 20261122 migration).
+ *   - support_tickets.description and cs_activities.note (emails get none). Built by
+ *     scripts/text-lib.ts, the same code as `npm run text:backfill` (needs the 20261124 migration).
  *   - seed_runs: one row added per run (when it was seeded, for the Integrations page).
- *   - health_scores, expansion_plays, briefings, llm_calls: never touched.
+ *   - health_scores, expansion_plays, briefings, llm_calls, text_signals: never touched. Text tags stay
+ *     valid after a reseed because the same ticket and activity IDs get the same text.
  *
  * The cost and revenue arithmetic below exists only to shape realistic data and
  * to print a self-check. The app's official business math lives in
@@ -46,6 +49,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "../src/lib/as-of-date.ts";
 import { buildContractLayer, contractLayerFingerprint, usageKey, type ContractLayer } from "./contracts-lib.ts";
+import { buildTexts, textsFingerprint, type BuiltTexts } from "./text-lib.ts";
 import { buildHealthInputs, healthInputsFingerprint, type HealthInputs } from "./health-inputs-lib.ts";
 
 // ---------------------------------------------------------------------------
@@ -1308,7 +1312,7 @@ async function clear(db: SupabaseClient, table: string, column: string): Promise
   if (error) throw new Error(`Clearing ${table} failed: ${error.message}`);
 }
 
-async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: HealthInputs): Promise<void> {
+async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: HealthInputs, texts: BuiltTexts): Promise<void> {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const missing = [!url && "SUPABASE_URL", !key && "SUPABASE_SERVICE_ROLE_KEY"].filter(Boolean);
@@ -1347,9 +1351,9 @@ async function writeToSupabase(d: Dataset, contracts: ContractLayer, health: Hea
   await insertAll(db, "invoices", d.invoices);
   await insertAll(db, "usage_daily", d.usage.map((u) => ({ ...u, active_users: contracts.activeUsers.get(usageKey(u)) ?? null })));
   await insertAll(db, "contract_lines", contracts.lines);
-  await insertAll(db, "support_tickets", d.tickets.map((t) => ({ ...t, csat_score: health.csat.get(t.id) ?? null })));
+  await insertAll(db, "support_tickets", d.tickets.map((t) => ({ ...t, csat_score: health.csat.get(t.id) ?? null, description: texts.descriptions.get(t.id) ?? null })));
   await insertAll(db, "nps_responses", d.nps);
-  await insertAll(db, "cs_activities", health.activities);
+  await insertAll(db, "cs_activities", health.activities.map((a) => ({ ...a, note: texts.notes.get(a.id) ?? null })));
 
   // Record the run for the Integrations page. Optional: older databases may not have the table yet.
   const { error: runError } = await db.from("seed_runs").insert({ as_of_date: AS_OF_DATE });
@@ -1406,11 +1410,15 @@ async function main(): Promise<void> {
   console.log(`Health inputs: ${health.team.length} team, ${health.activities.length} CS activities, ${health.csat.size} CSAT answers. ` +
     `Fingerprint: ${healthInputsFingerprint(health)}\n`);
 
+  // Free text on tickets and CSM activities, built by the same code as `npm run text:backfill`.
+  const texts = buildTexts({ tickets, activities: health.activities, tiers: health.tiers, asOf: AS_OF_DATE });
+  console.log(`Text: ${texts.descriptions.size} ticket descriptions, ${texts.notes.size} activity notes. Fingerprint: ${textsFingerprint(texts)}\n`);
+
   if (dryRun) {
     console.log("Dry run: nothing was written to the database.");
     return;
   }
-  await writeToSupabase(data, contracts, health);
+  await writeToSupabase(data, contracts, health, texts);
 }
 
 main().catch((err: unknown) => {

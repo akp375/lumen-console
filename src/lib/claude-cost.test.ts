@@ -32,3 +32,9 @@ test("timed-out call rounds input tokens up", () => {
   const e = estimateTimedOutCall({ model: "claude-sonnet-5-5", system: "ab", messages: [{ content: "c" }, { content: "d" }], maxTokens: 10 });
   assert.equal(e.inputTokens, 2); // 4 chars / 3 = 1.33 -> 2
 });
+
+test("Claude Haiku 5.5: $0.10 input and $0.50 output per million tokens", () => {
+  // 1,000 input + 200 output = 0.0001 + 0.0001 = $0.0002
+  const cost = callCostUsd({ model: "claude-haiku-5-5", inputTokens: 1_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 200 });
+  assert.ok(Math.abs(cost - 0.0002) < 1e-12, `got ${cost}`);
+});

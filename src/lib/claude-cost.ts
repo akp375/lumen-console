@@ -7,7 +7,12 @@ export const PRICE_PER_MILLION: Record<string, { input: number; output: number }
   "claude-sonnet-5-5": { input: 2, output: 10 },
   "claude-sonnet-5": { input: 2, output: 10 },
   "claude-opus-5-5": { input: 4, output: 20 },
+  // Confirmed by the owner against Anthropic's pricing page, 22 Nov 2026 (prompts up to 100K tokens).
+  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
 };
+
+/** Claude Haiku 5.5: used for high-volume classification (topic tagging). */
+export const HAIKU_MODEL = "claude-haiku-5-5";
 
 function price(model: string) {
   return PRICE_PER_MILLION[model] ?? PRICE_PER_MILLION[DEFAULT_MODEL];

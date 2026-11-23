@@ -12,9 +12,12 @@
 // Business metrics use AS_OF_DATE instead (see src/lib/as-of-date.ts).
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { callCostUsd, DEFAULT_MODEL, estimateTimedOutCall } from "./claude-cost";
+import { callCostUsd, DEFAULT_MODEL, estimateTimedOutCall, HAIKU_MODEL } from "./claude-cost.ts";
 
-export { DEFAULT_MODEL };
+export { DEFAULT_MODEL, HAIKU_MODEL };
+
+/** Models that support the server-side refusal fallback. Claude Haiku 5.5 doesn't, so it's sent without it. */
+const FALLBACK_MODELS = new Set([DEFAULT_MODEL]);
 export const DAILY_BUDGET_USD = 2;
 /** Hard ceiling on each reply (thinking + answer): at most 4,000 x $10/M = $0.04 of output per call. */
 export const MAX_OUTPUT_TOKENS = 4000;
@@ -24,11 +27,10 @@ export const MAX_TOOL_CALLS_PER_QUESTION = 6;
 
 /** A guardrail stopped the call. The message is safe to show to users as a notice. */
 export class ClaudeLimitError extends Error {
-  constructor(
-    public readonly kind: "daily_budget" | "timeout" | "rate_limit" | "too_long",
-    message: string,
-  ) {
+  readonly kind: "daily_budget" | "timeout" | "rate_limit" | "too_long";
+  constructor(kind: "daily_budget" | "timeout" | "rate_limit" | "too_long", message: string) {
     super(message);
+    this.kind = kind;
     this.name = "ClaudeLimitError";
   }
 }
@@ -90,6 +92,8 @@ async function logCall(row: { feature: string; model: string; input_tokens: numb
 
 export type CallClaudeInput = {
   feature: string; // e.g. "renewal_risk"; stored in llm_calls.feature
+  /** Defaults to DEFAULT_MODEL (Claude Sonnet 5.5). HAIKU_MODEL for high-volume classification. */
+  model?: string;
   system: string;
   /** A single question. Use either prompt or messages. */
   prompt?: string;
@@ -125,6 +129,7 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
     );
   }
 
+  const model = input.model ?? DEFAULT_MODEL;
   const maxTokens = Math.min(input.maxTokens ?? MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS);
   const messages = input.messages ?? [{ role: "user" as const, content: input.prompt ?? "" }];
   const started = performance.now();
@@ -132,11 +137,11 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
   try {
     response = await client().beta.messages.create(
       {
-        model: DEFAULT_MODEL,
+        model,
         max_tokens: maxTokens,
-        // If Claude declines on safety grounds, the API retries on a fallback model in the same call.
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
+        // If Claude declines on safety grounds, the API retries on a fallback model in the same call
+        // (only on models that support it).
+        ...(FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
         system: input.cacheSystem ? [{ type: "text", text: input.system, cache_control: { type: "ephemeral" } }] : input.system,
         messages,
         output_config: {
@@ -150,10 +155,10 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
     if (e instanceof Anthropic.APIConnectionTimeoutError) {
       // Anthropic may still bill a call we stopped, so it counts toward the budget at a worst-case
       // estimate. Logged as "<feature>:timeout" so estimated rows are easy to tell apart.
-      const est = estimateTimedOutCall({ model: DEFAULT_MODEL, system: input.system, messages, maxTokens });
+      const est = estimateTimedOutCall({ model, system: input.system, messages, maxTokens });
       await logCall({
         feature: `${input.feature}:timeout`,
-        model: DEFAULT_MODEL,
+        model,
         input_tokens: est.inputTokens,
         output_tokens: est.outputTokens,
         cost_usd: est.costUsd,
