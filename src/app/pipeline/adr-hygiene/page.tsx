@@ -73,9 +73,9 @@ async function HygieneContent({ searchParams }: Props) {
 
       <div className="mt-4">
         <RuleNote>
-          Unassigned = an open lead (lead, MQL or SQL) with no ADR. SLA breach = an MQL not touched within {R.slaHours} hours; the list shows MQLs still
+          Unassigned = an open lead at New, Engaged or MQL with no ADR. SLA breach = an MQL not touched within {R.slaHours} hours; the list shows MQLs still
           untouched, and the rate covers MQLs from the last {R.slaBreachRateDays} days whose {R.slaHours} hours are up. Stale = a deal at {QUALIFYING} ({QUALIFYING_DESCRIPTION}) with no update
-          for {R.staleStage01Days}+ days. Handoff leak = an SQL with no deal {R.handoffGraceDays}+ days after its meeting. Pairing mismatch = an open deal created
+          for {R.staleStage01Days}+ days. Handoff leak = a lead at Sales qualified for {R.handoffGraceDays}+ days with no meeting booked with an AE. Pairing mismatch = an open deal created
           on or after the pairing date whose ADR isn&apos;t paired with its AE. Account tags cover prospects and customers. The ADR filter uses each lead&apos;s
           ADR (or, if unassigned, the ADR who covers its territory), each deal&apos;s ADR, and for accounts the ADR paired with the account owner.
         </RuleNote>

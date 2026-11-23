@@ -13,31 +13,35 @@ import { ADR_RULES, calcAdrHygiene, calcAdrInsights, type AdrEnrollmentRow, type
 const AS_OF = "2026-11-13";
 
 const lead = (id: string, over: Partial<AdrLeadRow>): AdrLeadRow => ({
-  id, account_id: "A1", contact_name: `Contact ${id}`, lead_source: "inbound demo request", lifecycle_stage: "lead",
-  created_at: "2026-11-01T00:00:00Z", mql_at: null, first_touch_at: null, sql_at: null, assigned_adr_id: null, opportunity_id: null, ...over,
+  id, account_id: "A1", contact_name: `Contact ${id}`, lead_source: "inbound demo request", lead_stage: "new",
+  created_at: "2026-11-01T00:00:00Z", engaged_at: null, mql_at: null, first_touch_at: null, sales_accepted_at: null, sales_qualified_at: null,
+  meeting_booked_at: null, converted_at: null, disqualified_at: null, nurtured_at: null, disqualify_reason: null,
+  assigned_adr_id: null, opportunity_id: null, ...over,
 });
+// Every lead that reached MQL was Engaged at creation (keeps the hand counts simple).
+const mqlLead = (id: string, over: Partial<AdrLeadRow>) => lead(id, { lead_stage: "mql", engaged_at: over.created_at ?? "2026-11-01T00:00:00Z", ...over });
 
 const LEADS: AdrLeadRow[] = [
-  // L1: touched exactly 24h after becoming an MQL -> on time
-  lead("L1", { lifecycle_stage: "MQL", mql_at: "2026-11-10T00:00:00Z", first_touch_at: "2026-11-11T00:00:00Z", assigned_adr_id: "d1" }),
+  // L1: touched exactly 24h after becoming an MQL -> on time; Sales accepted at the touch
+  mqlLead("L1", { lead_stage: "sales_accepted", mql_at: "2026-11-10T00:00:00Z", first_touch_at: "2026-11-11T00:00:00Z", sales_accepted_at: "2026-11-11T00:00:00Z", assigned_adr_id: "d1" }),
   // L2: touched 24h + 1 minute after -> late (24.0167 hours)
-  lead("L2", { lifecycle_stage: "MQL", mql_at: "2026-11-10T00:00:00Z", first_touch_at: "2026-11-11T00:01:00Z", assigned_adr_id: "d1" }),
-  // L3: never touched, deadline 2026-11-13T23:00 has passed -> open breach, 0 days old
-  lead("L3", { account_id: "A2", lead_source: "webinar", lifecycle_stage: "MQL", mql_at: "2026-11-12T23:00:00Z", assigned_adr_id: "d2" }),
-  // L4: never touched, but its 24 hours aren't up yet (deadline 2026-11-14T01:00) -> not a breach, not in any rate
-  lead("L4", { account_id: "A2", lead_source: "webinar", lifecycle_stage: "MQL", mql_at: "2026-11-13T01:00:00Z", assigned_adr_id: "d2" }),
-  // L5: open lead with no ADR, created 2026-11-03 -> unassigned, 10 days; A1's owner Ann is paired with d1
+  mqlLead("L2", { lead_stage: "sales_accepted", mql_at: "2026-11-10T00:00:00Z", first_touch_at: "2026-11-11T00:01:00Z", sales_accepted_at: "2026-11-11T00:01:00Z", assigned_adr_id: "d1" }),
+  // L3: still at MQL, never touched, deadline 2026-11-13T23:00 has passed -> open breach, 0 days old
+  mqlLead("L3", { account_id: "A2", lead_source: "webinar", mql_at: "2026-11-12T23:00:00Z", assigned_adr_id: "d2" }),
+  // L4: still at MQL, never touched, but its 24 hours aren't up yet (deadline 2026-11-14T01:00) -> not a breach, not in any rate
+  mqlLead("L4", { account_id: "A2", lead_source: "webinar", mql_at: "2026-11-13T01:00:00Z", assigned_adr_id: "d2" }),
+  // L5: New, no ADR, created 2026-11-03 -> unassigned, 10 days; A1's owner Ann is paired with d1
   lead("L5", { lead_source: "content download", created_at: "2026-11-03T00:00:00Z" }),
   // L6: disqualified with no ADR -> not unassigned
-  lead("L6", { account_id: "A2", lead_source: "content download", lifecycle_stage: "disqualified" }),
-  // L7: SQL 2026-11-10T12:00 with no deal, past the 3-day grace -> handoff leak, 3 days old. Touched in 2h.
-  lead("L7", { lifecycle_stage: "SQL", mql_at: "2026-11-08T00:00:00Z", first_touch_at: "2026-11-08T02:00:00Z", sql_at: "2026-11-10T12:00:00Z", assigned_adr_id: "d1" }),
-  // L8: SQL 2026-11-11T12:00 with no deal, inside the grace period -> not a leak. Touched in 4h. No sequence meeting.
-  lead("L8", { lifecycle_stage: "SQL", mql_at: "2026-11-09T00:00:00Z", first_touch_at: "2026-11-09T04:00:00Z", sql_at: "2026-11-11T12:00:00Z", assigned_adr_id: "d1" }),
-  // L9: outbound, became deal O1 (still Stage 0.1). Touched in 5h.
-  lead("L9", { account_id: "A2", lead_source: "outbound", lifecycle_stage: "SQL", created_at: "2026-09-01T00:00:00Z", mql_at: "2026-09-02T00:00:00Z", first_touch_at: "2026-09-02T05:00:00Z", sql_at: "2026-09-10T00:00:00Z", assigned_adr_id: "d2", opportunity_id: "O1" }),
-  // L10: outbound, became deal O2 (now Discovery, so an opportunity). Touched in 10h.
-  lead("L10", { account_id: "A2", lead_source: "outbound", lifecycle_stage: "SQL", created_at: "2026-08-01T00:00:00Z", mql_at: "2026-08-02T00:00:00Z", first_touch_at: "2026-08-02T10:00:00Z", sql_at: "2026-08-05T00:00:00Z", assigned_adr_id: "d2", opportunity_id: "O2" }),
+  lead("L6", { account_id: "A2", lead_source: "content download", lead_stage: "disqualified", disqualified_at: "2026-11-02T00:00:00Z", disqualify_reason: "Not ICP" }),
+  // L7: Sales qualified 2026-11-10T12:00, no meeting booked, past the 3-day grace -> handoff leak, 3 days old. Touched in 2h.
+  mqlLead("L7", { lead_stage: "sales_qualified", mql_at: "2026-11-08T00:00:00Z", first_touch_at: "2026-11-08T02:00:00Z", sales_accepted_at: "2026-11-08T02:00:00Z", sales_qualified_at: "2026-11-10T12:00:00Z", assigned_adr_id: "d1" }),
+  // L8: Sales qualified 2026-11-11T12:00, inside the grace period -> not a leak. Touched in 4h.
+  mqlLead("L8", { lead_stage: "sales_qualified", mql_at: "2026-11-09T00:00:00Z", first_touch_at: "2026-11-09T04:00:00Z", sales_accepted_at: "2026-11-09T04:00:00Z", sales_qualified_at: "2026-11-11T12:00:00Z", assigned_adr_id: "d1" }),
+  // L9: outbound, Meeting booked with deal O1 (still Qualifying). Touched in 5h.
+  mqlLead("L9", { account_id: "A2", lead_source: "outbound", lead_stage: "meeting_booked", created_at: "2026-09-01T00:00:00Z", mql_at: "2026-09-02T00:00:00Z", first_touch_at: "2026-09-02T05:00:00Z", sales_accepted_at: "2026-09-02T05:00:00Z", sales_qualified_at: "2026-09-08T00:00:00Z", meeting_booked_at: "2026-09-10T00:00:00Z", assigned_adr_id: "d2", opportunity_id: "O1" }),
+  // L10: outbound, Converted: deal O2 is now Discovery. Touched in 10h.
+  mqlLead("L10", { account_id: "A2", lead_source: "outbound", lead_stage: "converted", created_at: "2026-08-01T00:00:00Z", mql_at: "2026-08-02T00:00:00Z", first_touch_at: "2026-08-02T10:00:00Z", sales_accepted_at: "2026-08-02T10:00:00Z", sales_qualified_at: "2026-08-04T00:00:00Z", meeting_booked_at: "2026-08-05T00:00:00Z", converted_at: "2026-08-05T00:00:00Z", assigned_adr_id: "d2", opportunity_id: "O2" }),
   // L11: created before the 6-month window -> left out of the funnel
   lead("L11", { lead_source: "outbound", created_at: "2026-05-01T00:00:00Z", assigned_adr_id: "d1" }),
 ];
@@ -161,22 +165,28 @@ test("ADR hygiene: the ADR filter splits every issue to one ADR", () => {
   assert.deepEqual(d1.slaBreachRate30d, { breached: 1, eligible: 4, rate: 0.25 }); // L1, L2, L7, L8; L2 late
 });
 
-test("ADR insights: funnel by source, with the window and Qualifying / opportunity rules", () => {
+test("ADR insights: funnel by source, every stage with conversion from the stage before", () => {
   const f = calcAdrInsights(INPUT, AS_OF).funnel;
-  const row = (s: string) => f.find((x) => x.source === s)!;
-  // Outbound: L9 (deal O1, still Stage 0.1) and L10 (deal O2, now Discovery). L11 is before the window.
-  assert.deepEqual(
-    { leads: row("outbound").leads, mql: row("outbound").mql, sql: row("outbound").sql, s01: row("outbound").stage01, opp: row("outbound").opportunity },
-    { leads: 2, mql: 2, sql: 2, s01: 2, opp: 1 },
-  );
-  assert.equal(row("outbound").stage01ToOpportunity, 0.5);
-  assert.equal(row("outbound").leadToOpportunity, 0.5);
-  assert.deepEqual([row("inbound demo request").leads, row("inbound demo request").sql, row("inbound demo request").stage01], [4, 2, 0]);
-  assert.equal(row("inbound demo request").sqlToStage01, 0);
-  assert.equal(row("content download").mqlToSql, null); // no MQLs: no rate, not 0%
-  assert.equal(f[0].source, "outbound"); // best lead-to-opportunity first
+  const row = (src: string) => f.find((x) => x.source === src)!;
+  // Columns: New, Engaged, MQL, Sales accepted, Sales qualified, Meeting booked, Converted
+  // Outbound: L9 (Meeting booked, deal O1) and L10 (Converted). L11 is before the window.
+  assert.deepEqual(row("outbound").reached, [2, 2, 2, 2, 2, 2, 1]);
+  assert.deepEqual(row("outbound").stepRates, [null, 1, 1, 1, 1, 1, 0.5]);
+  assert.equal(row("outbound").overall, 0.5);
+  assert.deepEqual([row("outbound").disqualified, row("outbound").nurture, row("outbound").open], [0, 0, 1]);
+  // Demo requests: L1, L2 (Sales accepted), L7, L8 (Sales qualified)
+  assert.deepEqual(row("inbound demo request").reached, [4, 4, 4, 4, 2, 0, 0]);
+  assert.equal(row("inbound demo request").stepRates[5], 0); // Sales qualified -> Meeting booked: 0 of 2
+  assert.equal(row("inbound demo request").stepRates[6], null); // nothing at Meeting booked: no rate, not 0%
+  // Content downloads: L5 (New) and L6 (Disqualified)
+  assert.deepEqual(row("content download").reached, [2, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual([row("content download").disqualified, row("content download").open], [1, 1]);
+  assert.equal(f[0].source, "outbound"); // best New -> Converted first
   const all = f[f.length - 1];
-  assert.deepEqual([all.source, all.leads, all.mql, all.sql, all.stage01, all.opportunity], ["All sources", 10, 8, 4, 2, 1]);
+  assert.equal(all.source, "All sources");
+  assert.deepEqual(all.reached, [10, 8, 8, 6, 4, 2, 1]);
+  assert.deepEqual([all.disqualified, all.nurture, all.open], [1, 0, 8]);
+  assert.equal(all.overall, 0.1);
 });
 
 test("ADR insights: speed to lead per ADR and for the team", () => {
@@ -207,14 +217,16 @@ test("ADR insights: sequence rates, best and worst, bounce alert", () => {
   assert.equal(by("S5").meetingRate, null);
 });
 
-test("ADR insights: per-ADR table counts meetings from sequence enrollments", () => {
+test("ADR insights: per-ADR table counts stages reached and Meeting booked from the lead", () => {
   const s = calcAdrInsights(INPUT, AS_OF);
   const ada = s.scorecard.find((x) => x.adrId === "d1")!;
   const dan = s.scorecard.find((x) => x.adrId === "d2")!;
-  // Ada owns L1, L2, L7, L8 (L11 is before the window). Meetings: L7 and X1 in S1 (the S5 meeting is before the window).
-  assert.deepEqual([ada.leadsOwned, ada.slaRate, ada.meetingsBooked, ada.stage01Created], [4, 0.75, 2, 0]);
-  // Dan owns L3, L4, L9, L10. Meetings: L9, L10, X2. Deals: L9 and L10.
-  assert.deepEqual([dan.leadsOwned, dan.meetingsBooked, dan.stage01Created], [4, 3, 2]);
-  // SQLs in the window with no sequence meeting: L8 only
-  assert.equal(s.sqlsWithoutSequenceMeeting, 1);
+  // Ada owns L1, L2, L7, L8 (L11 is before the window): all Sales accepted, L7 and L8 Sales qualified, no meetings.
+  // Her sequence meetings (L7, X1 in S1) don't count: Meetings booked comes from the lead's Meeting booked stage.
+  assert.deepEqual(
+    [ada.leadsOwned, ada.slaRate, ada.salesAccepted, ada.salesQualified, ada.meetingsBooked, ada.qualifyingDealsCreated, ada.converted],
+    [4, 0.75, 4, 2, 0, 0, 0],
+  );
+  // Dan owns L3, L4, L9, L10. L9 and L10 reached Meeting booked with deals; L10 converted.
+  assert.deepEqual([dan.leadsOwned, dan.salesAccepted, dan.salesQualified, dan.meetingsBooked, dan.qualifyingDealsCreated, dan.converted], [4, 2, 2, 2, 2, 1]);
 });

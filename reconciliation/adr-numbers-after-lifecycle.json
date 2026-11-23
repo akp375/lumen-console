@@ -1,0 +1,281 @@
+{
+  "takenAt": "2026-11-23T17:40:59.410Z",
+  "note": "ADR page numbers after the new lead lifecycle.",
+  "hygiene": {
+    "total": 83,
+    "unassigned": 24,
+    "slaBreach": 29,
+    "staleStage01": 6,
+    "handoffLeak": 2,
+    "pairingMismatch": 7,
+    "accountTags": 15,
+    "slaBreachRate30d": {
+      "breached": 19,
+      "eligible": 66,
+      "rate": 0.2878787878787879
+    }
+  },
+  "funnelStages": [
+    "new",
+    "engaged",
+    "mql",
+    "sales_accepted",
+    "sales_qualified",
+    "meeting_booked",
+    "converted"
+  ],
+  "funnel": [
+    {
+      "source": "inbound demo request",
+      "reached": [
+        108,
+        108,
+        108,
+        98,
+        42,
+        35,
+        22
+      ],
+      "overall": 0.2037037037037037,
+      "disqualified": 38,
+      "nurture": 18,
+      "open": 30
+    },
+    {
+      "source": "partner",
+      "reached": [
+        54,
+        49,
+        48,
+        39,
+        14,
+        11,
+        7
+      ],
+      "overall": 0.12962962962962962,
+      "disqualified": 20,
+      "nurture": 12,
+      "open": 15
+    },
+    {
+      "source": "outbound",
+      "reached": [
+        176,
+        91,
+        72,
+        66,
+        26,
+        18,
+        15
+      ],
+      "overall": 0.08522727272727272,
+      "disqualified": 40,
+      "nurture": 77,
+      "open": 44
+    },
+    {
+      "source": "content download",
+      "reached": [
+        159,
+        91,
+        57,
+        46,
+        7,
+        2,
+        0
+      ],
+      "overall": 0,
+      "disqualified": 36,
+      "nurture": 74,
+      "open": 49
+    },
+    {
+      "source": "event",
+      "reached": [
+        45,
+        23,
+        19,
+        14,
+        3,
+        2,
+        0
+      ],
+      "overall": 0,
+      "disqualified": 13,
+      "nurture": 22,
+      "open": 10
+    },
+    {
+      "source": "webinar",
+      "reached": [
+        58,
+        42,
+        32,
+        25,
+        2,
+        1,
+        0
+      ],
+      "overall": 0,
+      "disqualified": 21,
+      "nurture": 23,
+      "open": 14
+    },
+    {
+      "source": "All sources",
+      "reached": [
+        600,
+        404,
+        336,
+        288,
+        94,
+        69,
+        44
+      ],
+      "overall": 0.07333333333333333,
+      "disqualified": 168,
+      "nurture": 226,
+      "open": 162
+    }
+  ],
+  "speed": [
+    {
+      "name": "Sofia Marin",
+      "mqls": 56,
+      "onTime": 50,
+      "late": 6,
+      "never": 0,
+      "onTimeRate": 0.8928571428571429,
+      "medianHours": 9.766666666666666
+    },
+    {
+      "name": "Kenji Watanabe",
+      "mqls": 152,
+      "onTime": 98,
+      "late": 39,
+      "never": 15,
+      "onTimeRate": 0.6447368421052632,
+      "medianHours": 14
+    },
+    {
+      "name": "Grace Mensah",
+      "mqls": 100,
+      "onTime": 83,
+      "late": 11,
+      "never": 6,
+      "onTimeRate": 0.83,
+      "medianHours": 10.908333333333333
+    },
+    {
+      "name": "Unassigned",
+      "mqls": 25,
+      "onTime": 0,
+      "late": 3,
+      "never": 22,
+      "onTimeRate": 0,
+      "medianHours": 113
+    },
+    {
+      "name": "Team",
+      "mqls": 333,
+      "onTime": 231,
+      "late": 59,
+      "never": 43,
+      "onTimeRate": 0.6936936936936937,
+      "medianHours": 12.558333333333334
+    }
+  ],
+  "sequences": [
+    {
+      "name": "Inbound demo follow-up",
+      "enrollments": 162,
+      "callBookedRate": 0.36419753086419754,
+      "bounceRate": 0.006172839506172839,
+      "rank": "best"
+    },
+    {
+      "name": "Outbound cold: commercial",
+      "enrollments": 87,
+      "callBookedRate": 0.19540229885057472,
+      "bounceRate": 0.05747126436781609,
+      "rank": null
+    },
+    {
+      "name": "Webinar follow-up",
+      "enrollments": 58,
+      "callBookedRate": 0.08620689655172414,
+      "bounceRate": 0,
+      "rank": null
+    },
+    {
+      "name": "Event follow-up",
+      "enrollments": 45,
+      "callBookedRate": 0.06666666666666667,
+      "bounceRate": 0.044444444444444446,
+      "rank": null
+    },
+    {
+      "name": "Outbound cold: enterprise",
+      "enrollments": 32,
+      "callBookedRate": 0.0625,
+      "bounceRate": 0.0625,
+      "rank": null
+    },
+    {
+      "name": "Content nurture",
+      "enrollments": 159,
+      "callBookedRate": 0.012578616352201259,
+      "bounceRate": 0.025157232704402517,
+      "rank": null
+    },
+    {
+      "name": "Re-engagement",
+      "enrollments": 55,
+      "callBookedRate": 0,
+      "bounceRate": 0.01818181818181818,
+      "rank": null
+    },
+    {
+      "name": "Outbound cold: commercial (bought list)",
+      "enrollments": 57,
+      "callBookedRate": 0,
+      "bounceRate": 0.15789473684210525,
+      "rank": "worst"
+    }
+  ],
+  "perAdr": [
+    {
+      "adrId": "tm_11",
+      "name": "Sofia Marin",
+      "leadsOwned": 110,
+      "slaRate": 0.8928571428571429,
+      "salesAccepted": 56,
+      "salesQualified": 17,
+      "meetingsBooked": 12,
+      "qualifyingDealsCreated": 12,
+      "converted": 5
+    },
+    {
+      "adrId": "tm_12",
+      "name": "Kenji Watanabe",
+      "leadsOwned": 268,
+      "slaRate": 0.6447368421052632,
+      "salesAccepted": 137,
+      "salesQualified": 41,
+      "meetingsBooked": 30,
+      "qualifyingDealsCreated": 30,
+      "converted": 21
+    },
+    {
+      "adrId": "tm_13",
+      "name": "Grace Mensah",
+      "leadsOwned": 177,
+      "slaRate": 0.83,
+      "salesAccepted": 95,
+      "salesQualified": 36,
+      "meetingsBooked": 27,
+      "qualifyingDealsCreated": 27,
+      "converted": 18
+    }
+  ]
+}

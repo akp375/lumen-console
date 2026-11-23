@@ -216,6 +216,49 @@ async function main() {
   );
   check("Every contact email is at <company>.example.com", L.every((l) => /@[a-z0-9-]+\.example\.com$/.test(l.contact_email)));
   check(`Existing new-business deals linked to their lead (${built.planted.linkedExistingDeals.length})`, built.planted.linkedExistingDeals.every((id) => L.some((l) => l.opportunity_id === id)));
+  // Lead lifecycle (23 Nov 2026)
+  const t = (v: string | null) => (v === null ? null : Date.parse(v));
+  const ORDER = ["created_at", "engaged_at", "mql_at", "sales_accepted_at", "sales_qualified_at", "meeting_booked_at", "converted_at"] as const;
+  const outOfOrder = L.filter((l) => {
+    let prev = -Infinity;
+    for (const c of ORDER) {
+      const v = t(l[c] as string | null);
+      if (v === null) continue;
+      if (v < prev) return true;
+      prev = v;
+    }
+    for (const c of ["disqualified_at", "nurtured_at"] as const) if (l[c] && t(l[c])! < prev) return true;
+    return false;
+  });
+  check(`Every lead has a lifecycle stage, with its stages in order (${outOfOrder.length} out of order)`, L.every((l) => l.lead_stage) && outOfOrder.length === 0);
+  const asOfEnd = Date.parse(`${AS_OF_DATE}T23:59:59.999Z`);
+  check("No stage time is after the as-of date", L.every((l) => [...ORDER, "disqualified_at", "nurtured_at"].every((c) => !l[c as keyof typeof l] || t(l[c as keyof typeof l] as string)! <= asOfEnd)));
+  const noDeal = L.filter((l) => l.meeting_booked_at && !l.opportunity_id);
+  check(`No lead reaches Meeting booked without a Qualifying deal (${noDeal.length} do)`, noDeal.length === 0);
+  const dealNoMeeting = L.filter((l) => l.opportunity_id && !l.meeting_booked_at);
+  check(`Every lead with a deal reached Meeting booked (${dealNoMeeting.length} didn't)`, dealNoMeeting.length === 0);
+  check("Meeting booked equals sql_at (the deal's creation and the sequence's meeting)", L.every((l) => !l.meeting_booked_at || t(l.meeting_booked_at) === t(l.sql_at)));
+  const stageOf = new Map(data.opportunities.map((o) => [String(o.id), String(o.stage)]));
+  check("Converted exactly when the deal has moved past Qualifying", L.every((l) => Boolean(l.converted_at) === Boolean(l.opportunity_id && stageOf.get(l.opportunity_id) !== "Stage 0.1")));
+  const endingOk = L.every((l) =>
+    l.lead_stage === "disqualified" ? Boolean(l.disqualified_at && l.disqualify_reason) && !l.nurtured_at
+    : l.lead_stage === "nurture" ? Boolean(l.nurtured_at) && !l.disqualified_at
+    : !l.disqualified_at && !l.nurtured_at);
+  check("Every ending has its time (and a reason for Disqualified); open leads have none", endingOk);
+  const lastReached = (l: (typeof L)[number]) => (l.converted_at ? "converted" : l.meeting_booked_at ? "meeting_booked" : l.sales_qualified_at ? "sales_qualified" : l.sales_accepted_at ? "sales_accepted" : l.mql_at ? "mql" : l.engaged_at ? "engaged" : "new");
+  check("Each open lead's stage is the furthest stage it reached", L.every((l) => ["disqualified", "nurture", "converted"].includes(l.lead_stage) ? l.lead_stage !== "converted" || lastReached(l) === "converted" : l.lead_stage === lastReached(l)));
+  check("Sales accepted only with an ADR and a first touch", L.every((l) => !l.sales_accepted_at || Boolean(l.assigned_adr_id && l.first_touch_at)));
+  const callDq = L.filter((l) => l.sql_at && !l.opportunity_id && l.lead_stage === "disqualified");
+  check(`Leads disqualified at the qualifying call stop at Sales accepted or Sales qualified (${callDq.length})`, callDq.every((l) => !l.meeting_booked_at && Boolean(l.sales_accepted_at)));
+  const share = (src: string, f: (l: (typeof L)[number]) => boolean) => {
+    const ls = L.filter((l) => l.lead_source === src);
+    return ls.filter(f).length / ls.length;
+  };
+  const contentEnd = share("content download", (l) => l.lead_stage === "nurture" || l.lead_stage === "disqualified");
+  check(`Content downloads mostly end in Nurture or Disqualified (${Math.round(contentEnd * 100)}%)`, contentEnd >= 0.6);
+  const far = (src: string) => share(src, (l) => Boolean(l.meeting_booked_at));
+  const sources = [...new Set(L.map((l) => l.lead_source))];
+  check(`Demo requests progress furthest (Meeting booked: demo ${Math.round(far("inbound demo request") * 100)}%, best other ${Math.round(Math.max(...sources.filter((x) => x !== "inbound demo request").map(far)) * 100)}%)`, sources.every((x) => far("inbound demo request") >= far(x)));
   console.log("\nWhat was built:");
   for (const line of adrSummary(built, input.team)) console.log(`  ${line}`);
   console.log(`  => ${results.every(Boolean) ? "All ADR checks pass." : "SOME CHECKS FAILED: see FAIL lines."}`);

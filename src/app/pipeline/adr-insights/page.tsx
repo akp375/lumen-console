@@ -1,10 +1,10 @@
 import { Suspense, type ReactNode } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { ADR_RULES, getAdrInsights, type AdrInsightsResult } from "@/lib/metrics";
+import { ADR_RULES, LEAD_FUNNEL, getAdrInsights, type AdrInsightsResult } from "@/lib/metrics";
 import { getLatestAdrMemo } from "@/lib/adr-memo";
 import { PAGES, tabTitle } from "@/lib/pages";
-import { QUALIFYING, QUALIFYING_DESCRIPTION, pct, shortDate } from "@/lib/format";
+import { LEAD_STAGE_DESCRIPTIONS, QUALIFYING, QUALIFYING_DESCRIPTION, leadStageLabel, pct, shortDate } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { RuleNote, SectionHeading } from "@/components/RiskUi";
 import { AdrMemoPanel } from "@/components/AdrMemoPanel";
@@ -80,26 +80,28 @@ function Funnel({ data, window }: { data: AdrInsightsResult; window: string }) {
   const all = data.funnel.find((f) => f.source === "All sources")!;
   const cells = (f: (typeof data.funnel)[number]) => (
     <>
-      <td className={NUM}>{f.leads}</td>
-      <td className={NUM}>{f.mql}</td>
-      <td className={NUM}>{f.sql}</td>
-      <td className={NUM}>{f.stage01}</td>
-      <td className={NUM}>{f.opportunity}</td>
-      <td className={NUM}>{pct(f.leadToMql)}</td>
-      <td className={NUM}>{pct(f.mqlToSql)}</td>
-      <td className={NUM}>{pct(f.sqlToStage01)}</td>
-      <td className={NUM}>{pct(f.stage01ToOpportunity)}</td>
-      <td className={`${NUM} font-medium`}>{pct(f.leadToOpportunity)}</td>
+      {f.reached.map((n, i) => (
+        <td key={LEAD_FUNNEL[i].stage} className={NUM}>
+          <div>{n}</div>
+          {i > 0 && <div className="text-xs text-zinc-500 dark:text-zinc-400">{pct(f.stepRates[i])}</div>}
+        </td>
+      ))}
+      <td className={`${NUM} font-medium`}>{pct(f.overall)}</td>
+      <td className={`${NUM} border-l border-zinc-200 dark:border-zinc-800`}>{f.disqualified}</td>
+      <td className={NUM}>{f.nurture}</td>
+      <td className={NUM}>{f.open}</td>
     </>
   );
   return (
     <section>
-      <SectionHeading title="Funnel by Lead Source" detail={`Leads created ${window}, best lead-to-opportunity rate first.`} />
+      <SectionHeading title="Funnel by Lead Source" detail={`Leads created ${window}, best New-to-Converted rate first. Under each count: conversion from the stage before.`} />
       <Table
-        minWidth="min-w-[960px]"
+        minWidth="min-w-[1040px]"
         head={[
           { label: "Source" },
-          ...["Leads", "MQL", "SQL", QUALIFYING, "Opportunity", "Lead → MQL", "MQL → SQL", `SQL → ${QUALIFYING}`, `${QUALIFYING} → Opp`, "Lead → Opp"].map((label) => ({ label, numeric: true })),
+          ...LEAD_FUNNEL.map((f) => ({ label: leadStageLabel(f.stage), numeric: true })),
+          { label: "New → Converted", numeric: true },
+          ...["Disqualified", "Nurture", "Still open"].map((label) => ({ label, numeric: true })),
         ]}
       >
         {rows.map((f) => (
@@ -115,9 +117,10 @@ function Funnel({ data, window }: { data: AdrInsightsResult; window: string }) {
       </Table>
       <div className="mt-2">
         <RuleNote>
-          {QUALIFYING} = the lead has a deal; it is the first deal stage ({QUALIFYING_DESCRIPTION}), so every deal has passed it. Opportunity = that
-          deal has moved past {QUALIFYING}, open or closed. Deals opened before this stage existed went straight into a later stage and count as having
-          passed it. Recent leads have had less time to convert.
+          {LEAD_FUNNEL.map((f) => `${leadStageLabel(f.stage)}: ${LEAD_STAGE_DESCRIPTIONS[f.stage]}`).join(". ")}. Endings: Disqualified (with a reason) or
+          Nurture (returned to marketing). Counts are leads that reached each stage. Meeting booked creates the {QUALIFYING} deal ({QUALIFYING_DESCRIPTION}).
+          Deals opened before that stage existed went straight to an opportunity, so they convert on the day of the meeting. Recent leads have had less time to
+          convert.
         </RuleNote>
       </div>
     </section>
@@ -160,8 +163,8 @@ function Speed({ data, window }: { data: AdrInsightsResult; window: string }) {
 function Sequences({ data, window }: { data: AdrInsightsResult; window: string }) {
   return (
     <section>
-      <SectionHeading title="Sequence Performance" detail={`Enrollments from ${window}, highest meeting rate first.`} />
-      <Table head={[{ label: "Sequence" }, { label: "Owner" }, ...["Enrollments", "Open", "Reply", "Meeting", "Bounce"].map((label) => ({ label, numeric: true }))]}>
+      <SectionHeading title="Sequence Performance" detail={`Enrollments from ${window}, highest call-booked rate first.`} />
+      <Table head={[{ label: "Sequence" }, { label: "Owner" }, ...["Enrollments", "Open", "Reply", "Call booked", "Bounce"].map((label) => ({ label, numeric: true }))]}>
         {data.sequences.map((s) => (
           <tr key={s.id} className={`${ROW} ${s.rank === "best" ? "bg-emerald-50/60 dark:bg-emerald-950/30" : s.rank === "worst" ? "bg-red-50/60 dark:bg-red-950/30" : ""}`}>
             <td className={`${TD} text-zinc-900 dark:text-zinc-100`}>
@@ -187,7 +190,8 @@ function Sequences({ data, window }: { data: AdrInsightsResult; window: string }
       </Table>
       <div className="mt-2">
         <RuleNote>
-          Each rate is the share of enrollments with at least one open, reply, booked meeting or bounce. Best and worst are by meeting rate among sequences with{" "}
+          Each rate is the share of enrollments with at least one open, reply, booked call or bounce. A booked call is a meeting with an AE or an ADR&apos;s
+          qualifying call, so calls booked can be more than meetings booked. Best and worst are by call-booked rate among sequences with{" "}
           {R.sequenceMinEnrollments}+ enrollments (a tie goes to the higher bounce rate as worse). Bounce rates above {pct(R.sequenceBounceAlertAbove)} are red.
         </RuleNote>
       </div>
@@ -196,25 +200,29 @@ function Sequences({ data, window }: { data: AdrInsightsResult; window: string }
 }
 
 function Scorecard({ data, window }: { data: AdrInsightsResult; window: string }) {
+  const cols = ["Leads owned", `SLA (within ${R.slaHours}h)`, "Sales accepted", "Sales qualified", "Meetings booked", `${QUALIFYING} deals created`, "Converted"];
   return (
     <section>
-      <SectionHeading title="Results per ADR" detail={`Leads created ${window}.`} />
-      <Table minWidth="min-w-[640px]" head={[{ label: "ADR" }, ...["Leads owned", `SLA (within ${R.slaHours}h)`, "Meetings booked", `${QUALIFYING} deals created`].map((label) => ({ label, numeric: true }))]}>
+      <SectionHeading title="Results per ADR" detail={`Leads created ${window}; stages reached in the same period.`} />
+      <Table minWidth="min-w-[860px]" head={[{ label: "ADR" }, ...cols.map((label) => ({ label, numeric: true }))]}>
         {data.scorecard.map((s) => (
           <tr key={s.adrId} className={ROW}>
             <td className={`${TD} text-zinc-900 dark:text-zinc-100`}>{s.name}</td>
             <td className={NUM}>{s.leadsOwned}</td>
             <td className={NUM}>{pct(s.slaRate)}</td>
+            <td className={NUM}>{s.salesAccepted}</td>
+            <td className={NUM}>{s.salesQualified}</td>
             <td className={NUM}>{s.meetingsBooked}</td>
-            <td className={NUM}>{s.stage01Created}</td>
+            <td className={NUM}>{s.qualifyingDealsCreated}</td>
+            <td className={NUM}>{s.converted}</td>
           </tr>
         ))}
       </Table>
       <div className="mt-2">
         <RuleNote>
-          Meetings booked = sequence enrollments with a meeting booked (in the window), credited to the enrollment&apos;s ADR. Meetings outside a sequence
-          aren&apos;t recorded anywhere, so they aren&apos;t counted; SQLs with no sequence meeting: {data.sqlsWithoutSequenceMeeting}. {QUALIFYING} deals created = the
-          ADR&apos;s leads that got a deal (the deal&apos;s first stage: {QUALIFYING_DESCRIPTION}).
+          Leads owned and {QUALIFYING} deals created count the ADR&apos;s leads created in the period; the stage columns count leads that reached the stage in the
+          period. Meetings booked = leads that reached Meeting booked (a meeting set with an AE); every one has a {QUALIFYING} deal ({QUALIFYING_DESCRIPTION}).
+          SLA = MQLs first touched within {R.slaHours} hours.
         </RuleNote>
       </div>
     </section>

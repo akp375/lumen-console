@@ -36,9 +36,12 @@ Rules:
 - Recommend; don't restate the data. Every finding must lead to an action.
 - Name only people in the summary. Don't invent contacts, events, tools or causes. If a cause is a
   reasonable guess rather than shown by the data, say "likely".
-- "Qualifying" is a deal stage: meeting held, not yet qualified as an opportunity. "Meetings
-  booked" is a different number: meetings booked from sequences. Don't mix them up.
-- Plain English. Use only the terms the summary uses (MQL, SQL, Qualifying, SLA). No markdown.`;
+- Leads move through New, Engaged, MQL, Sales accepted, Sales qualified and Meeting booked, then
+  end as Converted, Disqualified or Nurture; the summary explains each. A lead reaches Meeting booked
+  only when a Qualifying deal is created. A sequence's "calls booked" include ADR qualifying calls,
+  so don't treat them as meetings booked.
+- Plain English. Use only the stage names and terms the summary uses (for example MQL, Sales
+  qualified, Meeting booked, Qualifying, SLA). No markdown.`;
 
 const SCHEMA = {
   type: "object",

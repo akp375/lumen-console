@@ -24,7 +24,7 @@
     "adr:backfill": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/adr-backfill.ts",
     "adr:check": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/adr-check.ts",
     "contracts:check":"node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/contracts-check.ts",
-    "test":"node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts"
+    "test":"node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts scripts/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

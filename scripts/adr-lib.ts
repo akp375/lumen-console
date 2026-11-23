@@ -48,6 +48,19 @@ export type LeadRow = {
   assigned_adr_id: string | null;
   disqualify_reason: string | null;
   opportunity_id: string | null;
+} & LeadStageFields;
+
+/** The lead lifecycle (23 Nov 2026). Stored in leads.lead_stage; lifecycle_stage is legacy and unchanged. */
+export type LeadStage = "new" | "engaged" | "mql" | "sales_accepted" | "sales_qualified" | "meeting_booked" | "converted" | "disqualified" | "nurture";
+export type LeadStageFields = {
+  lead_stage: LeadStage;
+  engaged_at: string | null;
+  sales_accepted_at: string | null;
+  sales_qualified_at: string | null;
+  meeting_booked_at: string | null;
+  converted_at: string | null;
+  disqualified_at: string | null;
+  nurtured_at: string | null;
 };
 export type SequenceRow = { id: string; name: string; audience: string; step_count: number; owner_id: string; created_at: string };
 export type EnrollmentStatus = "active" | "finished" | "replied" | "bounced" | "unsubscribed";
@@ -191,6 +204,8 @@ const TITLES: Record<string, readonly string[]> = {
   "mid-market": ["Operations Manager", "Head of Data", "Engineering Manager", "Director of Operations", "IT Manager", "CTO"],
   SMB: ["Founder", "Operations Lead", "Office Manager", "Head of Engineering", "COO", "Data Analyst"],
 };
+/** Leads disqualified at the ADR's qualifying call: no meeting with an AE, so no Qualifying deal. */
+const QUALIFYING_CALL_REASON = "Not a fit at the qualifying call";
 const DISQUALIFY_REASONS = ["Not ICP", "No budget this year", "Student or personal email", "Competitor research", "Duplicate", "No response after sequence"] as const;
 const AMOUNT: Record<string, readonly [number, number]> = { enterprise: [60_000, 150_000], "mid-market": [18_000, 45_000], SMB: [4_000, 12_000] };
 const NEXT_STEPS = ["Qualify budget and timeline", "Confirm the use case with the champion", "Book discovery with the AE", "Send the security questionnaire", "Get the economic buyer on a call"];
@@ -344,6 +359,7 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
       assigned_adr_id: d.adr_id ?? territoryAdr(a),
       disqualify_reason: null,
       opportunity_id: d.id,
+      ...EMPTY_STAGES,
       segment: a.segment,
       touched: "on time",
     });
@@ -377,6 +393,7 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
       assigned_adr_id: adr,
       disqualify_reason: null,
       opportunity_id: null,
+      ...EMPTY_STAGES,
       segment: a.segment,
       touched: null,
     };
@@ -444,7 +461,7 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
     if (Date.parse(l.sql_at!) < recentFrom) {
       if (r.chance(0.85)) {
         l.lifecycle_stage = "disqualified";
-        l.disqualify_reason = "Not a fit after the first meeting";
+        l.disqualify_reason = QUALIFYING_CALL_REASON; // disqualified at the ADR's qualifying call (see buildLeadStages)
       } // else stays an SQL with no deal (a hygiene finding)
       continue;
     }
@@ -583,6 +600,14 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
   enrollments.sort((x, y) => x.enrolled_at.localeCompare(y.enrolled_at) || x.lead_id.localeCompare(y.lead_id));
   enrollments.forEach((e, i) => (e.id = `enr_${String(i + 1).padStart(4, "0")}`));
 
+  // 6. Lead lifecycle: each lead's path, built from its existing timestamps and deal (own random stream).
+  const stageOfDeal = new Map<string, string>([...input.deals.map((d) => [d.id, d.stage] as const), ...stage01Deals.map((d) => [d.id, d.stage] as const)]);
+  for (const l of leads) {
+    const { fields, disqualifyReason } = buildLeadStages(l, l.opportunity_id ? (stageOfDeal.get(l.opportunity_id) ?? null) : null, asOf);
+    Object.assign(l, fields);
+    l.disqualify_reason = disqualifyReason;
+  }
+
   const cleanLeads: LeadRow[] = leads.map(({ segment: _s, touched: _t, ...row }) => row);
   return {
     teamTerritory,
@@ -602,6 +627,140 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
       linkedExistingDeals: linkedDeals.map((d) => d.id),
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Lead lifecycle
+// ---------------------------------------------------------------------------
+
+const EMPTY_STAGES: LeadStageFields = {
+  lead_stage: "new",
+  engaged_at: null,
+  sales_accepted_at: null,
+  sales_qualified_at: null,
+  meeting_booked_at: null,
+  converted_at: null,
+  disqualified_at: null,
+  nurtured_at: null,
+};
+/** Leads that never reached MQL go to Nurture this many days after creation (if old enough). */
+const NURTURE_AFTER_DAYS: readonly [number, number] = [30, 45];
+/** Sales accepted leads with no meeting go to Nurture this many days after acceptance (if accepted 30+ days ago). */
+const STALLED_ACCEPTED_DAYS = 30;
+const STALLED_TO_NURTURE_DAYS: readonly [number, number] = [21, 30];
+/** Share of leads that never reach MQL but respond to marketing emails, by source. */
+const ENGAGED_WITHOUT_MQL: Record<string, number> = { "content download": 0.4, webinar: 0.5, event: 0.4, outbound: 0.2, partner: 0.3, "inbound demo request": 0.3 };
+
+type StageInput = Pick<LeadRow, "id" | "lead_source" | "lifecycle_stage" | "created_at" | "mql_at" | "first_touch_at" | "sql_at" | "assigned_adr_id" | "disqualify_reason" | "opportunity_id">;
+
+/**
+ * A lead's path through New, Engaged, MQL, Sales accepted, Sales qualified, Meeting booked and its
+ * ending (Converted, Disqualified or Nurture), built only from its existing values:
+ *   - MQL is the existing mql_at; the 24-hour SLA stays MQL -> first touch.
+ *   - Sales accepted = an ADR is assigned and has touched the lead: the later of first touch and MQL.
+ *   - Meeting booked only with a Qualifying deal (opportunity_id), at sql_at (= the deal's creation and
+ *     the sequence's meeting). Leads with sql_at but no deal had their ADR's qualifying call then: they
+ *     stop at Sales accepted or Sales qualified (disqualified at the call, or still waiting for a handoff).
+ *   - Converted = the deal has moved past Qualifying.
+ * Pure: no database, no real clock. Returns the stage fields and the (possibly updated) disqualify reason.
+ */
+export function buildLeadStages(l: StageInput, dealStage: string | null, asOf: string): { fields: LeadStageFields; disqualifyReason: string | null } {
+  const r = makeRng(`stages:${l.id}`);
+  const asOfEnd = dayStart(asOf) + DAY_MS - 1;
+  const f: LeadStageFields = { ...EMPTY_STAGES };
+  let reason = l.disqualify_reason;
+  const created = Date.parse(l.created_at);
+  const mql = l.mql_at ? Date.parse(l.mql_at) : null;
+  const touch = l.first_touch_at ? Date.parse(l.first_touch_at) : null;
+  const sql = l.sql_at ? Date.parse(l.sql_at) : null;
+  const clip = (ms: number, min: number) => Math.max(min, Math.min(ms, asOfEnd));
+  const handRaiser = l.lead_source === "inbound demo request" || l.lead_source === "partner";
+
+  // Engaged (always before MQL for leads that reached MQL)
+  if (mql !== null) {
+    let engaged: number;
+    if (handRaiser) engaged = created; // the request itself is the response
+    else if (l.lead_source === "outbound") engaged = Math.max(created, mql - r.int(1, 6) * HOUR_MS);
+    else engaged = created + Math.floor((mql - created) * r.next());
+    f.engaged_at = ts(Math.min(engaged, mql));
+  } else if (l.lifecycle_stage !== "disqualified" && r.chance(ENGAGED_WITHOUT_MQL[l.lead_source] ?? 0.3)) {
+    const engaged = created + r.int(1, 14) * DAY_MS + r.int(0, 8) * HOUR_MS;
+    if (engaged <= asOfEnd) f.engaged_at = ts(engaged);
+  }
+  if (mql === null) {
+    if (l.lifecycle_stage === "disqualified") {
+      f.disqualified_at = ts(clip(created + r.int(1, 5) * DAY_MS, created));
+      f.lead_stage = "disqualified";
+    } else {
+      const nurture = Math.max(created + r.int(NURTURE_AFTER_DAYS[0], NURTURE_AFTER_DAYS[1]) * DAY_MS, f.engaged_at ? Date.parse(f.engaged_at) + DAY_MS : 0);
+      if (dayStart(day(created)) <= dayStart(asOf) - 45 * DAY_MS && nurture <= asOfEnd) {
+        f.nurtured_at = ts(nurture);
+        f.lead_stage = "nurture";
+      } else f.lead_stage = f.engaged_at ? "engaged" : "new";
+    }
+    return { fields: f, disqualifyReason: reason };
+  }
+
+  // MQL and Sales accepted
+  f.lead_stage = "mql";
+  const accepted = l.assigned_adr_id && touch !== null ? Math.max(touch, mql) : null;
+  if (accepted !== null) {
+    f.sales_accepted_at = ts(accepted);
+    f.lead_stage = "sales_accepted";
+  }
+
+  // Leads with a Qualifying deal: Sales qualified, Meeting booked, maybe Converted
+  if (l.opportunity_id && sql !== null && accepted !== null) {
+    const gap = sql - accepted;
+    f.sales_qualified_at = ts(Math.min(sql - HOUR_MS, accepted + Math.floor(gap * (0.4 + 0.4 * r.next()))));
+    f.meeting_booked_at = l.sql_at;
+    f.lead_stage = "meeting_booked";
+    if (dealStage && dealStage !== "Stage 0.1") {
+      f.converted_at = l.sql_at; // these deals were opened straight into a later stage
+      f.lead_stage = "converted";
+    }
+    return { fields: f, disqualifyReason: reason };
+  }
+
+  // A qualifying call (sql_at) but no deal: never reached Meeting booked
+  if (sql !== null && accepted !== null) {
+    if (l.lifecycle_stage === "disqualified") {
+      if (r.chance(1 / 3)) {
+        f.sales_qualified_at = ts(sql);
+        f.disqualified_at = ts(clip(sql + r.int(1, 5) * DAY_MS, sql));
+        reason = "No budget this year";
+      } else {
+        f.disqualified_at = ts(clip(sql + r.int(1, 3) * HOUR_MS, sql));
+        reason = QUALIFYING_CALL_REASON;
+      }
+      f.lead_stage = "disqualified";
+    } else {
+      f.sales_qualified_at = ts(sql); // qualified, but never handed to an AE (a handoff leak)
+      f.lead_stage = "sales_qualified";
+    }
+    return { fields: f, disqualifyReason: reason };
+  }
+
+  // Disqualified after MQL
+  const last = accepted ?? mql;
+  if (l.lifecycle_stage === "disqualified") {
+    const customer = reason === "Existing customer, passed to the account team";
+    if (!customer && accepted !== null && reason === "No budget this year") f.sales_qualified_at = ts(clip(accepted + r.int(1, 5) * DAY_MS, accepted));
+    const after = f.sales_qualified_at ? Date.parse(f.sales_qualified_at) : last;
+    const at = customer ? last + r.int(1, 8) * HOUR_MS : Math.max(after + HOUR_MS, mql + r.int(7, 14) * DAY_MS);
+    f.disqualified_at = ts(clip(at, after));
+    f.lead_stage = "disqualified";
+    return { fields: f, disqualifyReason: reason };
+  }
+
+  // Still open, or stalled after acceptance -> Nurture (untouched MQLs stay open: they are SLA breaches)
+  if (accepted !== null && accepted <= asOfEnd - STALLED_ACCEPTED_DAYS * DAY_MS) {
+    if (r.chance(0.25)) f.sales_qualified_at = ts(accepted + r.int(2, 10) * DAY_MS);
+    const from = f.sales_qualified_at ? Date.parse(f.sales_qualified_at) : accepted;
+    f.nurtured_at = ts(clip(accepted + r.int(STALLED_TO_NURTURE_DAYS[0], STALLED_TO_NURTURE_DAYS[1]) * DAY_MS, from + DAY_MS));
+    f.lead_stage = "nurture";
+  }
+  return { fields: f, disqualifyReason: reason };
 }
 
 /** Short code that changes whenever any built row changes. */

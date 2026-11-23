@@ -83,3 +83,30 @@ const STAGE_LABELS: Record<string, string> = { "Stage 0.1": QUALIFYING };
 export function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
 }
+
+/** The lead lifecycle as users see it (stored in leads.lead_stage). */
+export const LEAD_STAGE_LABELS: Record<string, string> = {
+  new: "New",
+  engaged: "Engaged",
+  mql: "MQL",
+  sales_accepted: "Sales accepted",
+  sales_qualified: "Sales qualified",
+  meeting_booked: "Meeting booked",
+  converted: "Converted",
+  disqualified: "Disqualified",
+  nurture: "Nurture",
+};
+export const LEAD_STAGE_DESCRIPTIONS: Record<string, string> = {
+  new: "downloaded or signed up for something",
+  engaged: "responded to automated marketing emails",
+  mql: "marketing qualified lead",
+  sales_accepted: "an ADR took ownership and is working it",
+  sales_qualified: "passed the ADR's qualifying call",
+  meeting_booked: "meeting set with an AE; the Qualifying deal is created here",
+  converted: "became an opportunity",
+  disqualified: "ruled out, with a reason",
+  nurture: "returned to marketing",
+};
+export function leadStageLabel(stage: string): string {
+  return LEAD_STAGE_LABELS[stage] ?? stage;
+}

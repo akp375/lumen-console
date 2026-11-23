@@ -15,7 +15,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "./as-of-date.ts";
-import { QUALIFYING, QUALIFYING_DESCRIPTION, stageLabel } from "./format.ts";
+import { LEAD_STAGE_DESCRIPTIONS, LEAD_STAGE_LABELS, QUALIFYING, QUALIFYING_DESCRIPTION, stageLabel } from "./format.ts";
 import { SIGNAL_TOPICS, type Sentiment, type SignalTopic } from "./signal-topics.ts";
 
 // ---------------------------------------------------------------------------
@@ -2921,10 +2921,10 @@ export const ADR_RULES = {
   slaBreachRateDays: 30,
   /** A Stage 0.1 deal is stale with no update for this many days or more (exactly 14 counts). */
   staleStage01Days: 14,
-  /** An SQL with no deal this many days after the meeting is a handoff leak (Stage 0.1 deals are normally opened the same day). */
+  /** A lead at Sales qualified this many days with no meeting booked is a handoff leak (the ADR never handed it to an AE). */
   handoffGraceDays: 3,
-  /** Leads in these stages count as unassigned when they have no ADR (disqualified leads don't). */
-  unassignedStages: ["lead", "MQL", "SQL"] as readonly string[],
+  /** Open leads at these stages count as unassigned when they have no ADR (later stages need an ADR; endings don't count). */
+  unassignedStages: ["new", "engaged", "mql"] as readonly string[],
   /** Funnel, speed to lead, sequences and the per-ADR table look back this many months. */
   insightsWindowMonths: 6,
   /** A sequence needs this many enrollments to be ranked best or worst. */
@@ -2935,16 +2935,37 @@ export const ADR_RULES = {
   memoMaxTokens: 3000,
 } as const;
 
+/** The lead lifecycle, in order (leads.lead_stage). Endings: converted, disqualified, nurture. */
+export const LEAD_STAGES = ["new", "engaged", "mql", "sales_accepted", "sales_qualified", "meeting_booked", "converted", "disqualified", "nurture"] as const;
+export type LeadStage = (typeof LEAD_STAGES)[number];
+/** The funnel: every stage a lead can reach, with the column holding when it was reached. */
+export const LEAD_FUNNEL = [
+  { stage: "new", column: "created_at" },
+  { stage: "engaged", column: "engaged_at" },
+  { stage: "mql", column: "mql_at" },
+  { stage: "sales_accepted", column: "sales_accepted_at" },
+  { stage: "sales_qualified", column: "sales_qualified_at" },
+  { stage: "meeting_booked", column: "meeting_booked_at" },
+  { stage: "converted", column: "converted_at" },
+] as const satisfies readonly { stage: LeadStage; column: keyof AdrLeadRow }[];
+
 export type AdrLeadRow = {
   id: string;
   account_id: string;
   contact_name: string;
   lead_source: string;
-  lifecycle_stage: string;
+  lead_stage: LeadStage;
   created_at: string;
+  engaged_at: string | null;
   mql_at: string | null;
-  first_touch_at: string | null;
-  sql_at: string | null;
+  first_touch_at: string | null; // the 24-hour SLA is MQL -> first touch
+  sales_accepted_at: string | null;
+  sales_qualified_at: string | null;
+  meeting_booked_at: string | null; // the Qualifying deal is created here
+  converted_at: string | null;
+  disqualified_at: string | null;
+  nurtured_at: string | null;
+  disqualify_reason: string | null;
   assigned_adr_id: string | null;
   opportunity_id: string | null;
 };
@@ -3013,7 +3034,7 @@ export const ADR_HYGIENE_CHECKS = [
   { key: "unassigned", title: "Unassigned leads", why: "Nobody follows up a lead with no owner, so it goes cold." },
   { key: "slaBreach", title: "MQLs past the 24-hour SLA", why: "Leads contacted within a day convert far better than leads left waiting." },
   { key: "staleStage01", title: `Stale ${QUALIFYING} deals`, why: "A meeting held that nobody qualifies or moves forward is pipeline quietly going cold." },
-  { key: "handoffLeak", title: "SQLs that never got a deal", why: "A meeting that never became a deal is an ADR-to-AE handoff leak: the AE never picked it up." },
+  { key: "handoffLeak", title: "Qualified leads not handed to an AE", why: "The ADR qualified the lead but no meeting with an AE was booked: an ADR-to-AE handoff leak." },
   { key: "pairingMismatch", title: "ADR–AE pairing mismatches", why: "Deals with the wrong ADR-AE pair confuse ownership and credit, and break territory reporting." },
   { key: "accountTags", title: "Account tag problems", why: "Wrong ICP tier, target or territory tags send ADR effort to the wrong accounts." },
 ] as const;
@@ -3062,15 +3083,15 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
   for (const l of input.leads) {
     if (ms(l.created_at) > now) continue;
     // Unassigned
-    if (!l.assigned_adr_id && R.unassignedStages.includes(l.lifecycle_stage)) {
+    if (!l.assigned_adr_id && R.unassignedStages.includes(l.lead_stage)) {
       items.unassigned.push({
         id: `unassigned:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
         owner: leadOwner(l), adrId: ctx.leadAdr(l),
-        problem: `${l.lifecycle_stage} from ${l.lead_source}, no ADR`, ageDays: wholeDays(ms(l.created_at), now),
+        problem: `${LEAD_STAGE_LABELS[l.lead_stage]} from ${l.lead_source}, no ADR`, ageDays: wholeDays(ms(l.created_at), now),
       });
     }
-    // Open SLA breach: still an MQL, never touched, and its 24 hours are up
-    if (l.lifecycle_stage === "MQL" && l.mql_at) {
+    // Open SLA breach: still at MQL, never touched, and its 24 hours are up
+    if (l.lead_stage === "mql" && l.mql_at) {
       const deadline = ms(l.mql_at) + slaMs;
       const touched = l.first_touch_at !== null && ms(l.first_touch_at) <= now;
       if (!touched && deadline < now) {
@@ -3080,11 +3101,11 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
         });
       }
     }
-    // Handoff leak: still an SQL with no deal, past the grace period
-    if (l.lifecycle_stage === "SQL" && !l.opportunity_id && l.sql_at && ms(l.sql_at) <= now - R.handoffGraceDays * DAY_MS) {
+    // Handoff leak: still at Sales qualified with no meeting booked, past the grace period
+    if (l.lead_stage === "sales_qualified" && l.sales_qualified_at && ms(l.sales_qualified_at) <= now - R.handoffGraceDays * DAY_MS) {
       items.handoffLeak.push({
         id: `handoff:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
-        owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `Meeting held (SQL from ${l.lead_source}), no deal opened`, ageDays: wholeDays(ms(l.sql_at), now),
+        owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `Sales qualified (${l.lead_source}), no meeting with an AE booked`, ageDays: wholeDays(ms(l.sales_qualified_at), now),
       });
     }
   }
@@ -3168,15 +3189,15 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
 export type AdrFunnelRow = {
   source: string; // lead source, or "All sources"
   leads: number;
-  mql: number;
-  sql: number;
-  stage01: number; // the lead has a deal (Stage 0.1 is the first stage, so every deal has passed it)
-  opportunity: number; // that deal has moved past Stage 0.1 (open or closed)
-  leadToMql: number | null;
-  mqlToSql: number | null;
-  sqlToStage01: number | null;
-  stage01ToOpportunity: number | null;
-  leadToOpportunity: number | null;
+  /** Leads that reached each LEAD_FUNNEL stage (New = every lead), in LEAD_FUNNEL order. */
+  reached: number[];
+  /** Conversion from the previous stage, in LEAD_FUNNEL order (null for New, or when the previous stage is 0). */
+  stepRates: (number | null)[];
+  /** New -> Converted. */
+  overall: number | null;
+  disqualified: number;
+  nurture: number;
+  open: number; // not yet at an ending
 };
 export type AdrSpeedRow = {
   adrId: string | null; // null = unassigned MQLs
@@ -3201,7 +3222,17 @@ export type AdrSequenceRowResult = {
   rank: "best" | "worst" | null; // by meeting rate, among sequences with enough enrollments
   bounceAlert: boolean;
 };
-export type AdrScorecardRow = { adrId: string; name: string; leadsOwned: number; slaRate: number | null; meetingsBooked: number; stage01Created: number };
+export type AdrScorecardRow = {
+  adrId: string;
+  name: string;
+  leadsOwned: number;
+  slaRate: number | null;
+  salesAccepted: number;
+  salesQualified: number;
+  meetingsBooked: number; // leads that reached Meeting booked in the window
+  qualifyingDealsCreated: number; // the ADR's leads (created in the window) that got a Qualifying deal
+  converted: number;
+};
 export type AdrInsightsResult = {
   asOf: string;
   windowStart: string;
@@ -3210,21 +3241,22 @@ export type AdrInsightsResult = {
   team: AdrSpeedRow;
   sequences: AdrSequenceRowResult[];
   scorecard: AdrScorecardRow[];
-  /** Meetings are counted from sequence enrollments (meeting_booked). SQLs with no sequence meeting, so the gap is visible. */
-  sqlsWithoutSequenceMeeting: number;
   /** The ADR manager's name (the memo's reader). */
   adrManager: string | null;
 };
 
-function funnelRow(source: string, leads: AdrLeadRow[], stageOf: Map<string, string>): AdrFunnelRow {
-  const n = leads.length;
-  const mql = leads.filter((l) => l.mql_at).length;
-  const sql = leads.filter((l) => l.sql_at).length;
-  const s01 = leads.filter((l) => l.opportunity_id).length;
-  const opp = leads.filter((l) => l.opportunity_id && stageOf.has(l.opportunity_id) && stageOf.get(l.opportunity_id) !== "Stage 0.1").length;
+function funnelRow(source: string, leads: AdrLeadRow[]): AdrFunnelRow {
+  const reached = LEAD_FUNNEL.map((f) => leads.filter((l) => l[f.column] !== null).length);
+  const end = (st: LeadStage) => leads.filter((l) => l.lead_stage === st).length;
   return {
-    source, leads: n, mql, sql, stage01: s01, opportunity: opp,
-    leadToMql: ratio(mql, n), mqlToSql: ratio(sql, mql), sqlToStage01: ratio(s01, sql), stage01ToOpportunity: ratio(opp, s01), leadToOpportunity: ratio(opp, n),
+    source,
+    leads: leads.length,
+    reached,
+    stepRates: reached.map((n, i) => (i === 0 ? null : ratio(n, reached[i - 1]))),
+    overall: ratio(reached[reached.length - 1], leads.length),
+    disqualified: end("disqualified"),
+    nurture: end("nurture"),
+    open: leads.length - end("converted") - end("disqualified") - end("nurture"),
   };
 }
 
@@ -3249,14 +3281,12 @@ export function calcAdrInsights(input: AdrInputs, asOf: string): AdrInsightsResu
   const windowStart = addMonths(asOf, -R.insightsWindowMonths);
   const fromMs = parseDate(windowStart).getTime();
   const inWindow = (iso: string | null) => iso !== null && ms(iso) >= fromMs && ms(iso) <= now;
-  const stageOf = new Map(input.deals.map((d) => [d.id, d.stage]));
-
   // Funnel: leads created in the window, by source
   const leads = input.leads.filter((l) => inWindow(l.created_at));
   const sources = [...new Set(leads.map((l) => l.lead_source))].sort();
-  const funnel = sources.map((s) => funnelRow(s, leads.filter((l) => l.lead_source === s), stageOf));
-  funnel.sort((a, b) => (b.leadToOpportunity ?? -1) - (a.leadToOpportunity ?? -1) || a.source.localeCompare(b.source));
-  funnel.push(funnelRow("All sources", leads, stageOf));
+  const funnel = sources.map((s) => funnelRow(s, leads.filter((l) => l.lead_source === s)));
+  funnel.sort((a, b) => (b.overall ?? -1) - (a.overall ?? -1) || a.source.localeCompare(b.source));
+  funnel.push(funnelRow("All sources", leads));
 
   // Speed to lead: MQLs from the window whose 24 hours are up
   const mqls = input.leads.filter((l) => l.mql_at && inWindow(l.mql_at) && ms(l.mql_at) + R.slaHours * HOUR_MS <= now);
@@ -3288,26 +3318,29 @@ export function calcAdrInsights(input: AdrInputs, asOf: string): AdrInsightsResu
   }
   sequences.sort((a, b) => (b.meetingRate ?? -1) - (a.meetingRate ?? -1) || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
 
-  // Per ADR. Meetings booked = sequence enrollments with meeting_booked, booked in the window.
+  // Per ADR. Leads owned and deals created: the ADR's leads created in the window. Stage counts: reached in the window.
   const scorecard: AdrScorecardRow[] = ctx.adrs.map((a) => {
     const owned = leads.filter((l) => l.assigned_adr_id === a.id);
+    const mine = input.leads.filter((l) => l.assigned_adr_id === a.id);
+    const reachedIn = (c: "sales_accepted_at" | "sales_qualified_at" | "meeting_booked_at" | "converted_at") => mine.filter((l) => inWindow(l[c])).length;
     return {
       adrId: a.id,
       name: a.name,
       leadsOwned: owned.length,
       slaRate: speed.find((s) => s.adrId === a.id)!.onTimeRate,
-      meetingsBooked: input.enrollments.filter((e) => e.adr_id === a.id && e.meeting_booked && inWindow(e.meeting_booked_at ?? e.enrolled_at)).length,
-      stage01Created: owned.filter((l) => l.opportunity_id).length,
+      salesAccepted: reachedIn("sales_accepted_at"),
+      salesQualified: reachedIn("sales_qualified_at"),
+      meetingsBooked: reachedIn("meeting_booked_at"),
+      qualifyingDealsCreated: owned.filter((l) => l.opportunity_id).length,
+      converted: reachedIn("converted_at"),
     };
   });
-  const sequenceMeetingLeads = new Set(input.enrollments.filter((e) => e.meeting_booked).map((e) => e.lead_id));
-  const sqlsWithoutSequenceMeeting = leads.filter((l) => l.sql_at && !sequenceMeetingLeads.has(l.id)).length;
-
   const adrManager = input.team.find((t) => t.role === "ADR manager")?.name ?? null;
-  return { asOf, windowStart, funnel, speed, team, sequences, scorecard, sqlsWithoutSequenceMeeting, adrManager };
+  return { asOf, windowStart, funnel, speed, team, sequences, scorecard, adrManager };
 }
 
 // --- Memo summary ----------------------------------------------------------
+
 
 /** 0.6428 -> 64.3 (a percent with one decimal, as the pages show it). null stays null. */
 const pct1 = (x: number | null) => (x === null ? null : Math.round(x * 1000) / 10);
@@ -3345,10 +3378,13 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
       sla_breaches_last_30_days: hygiene.slaBreachRate30d.breached,
       mqls_due_last_30_days: hygiene.slaBreachRate30d.eligible,
     },
+    lead_stages: Object.fromEntries(LEAD_STAGES.map((st) => [LEAD_STAGE_LABELS[st], LEAD_STAGE_DESCRIPTIONS[st]])),
     funnel_by_source: insights.funnel.map((f) => ({
-      source: f.source, leads: f.leads, mql: f.mql, sql: f.sql, qualifying_deals: f.stage01, opportunity: f.opportunity,
-      lead_to_mql_pct: pct1(f.leadToMql), mql_to_sql_pct: pct1(f.mqlToSql), sql_to_qualifying_pct: pct1(f.sqlToStage01),
-      qualifying_to_opportunity_pct: pct1(f.stage01ToOpportunity), lead_to_opportunity_pct: pct1(f.leadToOpportunity),
+      source: f.source,
+      reached: Object.fromEntries(LEAD_FUNNEL.map((x, i) => [LEAD_STAGE_LABELS[x.stage], f.reached[i]])),
+      conversion_from_previous_stage_pct: Object.fromEntries(LEAD_FUNNEL.slice(1).map((x, i) => [LEAD_STAGE_LABELS[x.stage], pct1(f.stepRates[i + 1])])),
+      new_to_converted_pct: pct1(f.overall),
+      endings: { disqualified: f.disqualified, nurture: f.nurture, still_open: f.open },
     })),
     funnel_note: `Recent leads have had less time to convert. ${all.leads} leads in the window.`,
     speed_to_lead: {
@@ -3360,23 +3396,26 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
       })),
     },
     sequences: insights.sequences.map((s) => ({
-      sequence: s.name, owner: s.owner, enrollments: s.enrollments, meetings: s.meetings,
-      open_pct: pct1(s.openRate), reply_pct: pct1(s.replyRate), meeting_pct: pct1(s.meetingRate), bounce_pct: pct1(s.bounceRate),
+      sequence: s.name, owner: s.owner, enrollments: s.enrollments, calls_booked: s.meetings,
+      open_pct: pct1(s.openRate), reply_pct: pct1(s.replyRate), call_booked_pct: pct1(s.meetingRate), bounce_pct: pct1(s.bounceRate),
       ranked: s.rank, bounce_alert: s.bounceAlert,
     })),
     sequence_comparisons: {
       ranked_sequences: ranked.length,
-      best_by_meeting_rate: best ? { sequence: best.name, meeting_pct: pct1(best.meetingRate) } : null,
-      worst_by_meeting_rate: worst ? { sequence: worst.name, meeting_pct: pct1(worst.meetingRate) } : null,
+      best_by_call_booked_rate: best ? { sequence: best.name, call_booked_pct: pct1(best.meetingRate) } : null,
+      worst_by_call_booked_rate: worst ? { sequence: worst.name, call_booked_pct: pct1(worst.meetingRate) } : null,
       highest_bounce: highestBounce ? { sequence: highestBounce.name, bounce_pct: pct1(highestBounce.bounceRate), enrollments: highestBounce.enrollments } : null,
       highest_bounce_among_the_others_pct: otherBounces.length ? pct1(Math.max(...otherBounces)) : null,
     },
-    per_adr: insights.scorecard.map((s) => ({ adr: s.name, leads_owned: s.leadsOwned, sla_on_time_pct: pct1(s.slaRate), meetings_booked: s.meetingsBooked, qualifying_deals_created: s.stage01Created })),
+    per_adr: insights.scorecard.map((s) => ({
+      adr: s.name, leads_owned: s.leadsOwned, sla_on_time_pct: pct1(s.slaRate), sales_accepted: s.salesAccepted, sales_qualified: s.salesQualified,
+      meetings_booked: s.meetingsBooked, qualifying_deals_created: s.qualifyingDealsCreated, converted: s.converted,
+    })),
     terms: {
-      qualifying: `"${QUALIFYING}" is the first deal stage: ${QUALIFYING_DESCRIPTION}.`,
-      meetings_booked: "Meetings booked = sequence enrollments with a meeting booked (a count of meetings, not a deal stage).",
+      qualifying: `"${QUALIFYING}" is the deal stage created when a meeting is booked: ${QUALIFYING_DESCRIPTION}.`,
+      meetings_booked: "Meetings booked = leads that reached Meeting booked (a meeting set with an AE; each has a Qualifying deal).",
+      calls_booked: "A sequence's calls booked include ADR qualifying calls, so they can be more than meetings booked.",
     },
-    sqls_without_a_sequence_meeting: insights.sqlsWithoutSequenceMeeting,
   };
 }
 export type AdrMemoInput = ReturnType<typeof calcAdrMemoInput>;
@@ -3385,7 +3424,11 @@ export type AdrMemoInput = ReturnType<typeof calcAdrMemoInput>;
 
 async function loadAdrInputs(): Promise<AdrInputs> {
   const [leads, enrollments, sequences, deals, accounts, team, pairings] = await Promise.all([
-    fetchAll("leads", "id, account_id, contact_name, lead_source, lifecycle_stage, created_at, mql_at, first_touch_at, sql_at, assigned_adr_id, opportunity_id", ["id"]),
+    fetchAll(
+      "leads",
+      "id, account_id, contact_name, lead_source, lead_stage, created_at, engaged_at, mql_at, first_touch_at, sales_accepted_at, sales_qualified_at, meeting_booked_at, converted_at, disqualified_at, nurtured_at, disqualify_reason, assigned_adr_id, opportunity_id",
+      ["id"],
+    ),
     fetchAll("sequence_enrollments", "id, sequence_id, lead_id, adr_id, enrolled_at, opens, replies, bounces, meeting_booked, meeting_booked_at", ["id"]),
     fetchAll("sequences", "id, name, owner_id", ["id"]),
     fetchAll("opportunities", "id, account_id, stage, created_date, last_activity_date, ae_id, adr_id", ["id"]),
@@ -3395,9 +3438,12 @@ async function loadAdrInputs(): Promise<AdrInputs> {
   ]);
   return {
     leads: leads.map((r) => ({
-      id: str(r.id), account_id: str(r.account_id), contact_name: str(r.contact_name), lead_source: str(r.lead_source), lifecycle_stage: str(r.lifecycle_stage),
-      created_at: str(r.created_at), mql_at: strOrNull(r.mql_at), first_touch_at: strOrNull(r.first_touch_at), sql_at: strOrNull(r.sql_at),
-      assigned_adr_id: strOrNull(r.assigned_adr_id), opportunity_id: strOrNull(r.opportunity_id),
+      id: str(r.id), account_id: str(r.account_id), contact_name: str(r.contact_name), lead_source: str(r.lead_source),
+      lead_stage: (r.lead_stage === null || r.lead_stage === undefined ? (() => { throw new Error("leads.lead_stage is empty: run npm run adr:backfill after the lead lifecycle migration"); })() : str(r.lead_stage)) as LeadStage,
+      created_at: str(r.created_at), engaged_at: strOrNull(r.engaged_at), mql_at: strOrNull(r.mql_at), first_touch_at: strOrNull(r.first_touch_at),
+      sales_accepted_at: strOrNull(r.sales_accepted_at), sales_qualified_at: strOrNull(r.sales_qualified_at), meeting_booked_at: strOrNull(r.meeting_booked_at),
+      converted_at: strOrNull(r.converted_at), disqualified_at: strOrNull(r.disqualified_at), nurtured_at: strOrNull(r.nurtured_at),
+      disqualify_reason: strOrNull(r.disqualify_reason), assigned_adr_id: strOrNull(r.assigned_adr_id), opportunity_id: strOrNull(r.opportunity_id),
     })),
     enrollments: enrollments.map((r) => ({
       id: str(r.id), sequence_id: str(r.sequence_id), lead_id: str(r.lead_id), adr_id: strOrNull(r.adr_id), enrolled_at: str(r.enrolled_at),

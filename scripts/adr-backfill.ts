@@ -79,6 +79,15 @@ export function adrSummary(d: AdrData, team: AdrTeamMember[]): string[] {
     const onTime = m.filter((l) => l.first_touch_at && Date.parse(l.first_touch_at) - Date.parse(l.mql_at!) <= SLA_HOURS * 3_600_000).length;
     out.push(`    ${(adr ? name.get(adr)! : "(unassigned)").padEnd(16)} ${String(m.length).padStart(3)} MQLs, on time ${pct(onTime, m.length)}, SQL ${pct(m.filter((l) => l.sql_at).length, m.length)}`);
   }
+  out.push("  Lead lifecycle (reached the stage) and endings, by source:");
+  const stageCols = ["engaged_at", "mql_at", "sales_accepted_at", "sales_qualified_at", "meeting_booked_at", "converted_at"] as const;
+  for (const src of ["All", "inbound demo request", "partner", "event", "webinar", "outbound", "content download"]) {
+    const ls = src === "All" ? L : L.filter((l) => l.lead_source === src);
+    const reached = stageCols.map((c) => ls.filter((l) => l[c]).length).join(" > ");
+    const end = (st: string) => ls.filter((l) => l.lead_stage === st).length;
+    out.push(`    ${src.padEnd(21)} new ${String(ls.length).padStart(3)} > ${reached}  | disqualified ${end("disqualified")}, nurture ${end("nurture")}, open ${ls.length - end("converted") - end("disqualified") - end("nurture")}`);
+  }
+  out.push(`    Current stage: ${[...by(L, (l) => l.lead_stage)].map(([k, v]) => `${k} ${v}`).join(", ")}`);
   out.push(`  Linked to existing deals: ${d.planted.linkedExistingDeals.length}; SQLs with no deal: ${L.filter((l) => l.lifecycle_stage === "SQL" && !l.opportunity_id).length}`);
   out.push(`Sequences: ${d.sequences.length}; enrollments: ${d.enrollments.length}`);
   for (const s of d.sequences) {

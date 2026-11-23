@@ -587,3 +587,63 @@ The live results table in section 1 shows the figures from before this fix. Over
 **Open items.**
 - **Production build:** `next build` couldn't run in Claude's sandbox, because it can't download the Google font. Type-check and tests pass.
 - ~~**Reconciliation snapshot:** `reconciliation/adr-before.json` still holds the 15-row team.~~ **Resolved 23 Nov:** saved again with `npm run adr:check -- --save-before` (team: 16 rows, `5ffa8ee62963`; nothing else changed), and `npm run adr:check` now passes with nothing changed.
+
+### New lead lifecycle
+
+**What changed.** Leads now move through **New** (downloaded or signed up for something) → **Engaged** (responded to automated marketing emails) → **MQL** → **Sales accepted** (an ADR took ownership and is working it) → **Sales qualified** (passed the ADR's qualifying call) → **Meeting booked** (meeting set with an AE; the Qualifying deal is created here). Every lead ends as **Converted** (became an opportunity), **Disqualified** (with a reason) or **Nurture** (returned to marketing).
+
+- **Migration** (`20261127000000_lead_lifecycle.sql`, run by the owner), additive:
+  - `leads.lead_stage` plus a timestamp for each stage reached: `engaged_at`, `sales_accepted_at`, `sales_qualified_at`, `meeting_booked_at`, `converted_at`, `disqualified_at` and `nurtured_at`.
+  - A constraint that keeps the stages in order.
+  - `lifecycle_stage` and `sql_at` keep their values as legacy columns.
+- **Paths are built from each lead's existing values** (`buildLeadStages` in `scripts/adr-lib.ts`, its own random stream), so MQL times, first touches, sequence enrollments and deals line up. `npm run adr:backfill` and `npm run seed` share it (ADR fingerprint `36c65a0c56c7`). No deals were created or changed.
+- **The rules:**
+  - The 24-hour SLA stays MQL → first touch.
+  - Sales accepted needs an ADR and a first touch.
+  - **A lead reaches Meeting booked only with a Qualifying deal.**
+  - Converted means the deal moved past Qualifying.
+  - Untouched MQLs stay open at MQL, because they are the SLA breaches.
+  - Leads that never reach MQL go to Nurture 30–45 days after creation. Sales accepted leads that stall go to Nurture 21–30 days after acceptance.
+- **Decisions (owner):**
+  - **The 17 leads disqualified "after the first meeting"** are now disqualified at the ADR's qualifying call, before Meeting booked. About a third reached Sales qualified ("No budget this year"); the rest stopped at Sales accepted ("Not a fit at the qualifying call"). This changes `disqualify_reason` on those 17 rows, the only existing value that changed.
+  - **Handoff leak** = a lead at Sales qualified for 3+ days with no meeting with an AE. Today it's the 2 leads that had a qualifying call but no deal.
+  - **Meetings booked** = leads that reached Meeting booked (69). The sequence table's column is now "Call booked" (88), because a sequence's booked calls include ADR qualifying calls.
+
+**Result (as of 13 Nov):**
+- **Funnel:** 600 New → 404 Engaged → 336 MQL → 288 Sales accepted → 94 Sales qualified → 69 Meeting booked → 44 Converted. 168 Disqualified, 226 Nurture, 162 still open.
+- **Weakest step:** Sales accepted → Sales qualified, at 32.6% (content download 15.2%, webinar 8.0%, demo requests 42.9%).
+- **By source:** demo requests go furthest, with 35 of 108 at Meeting booked. 69% of content downloads end in Nurture or Disqualified.
+
+| ADR numbers | Before | After |
+|---|---|---|
+| Hygiene total | 95 | **83** |
+| Unassigned leads | 36 | **24** (old unassigned leads went to Nurture) |
+| Open SLA breaches / stale Qualifying / handoff leaks / mismatches / tag problems | 29 / 6 / 2 / 7 / 15 | 29 / 6 / 2 / 7 / 15 |
+| SLA breach rate, 30 days | 28.8% (19 of 66) | 28.8% (19 of 66) |
+| Speed to lead (team / Sofia / Kenji / Grace) | 69.4% / 89.3% / 64.5% / 83.0% | unchanged |
+| Meetings booked (Sofia / Kenji / Grace) | 17 / 38 / 33 (sequence meetings) | **12 / 30 / 27** (Meeting booked stage) |
+| New per-ADR columns (accepted / qualified / converted) | n/a | Sofia 56 / 17 / 5, Kenji 137 / 41 / 21, Grace 95 / 36 / 18 |
+
+Both snapshots are in `reconciliation/adr-numbers-before-lifecycle.json` and `reconciliation/adr-numbers-after-lifecycle.json`.
+
+**Checks.**
+- **`npm run adr:check`:** every customer, health and renewal table and all 30 page sections are unchanged.
+- **New lifecycle checks, all passing:**
+  - every lead has a stage, with its stages in order, and none after the as-of date
+  - no Meeting booked without a Qualifying deal, and every deal has Meeting booked
+  - Meeting booked equals `sql_at`
+  - Converted exactly when the deal is past Qualifying
+  - every ending has its time (and a reason when Disqualified)
+  - leads disqualified at the qualifying call stop before Meeting booked
+  - content downloads mostly end in Nurture or Disqualified, and demo requests progress furthest
+- **Tests:** 110 pass. There are 8 new tests for the path builder, and `npm test` now also runs `scripts/*.test.ts`.
+
+**Memo regenerated (23 Nov):**
+- **Cost:** $0.0272 (5,328 input and 1,653 output tokens). Grounding: all 65 numbers and dates were found in the data.
+- **Headline:** speed to lead (69.4% on time, 43 never touched) and the Sales accepted → Sales qualified step (32.6%) are the biggest leaks.
+- **Recommendations:**
+  1. Assign the 24 unassigned leads and clear Kenji's breaches (Nadia).
+  2. Tighten acceptance for content and webinar leads (Nadia).
+  3. Pause the bought-list sequence (RevOps).
+  4. Clear stale Qualifying deals, the 2 handoffs and the mismatches (David Novak).
+  5. Protect Kenji's time for demo follow-up (Nadia).

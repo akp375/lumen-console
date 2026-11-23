@@ -1,0 +1,207 @@
+{
+  "takenAt": "2026-11-23T17:34:00.267Z",
+  "note": "ADR page numbers before the new lead lifecycle (old stages).",
+  "hygiene": {
+    "total": 95,
+    "unassigned": 36,
+    "slaBreach": 29,
+    "staleStage01": 6,
+    "handoffLeak": 2,
+    "pairingMismatch": 7,
+    "accountTags": 15,
+    "slaBreachRate30d": {
+      "breached": 19,
+      "eligible": 66,
+      "rate": 0.2878787878787879
+    }
+  },
+  "funnel": [
+    {
+      "source": "inbound demo request",
+      "leads": 108,
+      "mql": 108,
+      "sql": 45,
+      "qualifying": 35,
+      "opportunity": 22
+    },
+    {
+      "source": "partner",
+      "leads": 54,
+      "mql": 48,
+      "sql": 14,
+      "qualifying": 11,
+      "opportunity": 7
+    },
+    {
+      "source": "outbound",
+      "leads": 176,
+      "mql": 72,
+      "sql": 19,
+      "qualifying": 18,
+      "opportunity": 15
+    },
+    {
+      "source": "content download",
+      "leads": 159,
+      "mql": 57,
+      "sql": 2,
+      "qualifying": 2,
+      "opportunity": 0
+    },
+    {
+      "source": "event",
+      "leads": 45,
+      "mql": 19,
+      "sql": 3,
+      "qualifying": 2,
+      "opportunity": 0
+    },
+    {
+      "source": "webinar",
+      "leads": 58,
+      "mql": 32,
+      "sql": 5,
+      "qualifying": 1,
+      "opportunity": 0
+    },
+    {
+      "source": "All sources",
+      "leads": 600,
+      "mql": 336,
+      "sql": 88,
+      "qualifying": 69,
+      "opportunity": 44
+    }
+  ],
+  "speed": [
+    {
+      "name": "Sofia Marin",
+      "mqls": 56,
+      "onTime": 50,
+      "late": 6,
+      "never": 0,
+      "onTimeRate": 0.8928571428571429,
+      "medianHours": 9.766666666666666
+    },
+    {
+      "name": "Kenji Watanabe",
+      "mqls": 152,
+      "onTime": 98,
+      "late": 39,
+      "never": 15,
+      "onTimeRate": 0.6447368421052632,
+      "medianHours": 14
+    },
+    {
+      "name": "Grace Mensah",
+      "mqls": 100,
+      "onTime": 83,
+      "late": 11,
+      "never": 6,
+      "onTimeRate": 0.83,
+      "medianHours": 10.908333333333333
+    },
+    {
+      "name": "Unassigned",
+      "mqls": 25,
+      "onTime": 0,
+      "late": 3,
+      "never": 22,
+      "onTimeRate": 0,
+      "medianHours": 113
+    },
+    {
+      "name": "Team",
+      "mqls": 333,
+      "onTime": 231,
+      "late": 59,
+      "never": 43,
+      "onTimeRate": 0.6936936936936937,
+      "medianHours": 12.558333333333334
+    }
+  ],
+  "sequences": [
+    {
+      "name": "Inbound demo follow-up",
+      "enrollments": 162,
+      "meetingRate": 0.36419753086419754,
+      "bounceRate": 0.006172839506172839,
+      "rank": "best"
+    },
+    {
+      "name": "Outbound cold: commercial",
+      "enrollments": 87,
+      "meetingRate": 0.19540229885057472,
+      "bounceRate": 0.05747126436781609,
+      "rank": null
+    },
+    {
+      "name": "Webinar follow-up",
+      "enrollments": 58,
+      "meetingRate": 0.08620689655172414,
+      "bounceRate": 0,
+      "rank": null
+    },
+    {
+      "name": "Event follow-up",
+      "enrollments": 45,
+      "meetingRate": 0.06666666666666667,
+      "bounceRate": 0.044444444444444446,
+      "rank": null
+    },
+    {
+      "name": "Outbound cold: enterprise",
+      "enrollments": 32,
+      "meetingRate": 0.0625,
+      "bounceRate": 0.0625,
+      "rank": null
+    },
+    {
+      "name": "Content nurture",
+      "enrollments": 159,
+      "meetingRate": 0.012578616352201259,
+      "bounceRate": 0.025157232704402517,
+      "rank": null
+    },
+    {
+      "name": "Re-engagement",
+      "enrollments": 55,
+      "meetingRate": 0,
+      "bounceRate": 0.01818181818181818,
+      "rank": null
+    },
+    {
+      "name": "Outbound cold: commercial (bought list)",
+      "enrollments": 57,
+      "meetingRate": 0,
+      "bounceRate": 0.15789473684210525,
+      "rank": "worst"
+    }
+  ],
+  "perAdr": [
+    {
+      "adrId": "tm_11",
+      "name": "Sofia Marin",
+      "leadsOwned": 110,
+      "slaRate": 0.8928571428571429,
+      "meetingsBooked": 17,
+      "stage01Created": 12
+    },
+    {
+      "adrId": "tm_12",
+      "name": "Kenji Watanabe",
+      "leadsOwned": 268,
+      "slaRate": 0.6447368421052632,
+      "meetingsBooked": 38,
+      "stage01Created": 30
+    },
+    {
+      "adrId": "tm_13",
+      "name": "Grace Mensah",
+      "leadsOwned": 177,
+      "slaRate": 0.83,
+      "meetingsBooked": 33,
+      "stage01Created": 27
+    }
+  ]
+}
