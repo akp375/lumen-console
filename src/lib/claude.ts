@@ -92,6 +92,7 @@ export const FEATURE_LABELS: Record<string, string> = {
   renewal_risk: "Flag reasons: Renewals",
   deal_risk: "Flag reasons: Deal Risk",
   workspace: "Workspace chat",
+  pipeline_agent: "Pipeline agent",
 };
 
 export type FeatureSpendRow = { feature: string; label: string; model: string; calls: number; costUsd: number; timeouts: number };
@@ -142,6 +143,10 @@ export type CallClaudeInput = {
   effort?: "low" | "medium" | "high";
   /** Give up after this long (no retries) and throw a ClaudeLimitError("timeout"). */
   timeoutMs?: number;
+  /** Tools Claude may ask to use (tool-use loops: the caller runs the tools and sends the results back). */
+  tools?: Anthropic.Beta.BetaTool[];
+  /** Defaults to auto when tools are given. { type: "none" } makes Claude answer in text. */
+  toolChoice?: Anthropic.Beta.BetaToolChoice;
 };
 
 export type CallClaudeResult = {
@@ -152,6 +157,10 @@ export type CallClaudeResult = {
   outputTokens: number;
   costUsd: number;
   latencyMs: number;
+  /** Claude's reply blocks (text and tool_use), to send back as the assistant turn in a tool-use loop. */
+  content: Anthropic.Beta.BetaContentBlock[];
+  /** Why Claude stopped: "end_turn", "tool_use", ... */
+  stopReason: string | null;
 };
 
 export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResult> {
@@ -178,6 +187,7 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
         ...(FALLBACK_MODELS.has(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
         system: input.cacheSystem ? [{ type: "text", text: input.system, cache_control: { type: "ephemeral" } }] : input.system,
         messages,
+        ...(input.tools ? { tools: input.tools, tool_choice: input.toolChoice ?? { type: "auto" as const } } : {}),
         output_config: {
           effort: input.effort ?? "low",
           ...(input.jsonSchema ? { format: { type: "json_schema" as const, schema: input.jsonSchema } } : {}),
@@ -230,5 +240,7 @@ export async function callClaude(input: CallClaudeInput): Promise<CallClaudeResu
     outputTokens,
     costUsd,
     latencyMs,
+    content: response.content,
+    stopReason: response.stop_reason ?? null,
   };
 }

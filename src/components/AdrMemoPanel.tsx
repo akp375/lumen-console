@@ -113,7 +113,7 @@ function GroundingSummary({ checked, flagged }: { checked: number; flagged: numb
 }
 
 /** The text, with each flagged number highlighted. */
-function Marked({ text, flags }: { text: string; flags: string[] }) {
+export function Marked({ text, flags }: { text: string; flags: string[] }) {
   if (flags.length === 0) return <>{text}</>;
   const parts: ReactNode[] = [];
   let rest = text;

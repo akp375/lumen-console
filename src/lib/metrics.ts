@@ -15,7 +15,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "./as-of-date.ts";
-import { LEAD_STAGE_DESCRIPTIONS, LEAD_STAGE_LABELS, QUALIFYING, QUALIFYING_DESCRIPTION, stageLabel } from "./format.ts";
+import { LEAD_STAGE_DESCRIPTIONS, LEAD_STAGE_LABELS, QUALIFYING, QUALIFYING_DESCRIPTION, shortDate, stageLabel } from "./format.ts";
 import { SIGNAL_TOPICS, type Sentiment, type SignalTopic } from "./signal-topics.ts";
 
 // ---------------------------------------------------------------------------
@@ -2984,7 +2984,7 @@ export type AdrEnrollmentRow = {
   meeting_booked: boolean;
   meeting_booked_at: string | null;
 };
-export type AdrSequenceRow = { id: string; name: string; owner_id: string };
+export type AdrSequenceRow = { id: string; name: string; owner_id: string; /** "paused" once a Pipeline agent pause is approved; missing = active. */ status?: "active" | "paused" };
 export type AdrDealRow = { id: string; account_id: string; type: string; amount_usd: number; stage: string; created_date: string; last_activity_date: string | null; ae_id: string | null; adr_id: string | null };
 export type AdrAccountRow = { id: string; name: string; status: string; owner: string; icp_tier: number | null; target_account: boolean | null; territory: string | null };
 export type AdrTeamRow = { id: string; name: string; role: string; territory: string | null };
@@ -3094,6 +3094,24 @@ export type AdrHygieneResult = {
   slaBreachRate30d: { breached: number; eligible: number; rate: number | null };
   adrs: { id: string; name: string }[];
 };
+
+/**
+ * The one way a hygiene card is split by ADR, used by the memo and by the Pipeline agent alike.
+ * owned: items the ADR actually owns (their leads and deals). inTerritory: items with no ADR in the
+ * territory the ADR covers; those are never counted as the ADR's own.
+ */
+export function hygieneItemsForAdr(check: Pick<AdrHygieneCheck, "items">, adrId: string): { owned: AdrHygieneItem[]; inTerritory: AdrHygieneItem[] } {
+  return {
+    owned: check.items.filter((i) => i.ownerAdrId === adrId),
+    inTerritory: check.items.filter((i) => i.ownerAdrId === null && i.adrId === adrId),
+  };
+}
+
+/** An ADR's own open MQLs past the SLA and never touched (the "MQLs past the 24-hour SLA" card, owned part). */
+export function adrOverdueMqls(hygiene: AdrHygieneResult, adrId: string | null): AdrHygieneItem[] {
+  const card = hygiene.checks.find((c) => c.key === "slaBreach")!;
+  return adrId === null ? card.items.filter((i) => i.ownerAdrId === null) : hygieneItemsForAdr(card, adrId).owned;
+}
 
 export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | null = null): AdrHygieneResult {
   const R = ADR_RULES;
@@ -3442,10 +3460,10 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
         counted_in_total: c.inTotal,
         // Only items an ADR actually owns count as that ADR's. Unassigned items are grouped by the territory they
         // sit in, and are never that ADR's leads.
-        owned_by_adr: Object.fromEntries(hygiene.adrs.map((a) => [a.name, c.items.filter((i) => i.ownerAdrId === a.id).length])),
+        owned_by_adr: Object.fromEntries(hygiene.adrs.map((a) => [a.name, hygieneItemsForAdr(c, a.id).owned.length])),
         no_adr_by_territory: Object.fromEntries(
           hygiene.adrs
-            .map((a) => [`in ${a.name}'s territory`, c.items.filter((i) => i.ownerAdrId === null && i.adrId === a.id).length] as const)
+            .map((a) => [`in ${a.name}'s territory`, hygieneItemsForAdr(c, a.id).inTerritory.length] as const)
             .filter(([, n]) => n > 0),
         ),
         oldest_days: c.items.reduce<number | null>((m, i) => (i.ageDays === null ? m : Math.max(m ?? 0, i.ageDays)), null),
@@ -3504,9 +3522,181 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
 }
 export type AdrMemoInput = ReturnType<typeof calcAdrMemoInput>;
 
+// --- Pipeline agent tools ----------------------------------------------------
+// What the Pipeline agent's read-only tools return. Percentages are percents with one decimal
+// (64.3 = 64.3%), like the memo summary, so Claude quotes them as they are. Lists return at most
+// AGENT_LIST_LIMIT rows plus the full count.
+
+export const AGENT_LIST_LIMIT = 25;
+/** "This week" for the agent: the 7 days ending on the as-of date. */
+export const AGENT_WEEK_DAYS = 7;
+
+export function agentWeek(asOf: string): { from: string; to: string } {
+  return { from: addDays(asOf, -(AGENT_WEEK_DAYS - 1)), to: asOf };
+}
+/** Dates in tool results are written as users read them ("7 Nov 2026"), so the grounding check can match them. */
+const agentWeekLabel = (asOf: string) => {
+  const w = agentWeek(asOf);
+  return { from: shortDate(w.from), to: shortDate(w.to) };
+};
+
+const OPEN_LEAD_STAGES = ["new", "engaged", "mql", "sales_accepted", "sales_qualified", "meeting_booked"] as const satisfies readonly LeadStage[];
+
+function speedJson(r: AdrSpeedRow) {
+  return { mqls: r.mqls, on_time: r.onTime, late: r.late, never_touched: r.never, on_time_pct: pct1(r.onTimeRate), median_hours_to_first_touch: r1(r.medianHoursToTouch) };
+}
+
+/** get_hygiene_summary: every hygiene card's count, split into ADRs' own records and unassigned leads by territory. */
+export function calcAgentHygieneSummary(input: AdrInputs, asOf: string) {
+  const h = calcAdrHygiene(input, asOf);
+  const ctx = adrContext(input);
+  return {
+    as_of: shortDate(asOf),
+    total_issues: h.total,
+    sla_breach_rate_30d: { breached: h.slaBreachRate30d.breached, eligible_mqls: h.slaBreachRate30d.eligible, pct: pct1(h.slaBreachRate30d.rate) },
+    checks: h.checks.map((c) => ({
+      check: c.title,
+      count: c.count,
+      counted_in_total: c.inTotal,
+      by_adr: ctx.adrs.map((a) => ({
+        adr: a.name,
+        owned_by_adr: hygieneItemsForAdr(c, a.id).owned.length,
+        no_adr_in_their_territory: hygieneItemsForAdr(c, a.id).inTerritory.length,
+      })),
+    })),
+  };
+}
+
+/** get_speed_to_lead: on-time first touch per ADR, over the insights window and over this week's MQLs. */
+export function calcAgentSpeedToLead(input: AdrInputs, asOf: string) {
+  const ctx = adrContext(input);
+  const ins = calcAdrInsights(input, asOf);
+  const week = agentWeek(asOf);
+  const now = asOfEndMs(asOf);
+  const weekFrom = parseDate(week.from).getTime();
+  const due = input.leads.filter((l) => l.mql_at && ms(l.mql_at) >= weekFrom && ms(l.mql_at) + ADR_RULES.slaHours * HOUR_MS <= now);
+  const rows = (mqls: AdrLeadRow[]) => ({
+    by_adr: ctx.adrs.map((a) => ({ adr: a.name, ...speedJson(speedRow(a.id, a.name, mqls.filter((l) => l.assigned_adr_id === a.id))) })),
+    team_assigned_adrs_only: speedJson(speedRow(null, "Team (assigned ADRs)", mqls.filter((l) => l.assigned_adr_id))),
+    unassigned: speedJson(speedRow(null, "Unassigned", mqls.filter((l) => !l.assigned_adr_id))),
+  });
+  const windowMqls = input.leads.filter((l) => l.mql_at && ms(l.mql_at) >= parseDate(ins.windowStart).getTime() && ms(l.mql_at) + ADR_RULES.slaHours * HOUR_MS <= now);
+  return {
+    sla_hours: ADR_RULES.slaHours,
+    this_week: { ...agentWeekLabel(asOf), ...rows(due) },
+    last_6_months: { from: shortDate(ins.windowStart), to: shortDate(asOf), ...rows(windowMqls) },
+  };
+}
+
+/** list_overdue_mqls: open MQLs past the SLA and never touched, owned by one ADR (adrId null = unassigned). */
+export function calcAgentOverdueMqls(input: AdrInputs, asOf: string, adrId: string | null) {
+  const h = calcAdrHygiene(input, asOf);
+  const byId = new Map(input.leads.map((l) => [l.id, l]));
+  const now = asOfEndMs(asOf);
+  const items = adrOverdueMqls(h, adrId);
+  const rows = items
+    .map((i) => {
+      const l = byId.get(i.recordId)!;
+      return { lead_id: l.id, contact: l.contact_name, title: l.contact_title, account_id: l.account_id, account: i.accountName, source: l.lead_source, mql_date: shortDate(l.mql_at!), hours_since_mql: Math.floor((now - ms(l.mql_at!)) / HOUR_MS) };
+    })
+    .sort((a, b) => b.hours_since_mql - a.hours_since_mql || a.lead_id.localeCompare(b.lead_id));
+  return { total: rows.length, shown: Math.min(rows.length, AGENT_LIST_LIMIT), leads: rows.slice(0, AGENT_LIST_LIMIT) };
+}
+
+/** get_sequence_stats: the sequence table, with each sequence's owner and whether it is paused. */
+export function calcAgentSequenceStats(input: AdrInputs, asOf: string) {
+  const ctx = adrContext(input);
+  const ins = calcAdrInsights(input, asOf);
+  const seq = new Map(input.sequences.map((s) => [s.id, s]));
+  return {
+    window: { from: shortDate(ins.windowStart), to: shortDate(asOf) },
+    bounce_alert_above_pct: pct1(ADR_RULES.sequenceBounceAlertAbove),
+    sequences: ins.sequences.map((s) => ({
+      sequence_id: s.id,
+      name: s.name,
+      status: seq.get(s.id)?.status ?? "active",
+      owner: ctx.nameOf.get(seq.get(s.id)?.owner_id ?? "") ?? null,
+      used_by: s.usedBy,
+      enrollments: s.enrollments,
+      unassigned_enrollments: s.unassignedEnrollments,
+      emails_sent: s.emailsSent,
+      per_email_pct: { open: pct1(s.openRate), click: pct1(s.clickRate), reply: pct1(s.replyRate), bounce: pct1(s.bounceRate) },
+      calls_booked: s.callsBooked,
+      call_booked_per_enrollment_pct: pct1(s.callBookedRate),
+      rank: s.rank,
+      bounce_alert: s.bounceAlert,
+    })),
+  };
+}
+
+/** get_adr_capacity: each ADR's open workload (leads by stage, MQLs, overdue MQLs, Qualifying deals) and their territory's unassigned leads. */
+export function calcAgentAdrCapacity(input: AdrInputs, asOf: string) {
+  const ctx = adrContext(input);
+  const h = calcAdrHygiene(input, asOf);
+  const now = asOfEndMs(asOf);
+  const week = agentWeek(asOf);
+  const weekFrom = parseDate(week.from).getTime();
+  const card = (key: AdrHygieneCheckKey) => h.checks.find((c) => c.key === key)!;
+  const live = input.leads.filter((l) => ms(l.created_at) <= now);
+  const territoryOf = new Map(input.team.map((t) => [t.id, t.territory]));
+  return {
+    as_of: shortDate(asOf),
+    this_week: agentWeekLabel(asOf),
+    adrs: ctx.adrs.map((a) => {
+      const mine = live.filter((l) => l.assigned_adr_id === a.id);
+      const open = mine.filter((l) => (OPEN_LEAD_STAGES as readonly string[]).includes(l.lead_stage));
+      const byStage = Object.fromEntries(OPEN_LEAD_STAGES.map((st) => [st, open.filter((l) => l.lead_stage === st).length]));
+      const qualifying = input.deals.filter((d) => d.stage === "Stage 0.1" && d.adr_id === a.id && d.created_date <= asOf);
+      return {
+        adr: a.name,
+        territory: territoryOf.get(a.id) ?? null,
+        open_leads: open.length,
+        open_leads_by_stage: byStage,
+        open_mqls: byStage.mql,
+        overdue_mqls: adrOverdueMqls(h, a.id).length,
+        new_mqls_this_week: mine.filter((l) => l.mql_at && ms(l.mql_at) >= weekFrom && ms(l.mql_at) <= now).length,
+        open_qualifying_deals: qualifying.length,
+        stale_qualifying_deals: hygieneItemsForAdr(card("staleStage01"), a.id).owned.length,
+        unassigned_leads_in_territory: hygieneItemsForAdr(card("unassigned"), a.id).inTerritory.length,
+      };
+    }),
+  };
+}
+
+/** list_stale_qualifying: one ADR's Qualifying deals with no update for staleStage01Days or more. */
+export function calcAgentStaleQualifying(input: AdrInputs, asOf: string, adrId: string) {
+  const h = calcAdrHygiene(input, asOf);
+  const ctx = adrContext(input);
+  const deal = new Map(input.deals.map((d) => [d.id, d]));
+  const rows = hygieneItemsForAdr(h.checks.find((c) => c.key === "staleStage01")!, adrId)
+    .owned
+    .map((i) => {
+      const d = deal.get(i.recordId)!;
+      return { deal_id: d.id, account_id: d.account_id, account: i.accountName, deal: dealLabel(d), amount_usd: Math.round(d.amount_usd), created: shortDate(d.created_date), last_activity: shortDate(d.last_activity_date ?? d.created_date), days_without_update: i.ageDays, ae: d.ae_id ? (ctx.nameOf.get(d.ae_id) ?? d.ae_id) : null, in_hubspot: false };
+    });
+  return { stale_after_days: ADR_RULES.staleStage01Days, total: rows.length, shown: Math.min(rows.length, AGENT_LIST_LIMIT), deals: rows.slice(0, AGENT_LIST_LIMIT) };
+}
+
+/** list_unassigned_leads: open leads with no ADR in one ADR's territory (the territory is named by its ADR). */
+export function calcAgentUnassignedLeads(input: AdrInputs, asOf: string, territoryAdrId: string) {
+  const h = calcAdrHygiene(input, asOf);
+  const lead = new Map(input.leads.map((l) => [l.id, l]));
+  const seqName = new Map(input.sequences.map((q) => [q.id, q.name]));
+  const seqsOf = new Map<string, string[]>();
+  for (const e of input.enrollments) seqsOf.set(e.lead_id, [...new Set([...(seqsOf.get(e.lead_id) ?? []), seqName.get(e.sequence_id) ?? e.sequence_id])]);
+  const rows = hygieneItemsForAdr(h.checks.find((c) => c.key === "unassigned")!, territoryAdrId)
+    .inTerritory
+    .map((i) => {
+      const l = lead.get(i.recordId)!;
+      return { lead_id: l.id, contact: l.contact_name, title: l.contact_title, account_id: l.account_id, account: i.accountName, stage: LEAD_STAGE_LABELS[l.lead_stage], source: l.lead_source, days_since_created: i.ageDays, sequences: seqsOf.get(l.id) ?? [] };
+    });
+  return { total: rows.length, shown: Math.min(rows.length, AGENT_LIST_LIMIT), leads: rows.slice(0, AGENT_LIST_LIMIT) };
+}
+
 // --- Loaders ---------------------------------------------------------------
 
-async function loadAdrInputs(): Promise<AdrInputs> {
+/** Every ADR table, as the ADR pages and the Pipeline agent read them. */
+export async function loadAdrInputs(): Promise<AdrInputs> {
   const [leads, enrollments, sequences, deals, accounts, team, pairings] = await Promise.all([
     fetchAll(
       "leads",
@@ -3514,7 +3704,7 @@ async function loadAdrInputs(): Promise<AdrInputs> {
       ["id"],
     ),
     fetchAll("sequence_enrollments", "id, sequence_id, lead_id, adr_id, enrolled_at, emails_sent, opens, clicks, replies, bounces, meeting_booked, meeting_booked_at", ["id"]),
-    fetchAll("sequences", "id, name, owner_id", ["id"]),
+    fetchAll("sequences", "id, name, owner_id, status", ["id"]),
     fetchAll("opportunities", "id, account_id, type, amount_usd, stage, created_date, last_activity_date, ae_id, adr_id", ["id"]),
     fetchAll("accounts", "id, name, status, owner, icp_tier, target_account, territory", ["id"]),
     fetchAll("team", "id, name, role, territory", ["id"]),
@@ -3533,7 +3723,7 @@ async function loadAdrInputs(): Promise<AdrInputs> {
       id: str(r.id), sequence_id: str(r.sequence_id), lead_id: str(r.lead_id), adr_id: strOrNull(r.adr_id), enrolled_at: str(r.enrolled_at),
       emails_sent: num(r.emails_sent), opens: num(r.opens), clicks: num(r.clicks), replies: num(r.replies), bounces: num(r.bounces), meeting_booked: r.meeting_booked === true, meeting_booked_at: strOrNull(r.meeting_booked_at),
     })),
-    sequences: sequences.map((r) => ({ id: str(r.id), name: str(r.name), owner_id: str(r.owner_id) })),
+    sequences: sequences.map((r) => ({ id: str(r.id), name: str(r.name), owner_id: str(r.owner_id), status: r.status === "paused" ? ("paused" as const) : ("active" as const) })),
     deals: deals.map((r) => ({
       id: str(r.id), account_id: str(r.account_id), type: str(r.type), amount_usd: num(r.amount_usd), stage: str(r.stage), created_date: str(r.created_date),
       last_activity_date: strOrNull(r.last_activity_date), ae_id: strOrNull(r.ae_id), adr_id: strOrNull(r.adr_id),

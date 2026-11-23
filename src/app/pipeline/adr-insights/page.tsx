@@ -8,6 +8,11 @@ import { LEAD_STAGE_DESCRIPTIONS, QUALIFYING, QUALIFYING_DESCRIPTION, leadStageL
 import { PageHeader } from "@/components/PageHeader";
 import { RuleNote, SectionHeading } from "@/components/RiskUi";
 import { AdrMemoPanel } from "@/components/AdrMemoPanel";
+import { PipelineAgentPanel } from "@/components/PipelineAgentPanel";
+import { getAcceptance, getDeciders, getLatestAgentRun } from "@/lib/agent-db";
+import { PIPELINE_AGENT_GOAL } from "@/lib/pipeline-agent-shared";
+import { isLocalDev, LOCAL_ONLY_NOTE } from "@/lib/local-only";
+import { headers } from "next/headers";
 import { BlockSkeleton, SectionSkeleton } from "@/components/Skeleton";
 
 // Display only: every number comes from metrics.ts (getAdrInsights).
@@ -29,13 +34,24 @@ export default function AdrInsightsPage() {
 // Reads live data on each request (server-side only).
 async function InsightsContent() {
   await connection();
-  const [data, latest] = await Promise.all([getAdrInsights(), getLatestAdrMemo()]);
+  const [data, latest, agent, deciders] = await Promise.all([getAdrInsights(), getLatestAdrMemo(), getLatestAgentRun(), getDeciders()]);
+  const acceptance = agent.missingMigration ? { approved: 0, rejected: 0, waiting: 0, rate: null } : await getAcceptance();
+  const canDecide = isLocalDev((await headers()).get("host"));
   const window = `${shortDate(data.windowStart)} to ${shortDate(data.asOf)}`;
 
   return (
     <>
       <PageHeader title={PAGES.adrInsights.title} description={PAGES.adrInsights.description} />
       <AdrMemoPanel initial={latest.memo} missingMigration={latest.missingMigration} adrManager={data.adrManager} />
+      <PipelineAgentPanel
+        initial={agent.run}
+        acceptance={acceptance}
+        deciders={deciders}
+        canDecide={canDecide}
+        unavailableNote={LOCAL_ONLY_NOTE}
+        missingMigration={agent.missingMigration}
+        goal={PIPELINE_AGENT_GOAL}
+      />
       <div className="space-y-8">
         <Funnel data={data} window={window} />
         <Speed data={data} window={window} />

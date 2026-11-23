@@ -735,3 +735,91 @@ Both snapshots are in `reconciliation/adr-numbers-before-lifecycle.json` and `re
 **Checks.**
 - **`npm run adr:check`:** all customer, health and renewal tables and all 30 page sections are unchanged, and all ADR checks pass.
 - **Tests:** 112 pass. New coverage: the new card and its exclusion from the total, owner vs territory attribution, and unassigned MQLs kept out of the team rate.
+
+### Pipeline agent (AI agent on ADR Insights)
+
+**What it is.** A real tool-use loop under the memo on ADR Insights, labelled "AI agent". Its goal: "Find this week's biggest pipeline leaks for the ADR team, investigate the causes, and propose specific fixes." Claude Sonnet decides which tools to call and in what order. It answers only from tool results, and proposes fixes that a person approves or rejects.
+
+**Tools.**
+- **Read-only:** thin wrappers on `lib/metrics.ts`.
+  - `get_hygiene_summary`
+  - `get_speed_to_lead` (this week and the last 6 months)
+  - `list_overdue_mqls(adr)`
+  - `get_sequence_stats`
+  - `get_adr_capacity`
+  - `list_stale_qualifying(adr)`
+  - `list_unassigned_leads(territory)`
+- **Lists:** at most 25 rows plus the total.
+- **`propose_action(type, details, reason)`:** records a proposal and executes nothing. Types:
+  - `reassign_leads`
+  - `pause_sequence`
+  - `create_hubspot_task`
+- **Proposals are checked when made:**
+  - Lead ids must have come from a list tool in this run and still be owned by the "from" ADR.
+  - The target must be an ADR.
+  - A paused sequence must have been seen in `get_sequence_stats`.
+  - Qualifying deals aren't in HubSpot, so their tasks go on the company.
+  - Due dates are checked against the real calendar (below).
+
+**Limits per run.**
+- **Investigation calls:** 8 (owner's decision: proposals don't count toward them).
+- **Proposals:** up to 3, on top of the 8.
+- **Cost:** $0.50, checked before every turn.
+- **Time:** 2 minutes.
+- **Turns:** 14.
+- **Daily budget:** the $2 cap in `callClaude()` still applies.
+- **When a limit is reached:** Claude gets one last turn with no tools to write its summary.
+- **Logging:** every turn goes through `callClaude()` as feature `pipeline_agent`, so it's logged to `llm_calls` and shows on the Claude card as "Pipeline agent".
+- **Grounding:** numbers in the summary and in each proposal's reason are checked against the tool results.
+
+**On the page.**
+- **Run agent:** the button, with tool-call chips streamed as they happen.
+- **Run summary:** the summary, then one card per proposal with Approve and Reject.
+- **Acceptance rate:** approved out of decided, across all runs.
+- **"Deciding as":** a picker that defaults to Nadia Haddad. The browser remembers it, and the screen says it isn't verified until login.
+- **Saved runs:** each run is saved, and the latest reloads with the page.
+- **Where it works:** running works anywhere, like the memo. Approve and Reject only work locally, like the Sync button.
+
+**Approve and reject.**
+- **Approve:**
+  - Records who and when first, then executes.
+  - Reassign sets the leads' ADR and their enrollments' ADR, and saves each lead's previous ADR. It changes nothing if a lead has changed hands since.
+  - Pause sets the sequence to paused.
+  - Task creates a HubSpot task on the company or deal, matched by its Lumen id. The task text holds no Cockpit numbers.
+- **Reject:** records the decision and changes nothing else.
+- **`npm run agent:reset`** (add `--dry-run` to preview): undoes approved reassignments and pauses only, and marks them reverted. HubSpot tasks and everything else are left alone.
+
+**Due dates on the real calendar** (owner's rule). HubSpot tasks are due within 7 days of today's real date, not the as-of date, because work state lives on HubSpot's real calendar. Analysis numbers still use the as-of date. If a proposal's due date has passed by the time someone approves it, Approve creates nothing and says why.
+
+**One definition for "MQLs past the SLA".** The memo said Kenji had 16 MQLs past the SLA, and the agent said 9.
+- **Why the memos said 16:** two earlier memos (17:41 and 18:15, 23 Nov) added the 7 unassigned MQLs in Kenji's territory to his own 9. The territory fix stopped that, and the memo from 23:08 already says 9.
+- **Speed to lead's "15 never touched"** is a different measure: 9 still open, plus 6 that were later disqualified without a touch.
+- **The fix:** the split by ADR was written out in four places, so it now lives in one function in `metrics.ts`: `hygieneItemsForAdr` (owned vs in-territory) and `adrOverdueMqls`. The memo, `list_overdue_mqls`, `get_adr_capacity` and `get_hygiene_summary` all use it, and a test checks they agree.
+- **Memo not regenerated:** its input is identical to the saved memo's.
+
+**Migrations (both run by the owner).**
+- `20261130000000_pipeline_agent.sql`: sequence status and paused_at, plus the `agent_runs` and `agent_actions` tables, with RLS.
+- `20261130010000_agent_action_reverted.sql`: the reverted outcome and `reverted_at`.
+
+**Checks.**
+- **HubSpot test:** `npm run hubspot:test-task` created one task, using the same code Approve uses, on Ionic Logistics (the one-account test company). Read back from HubSpot, it is linked to that company.
+- **Run at 23:33 UTC:**
+  - Calls: hygiene → speed to lead → capacity → sequences → Kenji's overdue MQLs → Sofia's stale Qualifying deals, then 3 proposals.
+  - Proposals: move Kenji's 9 overdue MQLs to Sofia; pause the bought list; a task on Orchardly Media due 24 Nov 2026.
+  - 4 Claude calls, $0.0451, all 36 numbers grounded.
+- **`npm run adr:check`:** nothing changed, and all ADR checks pass.
+- **Tests:** 129 pass. With Claude faked, they cover:
+  - the 8-call stop
+  - a burst of calls past the limit
+  - proposals on top of the 8
+  - both cost-limit paths
+  - the daily budget
+  - grounding
+  - bad proposals turned away
+  - real-calendar due dates
+  - reject changing nothing
+  - approve executing
+  - approve after a lead changed hands
+  - a past-due task
+  - revert keeping HubSpot tasks
+  - the shared SLA definition
