@@ -254,7 +254,7 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
   if (dupe) fail(`Two contacts would share the email ${dupe}. Stopping before anything is sent.`);
   const contactInputs = contactList.map((c) => c.input);
 
-  if (skipped) say(`Left out: ${skipped} Stage 0.1 deal(s), which aren't in HubSpot's pipelines.`);
+  if (skipped) say(`Left out: ${skipped} Qualifying deal(s), which aren't in HubSpot's pipelines.`);
   say(
     `To sync: ${companyInputs.length} companies, ${dealInputs.length} deals, ${contactInputs.length} contacts ` +
       `(${prospects.length} prospect, ${sponsors.length} executive sponsor).`,

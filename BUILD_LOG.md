@@ -517,3 +517,73 @@ The live results table in section 1 shows the figures from before this fix. Over
 **Reconciliation (`npm run adr:check`).** Every existing table unchanged row by row (existing deals only), and all 30 page sections (Overview, pipeline, win rate, upcoming deals, Deal Risk, Renewals, Health, HubSpot sync values, Workspace data) unchanged. Stored rows match the builder, and every planted problem is present.
 
 **HubSpot. Decision (owner):** Stage 0.1 deals stay out of the sync (they aren't in HubSpot's pipelines), so the Sync button keeps working; it reports how many it left out. Leads and sequences aren't synced.
+
+## 2026-11-23 (Monday)
+
+### ADR Hygiene, ADR Insights and the AI memo for the ADR manager
+
+**What we did.** Two new Pipeline pages built on the ADR data from 22 Nov, and an AI memo for the ADR manager. All numbers come from `src/lib/metrics.ts`, and every threshold is in one config object, `ADR_RULES`. "Now" is the end of the as-of day (13 Nov 2026), the same cut-off the ADR data was built with.
+
+1. **ADR Hygiene** (`/pipeline/adr-hygiene`): one card per check, each with its count, a one-line "why it matters" and a list you can expand (record, account, problem, owner, how long). There is a total at the top and a filter by ADR (`?adr=…`).
+
+   | Check | Rule | Today |
+   |---|---|---|
+   | Unassigned leads | An open lead (lead, MQL or SQL) with no ADR | 36 |
+   | MQLs past the 24-hour SLA | Still an MQL, never touched, and its 24 hours are up | 29 |
+   | Stale Qualifying deals | No update for 14+ days | 6 |
+   | SQLs that never got a deal | An ADR-to-AE handoff leak: an SQL with no deal 3+ days after its meeting | 2 |
+   | ADR–AE pairing mismatches | An open deal created on or after 1 Oct whose ADR isn't paired with its AE | 7 |
+   | Account tag problems | No ICP tier, tier 3 marked as a target, no territory, or a territory that isn't the owner's | 15 |
+
+   - **Total: 95** (Sofia 20, Kenji 42, Grace 33).
+   - **30-day SLA breach rate: 28.8%** (19 of 66 MQLs touched late or never).
+   - **How the ADR filter assigns issues:** a lead goes to its ADR, or if it has none, to the ADR who covers its territory. A deal goes to its ADR. An account goes to the ADR paired with its owner.
+2. **ADR Insights** (`/pipeline/adr-insights`), covering the last 6 months:
+   - **Funnel by lead source:** leads → MQL → SQL → Qualifying → opportunity. Inbound demo requests do best: 20.4% of leads become opportunities, against 7.3% overall.
+   - **Speed to lead by ADR:** team 69.4% on time; Kenji 64.5%, Sofia 89.3%, Grace 83.0%.
+   - **Sequence performance:** best is Inbound demo follow-up (36.4% meetings). Worst is the bought list: 0% meetings and a red 15.8% bounce rate.
+   - **Results per ADR.**
+3. **"Qualifying"** is what users see for the stored stage `Stage 0.1`: "meeting held, not yet qualified as an opportunity". It's set in one place (`stageLabel` in `src/lib/format.ts`). Database values and internal names are unchanged.
+4. **Meetings booked** means sequence enrollments with `meeting_booked`, everywhere. All 88 SQLs have a sequence meeting today. Meetings outside a sequence aren't recorded, so the page shows "SQLs with no sequence meeting" (currently 0) to make any gap visible.
+5. **AI memo** at the top of ADR Insights:
+   - **How it works:** a **Generate memo** button sends a compact summary from `metrics.ts` (`getAdrMemoInput`) to Claude Sonnet 5.5 through `callClaude()` (feature `adr_memo`).
+   - **What comes back:** a one-sentence headline and 3–5 recommendations. Each has a finding, why it matters, an action, an owner and the expected impact.
+   - **Saving:** each memo is saved in `briefings` (kind `adr_memo`) with the exact summary sent, the model, the cost and the grounding result. The page shows the latest one, with a **Regenerate** button.
+6. **Grounding check** (`src/lib/grounding.ts`, new): every number and date in the memo must appear in the summary Claude was given. "$34,800" matches 34800; "$35K" doesn't. Numbers it can't find are highlighted on the page and saved with the memo. Signs are ignored ("4.9 points below" matches −4.9), and numbers written as words aren't checked.
+7. **ADR manager:** Nadia Haddad (fictional, `tm_16`) was added to the team, additively. The memo is written for her, and the sales manager can still be named as an owner.
+
+**Migration** (`20261126000000_adr_manager_and_memos.sql`, run by the owner): it allows the new "ADR manager" role, adds Nadia's row, and adds `kind`, `as_of_date`, `model`, `cost_usd`, `input` and `grounding` to `briefings`. Existing rows became kind `daily`. RLS stays on.
+
+**First saved memo (23 Nov):**
+- **Cost:** $0.0221 (4,512 input and 1,312 output tokens). Grounding: all 52 numbers and dates were found in the data.
+- **Headline:** Kenji has the most leads and the weakest speed to lead, while unassigned leads and the bought-list sequence waste effort that could go to inbound demo follow-up.
+- **Recommendations, in order:**
+  1. Clear Kenji's 16 overdue MQLs (owner Nadia).
+  2. Assign the 36 unassigned leads (RevOps).
+  3. Pause the bought-list sequence (Kenji).
+  4. Copy the inbound demo follow-up approach into the webinar and event follow-ups (Grace).
+  5. Review the 6 stale Qualifying deals (David Novak).
+- An earlier unsaved run, made before the migration, cost $0.0238 and was also fully grounded.
+
+**Checks.**
+- **Tests:** 102 pass (13 new: 8 ADR tests worked out by hand, 4 grounding tests and 1 stage-label test).
+- **Reconciliation (`npm run adr:check`):** every existing table and all 30 page sections are unchanged. `team` now shows 15 → 16 rows. That's Nadia; the 15 original rows still match their "before" fingerprint (`f4337162a2e9`).
+- **Health-inputs fingerprint:** it will change, because `TEAM` now includes the ADR manager.
+
+**Decisions (owner).**
+- The grounding check is new; nothing earlier checked numbers.
+- The handoff-leak card counts SQLs with no deal.
+- Meetings booked come only from sequence enrollments.
+- The memo has a headline.
+- The stage is shown as "Qualifying".
+
+**Simplifications.**
+- Tag problems have no date, so their "how long" says "Not tracked".
+- **Funnel stages:** "Qualifying" counts any lead with a deal. The 44 older deals were opened straight into a later stage, so they count as having passed Qualifying.
+- **Different counts from the 22 Nov data check:**
+  - Per-ADR SLA % is slightly higher here than in that check (Sofia 89.3% vs 86%), because this page leaves out MQLs whose 24 hours aren't up yet.
+  - Sequence open rates here are per enrollment; the data check counts per email.
+
+**Open items.**
+- **Production build:** `next build` couldn't run in Claude's sandbox, because it can't download the Google font. Type-check and tests pass.
+- **Reconciliation snapshot:** `reconciliation/adr-before.json` still holds the 15-row team, so `adr:check` will keep reporting the `team` line until the snapshot is saved again.

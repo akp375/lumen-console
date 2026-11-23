@@ -73,3 +73,13 @@ const SEGMENT_LABELS: Record<string, string> = { SMB: "SMB", "mid-market": "Mid-
 export function segmentLabel(segment: string): string {
   return SEGMENT_LABELS[segment] ?? segment;
 }
+
+/** What users see for the first New business stage. The stored stage value stays "Stage 0.1". */
+export const QUALIFYING = "Qualifying";
+export const QUALIFYING_DESCRIPTION = "meeting held, not yet qualified as an opportunity";
+const STAGE_LABELS: Record<string, string> = { "Stage 0.1": QUALIFYING };
+
+/** A deal stage as users see it: "Stage 0.1" -> "Qualifying"; every other stage unchanged. */
+export function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? stage;
+}

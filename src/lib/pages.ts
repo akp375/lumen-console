@@ -8,6 +8,8 @@ export const PAGES = {
   renewals: { href: "/customer-success/renewals", title: "Renewals", description: "Customers renewing this quarter and next. Flag the ones at risk to get Claude's next steps." },
   health: { href: "/customer-success/health", title: "Health", description: "Every customer's health score this week, its trend and the products losing adoption. Worst first." },
   dealRisk: { href: "/pipeline/deal-risk", title: "Deal Risk", description: "Open deals closing this quarter and next. Flag the ones at risk to get Claude's next steps." },
+  adrHygiene: { href: "/pipeline/adr-hygiene", title: "ADR Hygiene", description: "Lead, deal and account-tag problems for the ADR team to fix, oldest first." },
+  adrInsights: { href: "/pipeline/adr-insights", title: "ADR Insights", description: "How leads convert by source, how fast ADRs follow up, and which sequences book meetings." },
   workspace: { href: "/workspace", title: "Workspace", description: "Ask questions about Lumen AI's revenue, renewals, pipeline and margins." },
   integrations: { href: "/integrations", title: "Integrations", description: "Where Cockpit's data comes from, and the CRMs it will sync with." },
 } as const;
@@ -24,13 +26,13 @@ export type NavSection = {
 };
 
 /**
- * The four nav sections. Pipeline is for anything top of funnel (ADR hygiene and ADR insights
- * will join Deal Risk); Customer Success will also hold Consumption. Workspace isn't in the nav,
+ * The four nav sections. Pipeline is for anything top of funnel (Deal Risk, ADR Hygiene and ADR
+ * Insights); Customer Success will also hold Consumption. Workspace isn't in the nav,
  * but its page still works at /workspace.
  */
 export const NAV: readonly NavSection[] = [
   { title: PAGES.overview.title, href: PAGES.overview.href, prefix: null, pages: [] },
-  { title: "Pipeline", href: PAGES.dealRisk.href, prefix: "/pipeline", pages: [PAGES.dealRisk] },
+  { title: "Pipeline", href: PAGES.dealRisk.href, prefix: "/pipeline", pages: [PAGES.dealRisk, PAGES.adrHygiene, PAGES.adrInsights] },
   { title: "Customer Success", href: PAGES.health.href, prefix: "/customer-success", pages: [PAGES.health, PAGES.renewals] },
   { title: PAGES.integrations.title, href: PAGES.integrations.href, prefix: PAGES.integrations.href, pages: [] },
 ];

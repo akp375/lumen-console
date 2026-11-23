@@ -2,7 +2,7 @@
 // one-decimal percentages, dates like "16 Dec 2026".
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pct, pctChange, shortDate, signedInt, usd, usdCompact } from "./format.ts";
+import { QUALIFYING_DESCRIPTION, pct, pctChange, shortDate, signedInt, stageLabel, usd, usdCompact } from "./format.ts";
 
 test("usdCompact: $1.2M, $387K, $950", () => {
   assert.equal(usdCompact(1_234_567), "$1.2M");
@@ -33,4 +33,10 @@ test("pct and pctChange: one decimal", () => {
 test("shortDate: 16 Dec 2026", () => {
   assert.equal(shortDate("2026-12-16"), "16 Dec 2026");
   assert.equal(shortDate("2026-09-05T10:00:00Z"), "5 Sep 2026");
+});
+
+test("stageLabel: Stage 0.1 shows as Qualifying; other stages unchanged", () => {
+  assert.equal(stageLabel("Stage 0.1"), "Qualifying");
+  assert.equal(stageLabel("Discovery"), "Discovery");
+  assert.equal(QUALIFYING_DESCRIPTION, "meeting held, not yet qualified as an opportunity");
 });

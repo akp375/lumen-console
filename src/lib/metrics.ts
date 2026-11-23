@@ -15,6 +15,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "./as-of-date.ts";
+import { QUALIFYING, QUALIFYING_DESCRIPTION, stageLabel } from "./format.ts";
 import { SIGNAL_TOPICS, type Sentiment, type SignalTopic } from "./signal-topics.ts";
 
 // ---------------------------------------------------------------------------
@@ -2903,4 +2904,531 @@ export async function getHomePageData(asOf: string = AS_OF_DATE): Promise<HomePa
     monthly: calcMonthlyRevenueVsTokenCost(invoices, usage, prices, asOf),
     nrr: calcNrr90d(accounts, invoices, asOf),
   };
+}
+
+// ===========================================================================
+// ADR (account development): hygiene checks, insights and the memo summary
+// ===========================================================================
+//
+// "Now" for every ADR check is the end of the as-of day (AS_OF_DATE 23:59:59 UTC), the same
+// cut-off the ADR data was generated with. Nothing here reads the real clock.
+
+/** Every ADR threshold, in one place. */
+export const ADR_RULES = {
+  /** An MQL must get its first touch within this many hours (exactly 24h counts as on time). */
+  slaHours: 24,
+  /** The SLA breach rate covers MQLs from the last 30 days whose 24 hours are up. */
+  slaBreachRateDays: 30,
+  /** A Stage 0.1 deal is stale with no update for this many days or more (exactly 14 counts). */
+  staleStage01Days: 14,
+  /** An SQL with no deal this many days after the meeting is a handoff leak (Stage 0.1 deals are normally opened the same day). */
+  handoffGraceDays: 3,
+  /** Leads in these stages count as unassigned when they have no ADR (disqualified leads don't). */
+  unassignedStages: ["lead", "MQL", "SQL"] as readonly string[],
+  /** Funnel, speed to lead, sequences and the per-ADR table look back this many months. */
+  insightsWindowMonths: 6,
+  /** A sequence needs this many enrollments to be ranked best or worst. */
+  sequenceMinEnrollments: 20,
+  /** A sequence bounce rate above this is shown red. */
+  sequenceBounceAlertAbove: 0.1,
+  memoRecommendations: { min: 3, max: 5 },
+  memoMaxTokens: 3000,
+} as const;
+
+export type AdrLeadRow = {
+  id: string;
+  account_id: string;
+  contact_name: string;
+  lead_source: string;
+  lifecycle_stage: string;
+  created_at: string;
+  mql_at: string | null;
+  first_touch_at: string | null;
+  sql_at: string | null;
+  assigned_adr_id: string | null;
+  opportunity_id: string | null;
+};
+export type AdrEnrollmentRow = {
+  id: string;
+  sequence_id: string;
+  lead_id: string;
+  adr_id: string | null;
+  enrolled_at: string;
+  opens: number;
+  replies: number;
+  bounces: number;
+  meeting_booked: boolean;
+  meeting_booked_at: string | null;
+};
+export type AdrSequenceRow = { id: string; name: string; owner_id: string };
+export type AdrDealRow = { id: string; account_id: string; stage: string; created_date: string; last_activity_date: string | null; ae_id: string | null; adr_id: string | null };
+export type AdrAccountRow = { id: string; name: string; status: string; owner: string; icp_tier: number | null; target_account: boolean | null; territory: string | null };
+export type AdrTeamRow = { id: string; name: string; role: string; territory: string | null };
+export type AdrPairingRow = { adr_id: string; ae_id: string; effective_from: string };
+export type AdrInputs = {
+  leads: AdrLeadRow[];
+  enrollments: AdrEnrollmentRow[];
+  sequences: AdrSequenceRow[];
+  deals: AdrDealRow[];
+  accounts: AdrAccountRow[];
+  team: AdrTeamRow[];
+  pairings: AdrPairingRow[];
+};
+
+const HOUR_MS = 3_600_000;
+const asOfEndMs = (asOf: string) => parseDate(asOf).getTime() + DAY_MS - 1;
+const ms = (iso: string) => Date.parse(iso);
+const wholeDays = (fromMs: number, toMs: number) => Math.max(0, Math.floor((toMs - fromMs) / DAY_MS));
+const ratio = (n: number, d: number): number | null => (d === 0 ? null : n / d);
+function median(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** Shared lookups: names, each AE's paired ADR, and the ADR responsible for an account or lead. */
+function adrContext(input: AdrInputs) {
+  const nameOf = new Map(input.team.map((t) => [t.id, t.name]));
+  const aeByName = new Map(input.team.filter((t) => t.role === "AE").map((t) => [t.name, t]));
+  const adrOfAe = new Map(input.pairings.map((p) => [p.ae_id, p.adr_id]));
+  const paired = new Set(input.pairings.map((p) => `${p.adr_id}|${p.ae_id}`));
+  const effectiveFrom = new Map(input.pairings.map((p) => [p.ae_id, p.effective_from]));
+  const accountById = new Map(input.accounts.map((a) => [a.id, a]));
+  /** The ADR who covers an account: the ADR paired with the account owner (AE). */
+  const territoryAdr = (accountId: string): string | null => {
+    const a = accountById.get(accountId);
+    const ae = a ? aeByName.get(a.owner) : undefined;
+    return ae ? (adrOfAe.get(ae.id) ?? null) : null;
+  };
+  /** The ADR a lead counts under: its assigned ADR, or (if unassigned) the territory's ADR. */
+  const leadAdr = (l: AdrLeadRow) => l.assigned_adr_id ?? territoryAdr(l.account_id);
+  const adrs = input.team.filter((t) => t.role === "ADR").map((t) => ({ id: t.id, name: t.name }));
+  return { nameOf, aeByName, adrOfAe, paired, effectiveFrom, accountById, territoryAdr, leadAdr, adrs };
+}
+
+// --- Hygiene ---------------------------------------------------------------
+
+export const ADR_HYGIENE_CHECKS = [
+  { key: "unassigned", title: "Unassigned leads", why: "Nobody follows up a lead with no owner, so it goes cold." },
+  { key: "slaBreach", title: "MQLs past the 24-hour SLA", why: "Leads contacted within a day convert far better than leads left waiting." },
+  { key: "staleStage01", title: `Stale ${QUALIFYING} deals`, why: "A meeting held that nobody qualifies or moves forward is pipeline quietly going cold." },
+  { key: "handoffLeak", title: "SQLs that never got a deal", why: "A meeting that never became a deal is an ADR-to-AE handoff leak: the AE never picked it up." },
+  { key: "pairingMismatch", title: "ADR–AE pairing mismatches", why: "Deals with the wrong ADR-AE pair confuse ownership and credit, and break territory reporting." },
+  { key: "accountTags", title: "Account tag problems", why: "Wrong ICP tier, target or territory tags send ADR effort to the wrong accounts." },
+] as const;
+export type AdrHygieneCheckKey = (typeof ADR_HYGIENE_CHECKS)[number]["key"];
+
+export type AdrHygieneItem = {
+  id: string; // unique per item
+  record: string; // what the item is about, e.g. the contact or deal
+  recordId: string;
+  accountId: string;
+  accountName: string;
+  owner: string; // who should fix it
+  adrId: string | null; // the ADR it counts under (for the filter)
+  problem: string; // short description
+  /** How long it has been a problem, in whole days; null when that isn't recorded. */
+  ageDays: number | null;
+};
+export type AdrHygieneCheck = { key: AdrHygieneCheckKey; title: string; why: string; count: number; items: AdrHygieneItem[] };
+export type AdrHygieneResult = {
+  asOf: string;
+  adrId: string | null; // the filter applied, null = all
+  total: number;
+  /** Issues across the whole team, whatever the filter. */
+  teamTotal: number;
+  checks: AdrHygieneCheck[];
+  /** MQLs from the last slaBreachRateDays whose 24 hours are up: breached = touched late or never. */
+  slaBreachRate30d: { breached: number; eligible: number; rate: number | null };
+  adrs: { id: string; name: string }[];
+};
+
+export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | null = null): AdrHygieneResult {
+  const R = ADR_RULES;
+  const ctx = adrContext(input);
+  const now = asOfEndMs(asOf);
+  const slaMs = R.slaHours * HOUR_MS;
+  const name = (id: string | null) => (id ? (ctx.nameOf.get(id) ?? id) : "Unassigned");
+  /** A lead's owner: its ADR, or "Unassigned" with the ADR who covers its territory. */
+  const leadOwner = (l: AdrLeadRow) => {
+    if (l.assigned_adr_id) return name(l.assigned_adr_id);
+    const adr = ctx.territoryAdr(l.account_id);
+    return adr ? `Unassigned (territory ADR: ${name(adr)})` : "Unassigned";
+  };
+  const acct = (id: string) => ctx.accountById.get(id)?.name ?? id;
+  const items: Record<AdrHygieneCheckKey, AdrHygieneItem[]> = { unassigned: [], slaBreach: [], staleStage01: [], handoffLeak: [], pairingMismatch: [], accountTags: [] };
+
+  for (const l of input.leads) {
+    if (ms(l.created_at) > now) continue;
+    // Unassigned
+    if (!l.assigned_adr_id && R.unassignedStages.includes(l.lifecycle_stage)) {
+      items.unassigned.push({
+        id: `unassigned:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+        owner: leadOwner(l), adrId: ctx.leadAdr(l),
+        problem: `${l.lifecycle_stage} from ${l.lead_source}, no ADR`, ageDays: wholeDays(ms(l.created_at), now),
+      });
+    }
+    // Open SLA breach: still an MQL, never touched, and its 24 hours are up
+    if (l.lifecycle_stage === "MQL" && l.mql_at) {
+      const deadline = ms(l.mql_at) + slaMs;
+      const touched = l.first_touch_at !== null && ms(l.first_touch_at) <= now;
+      if (!touched && deadline < now) {
+        items.slaBreach.push({
+          id: `sla:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+          owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `MQL from ${l.lead_source}, not touched`, ageDays: wholeDays(deadline, now),
+        });
+      }
+    }
+    // Handoff leak: still an SQL with no deal, past the grace period
+    if (l.lifecycle_stage === "SQL" && !l.opportunity_id && l.sql_at && ms(l.sql_at) <= now - R.handoffGraceDays * DAY_MS) {
+      items.handoffLeak.push({
+        id: `handoff:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+        owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `Meeting held (SQL from ${l.lead_source}), no deal opened`, ageDays: wholeDays(ms(l.sql_at), now),
+      });
+    }
+  }
+
+  for (const d of input.deals) {
+    if (d.created_date > asOf) continue;
+    // Stale Stage 0.1
+    if (d.stage === "Stage 0.1") {
+      const since = d.last_activity_date ?? d.created_date;
+      const days = daysBetween(since, asOf);
+      if (days >= R.staleStage01Days) {
+        items.staleStage01.push({
+          id: `stale:${d.id}`, record: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
+          owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id, problem: `No update since ${since}`, ageDays: days,
+        });
+      }
+    }
+    // Pairing mismatch: open deals created on or after the pairing took effect for the deal's AE
+    const open = d.stage === "Stage 0.1" || (OPEN_STAGES as readonly string[]).includes(d.stage);
+    const from = d.ae_id ? ctx.effectiveFrom.get(d.ae_id) : undefined;
+    if (open && d.adr_id && d.ae_id && from && d.created_date >= from && !ctx.paired.has(`${d.adr_id}|${d.ae_id}`)) {
+      const should = ctx.adrOfAe.get(d.ae_id) ?? null;
+      items.pairingMismatch.push({
+        id: `pairing:${d.id}`, record: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
+        owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id,
+        problem: `${stageLabel(d.stage)}: ${name(d.ae_id)} is paired with ${name(should)}`, ageDays: daysBetween(d.created_date, asOf),
+      });
+    }
+  }
+
+  // Account tags (prospects and customers; churned accounts aren't worked)
+  for (const a of input.accounts) {
+    if (a.status === "churned") continue;
+    const ae = ctx.aeByName.get(a.owner);
+    const problems: string[] = [];
+    if (a.icp_tier === null) problems.push("No ICP tier");
+    if (a.icp_tier === 3 && a.target_account) problems.push("Tier 3 marked as target");
+    if (a.territory === null) problems.push("No territory");
+    else if (ae?.territory && a.territory !== ae.territory) problems.push(`Territory is ${a.territory}, owner's is ${ae.territory}`);
+    for (const p of problems) {
+      items.accountTags.push({
+        id: `tags:${a.id}:${p}`, record: a.name, recordId: a.id, accountId: a.id, accountName: a.name,
+        owner: `${a.owner} (AE)`, adrId: ctx.territoryAdr(a.id), problem: p, ageDays: null,
+      });
+    }
+  }
+
+  // An unknown ADR id means no filter.
+  const filter = adrId !== null && ctx.adrs.some((a) => a.id === adrId) ? adrId : null;
+  const keep = (i: AdrHygieneItem) => filter === null || i.adrId === filter;
+  const checks = ADR_HYGIENE_CHECKS.map((c) => {
+    const list = items[c.key].filter(keep).sort((x, y) => (y.ageDays ?? -1) - (x.ageDays ?? -1) || x.id.localeCompare(y.id));
+    return { key: c.key, title: c.title, why: c.why, count: list.length, items: list };
+  });
+
+  // 30-day SLA breach rate
+  const rateFrom = now - R.slaBreachRateDays * DAY_MS;
+  let eligible = 0, breached = 0;
+  for (const l of input.leads) {
+    if (!l.mql_at) continue;
+    const m = ms(l.mql_at);
+    if (m < rateFrom || m + slaMs > now) continue; // outside the 30 days, or its 24 hours aren't up yet
+    if (filter !== null && ctx.leadAdr(l) !== filter) continue;
+    eligible++;
+    if (l.first_touch_at === null || ms(l.first_touch_at) - m > slaMs) breached++;
+  }
+
+  return {
+    asOf,
+    adrId: filter,
+    total: checks.reduce((n, c) => n + c.count, 0),
+    teamTotal: Object.values(items).reduce((n, list) => n + list.length, 0),
+    checks,
+    slaBreachRate30d: { breached, eligible, rate: ratio(breached, eligible) },
+    adrs: ctx.adrs,
+  };
+}
+
+// --- Insights --------------------------------------------------------------
+
+export type AdrFunnelRow = {
+  source: string; // lead source, or "All sources"
+  leads: number;
+  mql: number;
+  sql: number;
+  stage01: number; // the lead has a deal (Stage 0.1 is the first stage, so every deal has passed it)
+  opportunity: number; // that deal has moved past Stage 0.1 (open or closed)
+  leadToMql: number | null;
+  mqlToSql: number | null;
+  sqlToStage01: number | null;
+  stage01ToOpportunity: number | null;
+  leadToOpportunity: number | null;
+};
+export type AdrSpeedRow = {
+  adrId: string | null; // null = unassigned MQLs
+  name: string;
+  mqls: number; // MQLs whose 24 hours are up
+  onTime: number;
+  late: number;
+  never: number;
+  onTimeRate: number | null;
+  medianHoursToTouch: number | null; // touched MQLs only
+};
+export type AdrSequenceRowResult = {
+  id: string;
+  name: string;
+  owner: string;
+  enrollments: number;
+  openRate: number | null;
+  replyRate: number | null;
+  meetingRate: number | null;
+  bounceRate: number | null;
+  meetings: number;
+  rank: "best" | "worst" | null; // by meeting rate, among sequences with enough enrollments
+  bounceAlert: boolean;
+};
+export type AdrScorecardRow = { adrId: string; name: string; leadsOwned: number; slaRate: number | null; meetingsBooked: number; stage01Created: number };
+export type AdrInsightsResult = {
+  asOf: string;
+  windowStart: string;
+  funnel: AdrFunnelRow[]; // per source, then "All sources" last
+  speed: AdrSpeedRow[]; // per ADR, then unassigned (if any), then the team
+  team: AdrSpeedRow;
+  sequences: AdrSequenceRowResult[];
+  scorecard: AdrScorecardRow[];
+  /** Meetings are counted from sequence enrollments (meeting_booked). SQLs with no sequence meeting, so the gap is visible. */
+  sqlsWithoutSequenceMeeting: number;
+  /** The ADR manager's name (the memo's reader). */
+  adrManager: string | null;
+};
+
+function funnelRow(source: string, leads: AdrLeadRow[], stageOf: Map<string, string>): AdrFunnelRow {
+  const n = leads.length;
+  const mql = leads.filter((l) => l.mql_at).length;
+  const sql = leads.filter((l) => l.sql_at).length;
+  const s01 = leads.filter((l) => l.opportunity_id).length;
+  const opp = leads.filter((l) => l.opportunity_id && stageOf.has(l.opportunity_id) && stageOf.get(l.opportunity_id) !== "Stage 0.1").length;
+  return {
+    source, leads: n, mql, sql, stage01: s01, opportunity: opp,
+    leadToMql: ratio(mql, n), mqlToSql: ratio(sql, mql), sqlToStage01: ratio(s01, sql), stage01ToOpportunity: ratio(opp, s01), leadToOpportunity: ratio(opp, n),
+  };
+}
+
+function speedRow(adrId: string | null, name: string, mqls: AdrLeadRow[]): AdrSpeedRow {
+  const slaMs = ADR_RULES.slaHours * HOUR_MS;
+  let onTime = 0, late = 0, never = 0;
+  const hours: number[] = [];
+  for (const l of mqls) {
+    if (l.first_touch_at === null) { never++; continue; }
+    const gap = ms(l.first_touch_at) - ms(l.mql_at!);
+    hours.push(gap / HOUR_MS);
+    if (gap <= slaMs) onTime++;
+    else late++;
+  }
+  return { adrId, name, mqls: mqls.length, onTime, late, never, onTimeRate: ratio(onTime, mqls.length), medianHoursToTouch: median(hours) };
+}
+
+export function calcAdrInsights(input: AdrInputs, asOf: string): AdrInsightsResult {
+  const R = ADR_RULES;
+  const ctx = adrContext(input);
+  const now = asOfEndMs(asOf);
+  const windowStart = addMonths(asOf, -R.insightsWindowMonths);
+  const fromMs = parseDate(windowStart).getTime();
+  const inWindow = (iso: string | null) => iso !== null && ms(iso) >= fromMs && ms(iso) <= now;
+  const stageOf = new Map(input.deals.map((d) => [d.id, d.stage]));
+
+  // Funnel: leads created in the window, by source
+  const leads = input.leads.filter((l) => inWindow(l.created_at));
+  const sources = [...new Set(leads.map((l) => l.lead_source))].sort();
+  const funnel = sources.map((s) => funnelRow(s, leads.filter((l) => l.lead_source === s), stageOf));
+  funnel.sort((a, b) => (b.leadToOpportunity ?? -1) - (a.leadToOpportunity ?? -1) || a.source.localeCompare(b.source));
+  funnel.push(funnelRow("All sources", leads, stageOf));
+
+  // Speed to lead: MQLs from the window whose 24 hours are up
+  const mqls = input.leads.filter((l) => l.mql_at && inWindow(l.mql_at) && ms(l.mql_at) + R.slaHours * HOUR_MS <= now);
+  const speed = ctx.adrs.map((a) => speedRow(a.id, a.name, mqls.filter((l) => l.assigned_adr_id === a.id)));
+  const unassigned = mqls.filter((l) => !l.assigned_adr_id);
+  if (unassigned.length) speed.push(speedRow(null, "Unassigned", unassigned));
+  const team = speedRow(null, "Team", mqls);
+
+  // Sequences: enrollments in the window
+  const enrolled = input.enrollments.filter((e) => inWindow(e.enrolled_at));
+  const sequences: AdrSequenceRowResult[] = input.sequences.map((s) => {
+    const es = enrolled.filter((e) => e.sequence_id === s.id);
+    const n = es.length;
+    const meetings = es.filter((e) => e.meeting_booked).length;
+    const bounceRate = ratio(es.filter((e) => e.bounces > 0).length, n);
+    return {
+      id: s.id, name: s.name, owner: ctx.nameOf.get(s.owner_id) ?? s.owner_id, enrollments: n,
+      openRate: ratio(es.filter((e) => e.opens > 0).length, n), replyRate: ratio(es.filter((e) => e.replies > 0).length, n),
+      meetingRate: ratio(meetings, n), bounceRate, meetings, rank: null, bounceAlert: bounceRate !== null && bounceRate > R.sequenceBounceAlertAbove,
+    };
+  });
+  // Ties on meeting rate: the higher bounce rate ranks lower.
+  const ranked = sequences
+    .filter((s) => s.enrollments >= R.sequenceMinEnrollments && s.meetingRate !== null)
+    .sort((a, b) => b.meetingRate! - a.meetingRate! || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
+  if (ranked.length >= 2) {
+    ranked[0].rank = "best";
+    ranked[ranked.length - 1].rank = "worst";
+  }
+  sequences.sort((a, b) => (b.meetingRate ?? -1) - (a.meetingRate ?? -1) || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
+
+  // Per ADR. Meetings booked = sequence enrollments with meeting_booked, booked in the window.
+  const scorecard: AdrScorecardRow[] = ctx.adrs.map((a) => {
+    const owned = leads.filter((l) => l.assigned_adr_id === a.id);
+    return {
+      adrId: a.id,
+      name: a.name,
+      leadsOwned: owned.length,
+      slaRate: speed.find((s) => s.adrId === a.id)!.onTimeRate,
+      meetingsBooked: input.enrollments.filter((e) => e.adr_id === a.id && e.meeting_booked && inWindow(e.meeting_booked_at ?? e.enrolled_at)).length,
+      stage01Created: owned.filter((l) => l.opportunity_id).length,
+    };
+  });
+  const sequenceMeetingLeads = new Set(input.enrollments.filter((e) => e.meeting_booked).map((e) => e.lead_id));
+  const sqlsWithoutSequenceMeeting = leads.filter((l) => l.sql_at && !sequenceMeetingLeads.has(l.id)).length;
+
+  const adrManager = input.team.find((t) => t.role === "ADR manager")?.name ?? null;
+  return { asOf, windowStart, funnel, speed, team, sequences, scorecard, sqlsWithoutSequenceMeeting, adrManager };
+}
+
+// --- Memo summary ----------------------------------------------------------
+
+/** 0.6428 -> 64.3 (a percent with one decimal, as the pages show it). null stays null. */
+const pct1 = (x: number | null) => (x === null ? null : Math.round(x * 1000) / 10);
+const r1 = (x: number | null) => (x === null ? null : Math.round(x * 10) / 10);
+
+/**
+ * The compact summary the ADR memo is written from. Percentages are already percents with one
+ * decimal (64.3 = 64.3%), so Claude can quote them as they are; the comparisons it is likely to
+ * want are worked out here, so it never has to calculate.
+ */
+export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsightsResult, team: AdrTeamRow[], fmtDate: (iso: string) => string) {
+  const R = ADR_RULES;
+  const people = (role: string) => team.filter((t) => t.role === role).map((t) => t.name);
+  const teamSla = pct1(insights.team.onTimeRate);
+  const ranked = insights.sequences.filter((s) => s.rank);
+  const best = insights.sequences.find((s) => s.rank === "best");
+  const worst = insights.sequences.find((s) => s.rank === "worst");
+  const highestBounce = [...insights.sequences].sort((a, b) => (b.bounceRate ?? -1) - (a.bounceRate ?? -1))[0];
+  const otherBounces = insights.sequences.filter((s) => s !== highestBounce && s.bounceRate !== null).map((s) => s.bounceRate!);
+  const all = insights.funnel.find((f) => f.source === "All sources")!;
+  return {
+    as_of: fmtDate(insights.asOf),
+    window: { from: fmtDate(insights.windowStart), to: fmtDate(insights.asOf), months: R.insightsWindowMonths },
+    people: { adr_manager: people("ADR manager")[0] ?? null, sales_manager: people("sales manager")[0] ?? null, adrs: people("ADR"), aes: people("AE") },
+    rules: { sla_hours: R.slaHours, stale_qualifying_days: R.staleStage01Days, handoff_grace_days: R.handoffGraceDays, sequence_bounce_alert_above_pct: pct1(R.sequenceBounceAlertAbove) },
+    hygiene: {
+      total_issues: hygiene.total,
+      checks: hygiene.checks.map((c) => ({
+        check: c.title,
+        count: c.count,
+        by_adr: Object.fromEntries(hygiene.adrs.map((a) => [a.name, c.items.filter((i) => i.adrId === a.id).length])),
+        oldest_days: c.items.reduce<number | null>((m, i) => (i.ageDays === null ? m : Math.max(m ?? 0, i.ageDays)), null),
+      })),
+      sla_breach_rate_last_30_days_pct: pct1(hygiene.slaBreachRate30d.rate),
+      sla_breaches_last_30_days: hygiene.slaBreachRate30d.breached,
+      mqls_due_last_30_days: hygiene.slaBreachRate30d.eligible,
+    },
+    funnel_by_source: insights.funnel.map((f) => ({
+      source: f.source, leads: f.leads, mql: f.mql, sql: f.sql, qualifying_deals: f.stage01, opportunity: f.opportunity,
+      lead_to_mql_pct: pct1(f.leadToMql), mql_to_sql_pct: pct1(f.mqlToSql), sql_to_qualifying_pct: pct1(f.sqlToStage01),
+      qualifying_to_opportunity_pct: pct1(f.stage01ToOpportunity), lead_to_opportunity_pct: pct1(f.leadToOpportunity),
+    })),
+    funnel_note: `Recent leads have had less time to convert. ${all.leads} leads in the window.`,
+    speed_to_lead: {
+      team: { mqls: insights.team.mqls, on_time_pct: teamSla, never_touched: insights.team.never, median_hours_to_first_touch: r1(insights.team.medianHoursToTouch) },
+      by_adr: insights.speed.map((s) => ({
+        adr: s.name, mqls: s.mqls, on_time: s.onTime, late: s.late, never_touched: s.never, on_time_pct: pct1(s.onTimeRate),
+        points_vs_team: s.onTimeRate === null || teamSla === null ? null : r1(pct1(s.onTimeRate)! - teamSla),
+        median_hours_to_first_touch: r1(s.medianHoursToTouch),
+      })),
+    },
+    sequences: insights.sequences.map((s) => ({
+      sequence: s.name, owner: s.owner, enrollments: s.enrollments, meetings: s.meetings,
+      open_pct: pct1(s.openRate), reply_pct: pct1(s.replyRate), meeting_pct: pct1(s.meetingRate), bounce_pct: pct1(s.bounceRate),
+      ranked: s.rank, bounce_alert: s.bounceAlert,
+    })),
+    sequence_comparisons: {
+      ranked_sequences: ranked.length,
+      best_by_meeting_rate: best ? { sequence: best.name, meeting_pct: pct1(best.meetingRate) } : null,
+      worst_by_meeting_rate: worst ? { sequence: worst.name, meeting_pct: pct1(worst.meetingRate) } : null,
+      highest_bounce: highestBounce ? { sequence: highestBounce.name, bounce_pct: pct1(highestBounce.bounceRate), enrollments: highestBounce.enrollments } : null,
+      highest_bounce_among_the_others_pct: otherBounces.length ? pct1(Math.max(...otherBounces)) : null,
+    },
+    per_adr: insights.scorecard.map((s) => ({ adr: s.name, leads_owned: s.leadsOwned, sla_on_time_pct: pct1(s.slaRate), meetings_booked: s.meetingsBooked, qualifying_deals_created: s.stage01Created })),
+    terms: {
+      qualifying: `"${QUALIFYING}" is the first deal stage: ${QUALIFYING_DESCRIPTION}.`,
+      meetings_booked: "Meetings booked = sequence enrollments with a meeting booked (a count of meetings, not a deal stage).",
+    },
+    sqls_without_a_sequence_meeting: insights.sqlsWithoutSequenceMeeting,
+  };
+}
+export type AdrMemoInput = ReturnType<typeof calcAdrMemoInput>;
+
+// --- Loaders ---------------------------------------------------------------
+
+async function loadAdrInputs(): Promise<AdrInputs> {
+  const [leads, enrollments, sequences, deals, accounts, team, pairings] = await Promise.all([
+    fetchAll("leads", "id, account_id, contact_name, lead_source, lifecycle_stage, created_at, mql_at, first_touch_at, sql_at, assigned_adr_id, opportunity_id", ["id"]),
+    fetchAll("sequence_enrollments", "id, sequence_id, lead_id, adr_id, enrolled_at, opens, replies, bounces, meeting_booked, meeting_booked_at", ["id"]),
+    fetchAll("sequences", "id, name, owner_id", ["id"]),
+    fetchAll("opportunities", "id, account_id, stage, created_date, last_activity_date, ae_id, adr_id", ["id"]),
+    fetchAll("accounts", "id, name, status, owner, icp_tier, target_account, territory", ["id"]),
+    fetchAll("team", "id, name, role, territory", ["id"]),
+    fetchAll("adr_ae_pairings", "adr_id, ae_id, effective_from", ["adr_id", "ae_id"]),
+  ]);
+  return {
+    leads: leads.map((r) => ({
+      id: str(r.id), account_id: str(r.account_id), contact_name: str(r.contact_name), lead_source: str(r.lead_source), lifecycle_stage: str(r.lifecycle_stage),
+      created_at: str(r.created_at), mql_at: strOrNull(r.mql_at), first_touch_at: strOrNull(r.first_touch_at), sql_at: strOrNull(r.sql_at),
+      assigned_adr_id: strOrNull(r.assigned_adr_id), opportunity_id: strOrNull(r.opportunity_id),
+    })),
+    enrollments: enrollments.map((r) => ({
+      id: str(r.id), sequence_id: str(r.sequence_id), lead_id: str(r.lead_id), adr_id: strOrNull(r.adr_id), enrolled_at: str(r.enrolled_at),
+      opens: num(r.opens), replies: num(r.replies), bounces: num(r.bounces), meeting_booked: r.meeting_booked === true, meeting_booked_at: strOrNull(r.meeting_booked_at),
+    })),
+    sequences: sequences.map((r) => ({ id: str(r.id), name: str(r.name), owner_id: str(r.owner_id) })),
+    deals: deals.map((r) => ({
+      id: str(r.id), account_id: str(r.account_id), stage: str(r.stage), created_date: str(r.created_date),
+      last_activity_date: strOrNull(r.last_activity_date), ae_id: strOrNull(r.ae_id), adr_id: strOrNull(r.adr_id),
+    })),
+    accounts: accounts.map((r) => ({
+      id: str(r.id), name: str(r.name), status: str(r.status), owner: str(r.owner),
+      icp_tier: r.icp_tier === null || r.icp_tier === undefined ? null : num(r.icp_tier),
+      target_account: r.target_account === null || r.target_account === undefined ? null : r.target_account === true,
+      territory: strOrNull(r.territory),
+    })),
+    team: team.map((r) => ({ id: str(r.id), name: str(r.name), role: str(r.role), territory: strOrNull(r.territory) })),
+    pairings: pairings.map((r) => ({ adr_id: str(r.adr_id), ae_id: str(r.ae_id), effective_from: str(r.effective_from) })),
+  };
+}
+
+export async function getAdrHygiene(adrId: string | null = null, asOf: string = AS_OF_DATE): Promise<AdrHygieneResult> {
+  return calcAdrHygiene(await loadAdrInputs(), asOf, adrId);
+}
+
+export async function getAdrInsights(asOf: string = AS_OF_DATE): Promise<AdrInsightsResult> {
+  return calcAdrInsights(await loadAdrInputs(), asOf);
+}
+
+/** The summary sent to Claude for the ADR memo, and the people it may name. */
+export async function getAdrMemoInput(fmtDate: (iso: string) => string, asOf: string = AS_OF_DATE): Promise<AdrMemoInput> {
+  const input = await loadAdrInputs();
+  return calcAdrMemoInput(calcAdrHygiene(input, asOf), calcAdrInsights(input, asOf), input.team, fmtDate);
 }

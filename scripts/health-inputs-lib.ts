@@ -19,7 +19,7 @@ import { calcNpsTrend, calcUsageTrend, type AccountRow, type NpsResponseRow, typ
 // Team (fictional people). The 6 AEs are the existing account owners.
 // ---------------------------------------------------------------------------
 
-export type TeamRole = "AE" | "CSM" | "ADR" | "CS manager" | "sales manager";
+export type TeamRole = "AE" | "CSM" | "ADR" | "ADR manager" | "CS manager" | "sales manager";
 export type TeamSegment = "enterprise" | "mid-market" | "SMB" | "commercial" | "all"; // commercial = SMB + mid-market
 export type TeamRow = { id: string; name: string; role: TeamRole; segment: TeamSegment };
 
@@ -40,6 +40,8 @@ export const TEAM: TeamRow[] = [
   { id: "tm_13", name: "Grace Mensah", role: "ADR", segment: "commercial" },
   { id: "tm_14", name: "Rachel Adler", role: "CS manager", segment: "all" },
   { id: "tm_15", name: "David Novak", role: "sales manager", segment: "all" },
+  // Added 23 Nov 2026 (owner): the ADR manager the ADR memo is written for.
+  { id: "tm_16", name: "Nadia Haddad", role: "ADR manager", segment: "all" },
 ];
 
 // AEs and ADRs cover enterprise or commercial (SMB + mid-market); CSMs cover one account segment each.
