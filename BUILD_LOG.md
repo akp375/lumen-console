@@ -647,3 +647,53 @@ Both snapshots are in `reconciliation/adr-numbers-before-lifecycle.json` and `re
   3. Pause the bought-list sequence (RevOps).
   4. Clear stale Qualifying deals, the 2 handoffs and the mismatches (David Novak).
   5. Protect Kenji's time for demo follow-up (Nadia).
+
+### Sequence email metrics per email sent, and the Pipeline tab order
+
+**What changed.**
+- **Sequence table on ADR Insights:**
+  - Email rates are now **per email sent**: open, **click-through (new)**, reply and bounce. Emails sent has its own column.
+  - **"Call booked (per enrollment)"** is the same number as before (enrollments that booked a call ÷ enrollments).
+  - **"Used by"** (the ADRs who enrolled leads in it, most first, plus unassigned) replaces Owner.
+  - A note under the table defines each rate. Bounce rates above 10% per email are red.
+- **Migration** (`20261128000000_enrollment_clicks.sql`, run by the owner): `sequence_enrollments.clicks`, defaulting to 0, with a rule that clicks can't exceed opens.
+- **Engagement re-seeded by temperature** (`scripts/adr-lib.ts`, agreed with the owner):
+  - **Cold** (outbound cold, bought list, content nurture, re-engagement): opens 20–40%, click-through 1–3%, replies 1–5%, bounces 2–6% per email. The bought list stays the outlier at 15.6%.
+  - **Warm** (inbound demo, webinar and event follow-up): opens 50–70%, click-through 4–10%, replies 15–40%, bounces under 2%.
+  - **Bounces are hard or soft.** Hard: the first email bounces and the sequence stops, which is a bad address. Soft: any email bounces temporarily. Without soft bounces, the cold ranges would need about a fifth of all contacts to bounce.
+  - Leads with a meeting reply to the 2nd email of a warm sequence and the 3rd of a cold one.
+- **Meetings booked are exactly as before:** 88 calls, each at its lead's `sql_at`. Lead stages, deals, the funnel, hygiene, speed to lead and the per-ADR table are unchanged.
+  - One knock-on effect: Re-engagement went from 55 to 56 enrollments, because the leads that qualify for it depend on earlier bounces.
+- **Pipeline sub-tabs:** ADR Insights, ADR Hygiene, Deal Risk. `/pipeline` opens ADR Insights. Redirects only change when the dev server restarts.
+- **Decision (owner):** no bounced-contacts hygiene card.
+
+| Sequence (per email) | Open | Click-through | Reply | Bounce | Call booked (per enrollment) |
+|---|---|---|---|---|---|
+| Inbound demo follow-up (warm) | 64.4% | 7.2% | 26.3% | 0.5% | 36.4% |
+| Outbound cold: commercial | 35.8% | 2.5% | 4.6% | 4.6% | 19.5% |
+| Webinar follow-up (warm) | 65.0% | 8.5% | 17.5% | 0.6% | 8.6% |
+| Event follow-up (warm) | 60.6% | 5.8% | 22.1% | 1.0% | 6.7% |
+| Outbound cold: enterprise | 35.3% | 2.3% | 4.0% | 4.0% | 6.3% |
+| Content nurture | 31.6% | 2.8% | 1.3% | 2.5% | 1.3% |
+| Re-engagement | 32.3% | 1.3% | 2.5% | 2.5% | 0.0% |
+| Bought list | 22.2% | 1.4% | 1.9% | 15.6% | 0.0% |
+
+**Checks.**
+- **`npm run adr:check`:**
+  - all customer, health and renewal tables and all 30 page sections are unchanged
+  - each sequence is within its temperature's ranges, and the bought list is at 15–16%
+  - clicks never exceed opens, and opens never exceed emails sent
+  - calls booked are unchanged
+  - every lifecycle rule still passes
+- **ADR page numbers:** hygiene, funnel, speed to lead and the per-ADR table are identical to `reconciliation/adr-numbers-after-lifecycle.json`.
+- **Tests:** 111 pass. The sequence test now covers per-email rates, call booked per enrollment and Used by.
+
+**Memo regenerated (23 Nov):**
+- **Cost:** $0.0252 (5,816 input and 1,356 output tokens). Grounding: all 53 numbers and dates were found in the data.
+- **Headline:** 7.3% of 600 leads converted; 28.8% of MQLs breached the SLA in the last 30 days, with Kenji at 64.5% on time.
+- **Recommendations:**
+  1. Clear Kenji's 16 breaches and route some MQLs to Sofia (Nadia).
+  2. Assign the 24 unassigned leads (RevOps).
+  3. Pause the bought list (15.6% bounce per email, 0 calls) and move contacts to Outbound cold: commercial (Nadia).
+  4. Tighten MQL criteria for content and webinar leads (Nadia).
+  5. Clear the 5 stale Qualifying deals and the 2 handoffs (Sofia).

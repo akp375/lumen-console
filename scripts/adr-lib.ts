@@ -76,6 +76,7 @@ export type EnrollmentRow = {
   opens: number;
   replies: number;
   bounces: number;
+  clicks: number;
   meeting_booked: boolean;
   meeting_booked_at: string | null;
 };
@@ -184,18 +185,32 @@ const ADR_STYLE: Record<string, { onTime: number; never: number; reply: number; 
 /** The purchased contact list (the high-bounce sequence) has been used for new commercial outbound leads since this day. */
 const BOUGHT_LIST_FROM = "2026-09-01";
 
-type SeqSpec = { id: string; name: string; audience: string; steps: number; owner: string; open: number; reply: number; bounce: number; created: string };
+/**
+ * Engagement per email sent (24 Nov 2026, agreed with the owner), by temperature:
+ *   cold (early funnel): opens 20-40%, click-through 1-3%, replies 1-5%, bounces 2-6% (the bought list ~15-16%)
+ *   warm (later stage):  opens 50-70%, click-through 4-10%, replies 15-40%, bounces under 2%
+ * open / click: chance each sent email is opened / clicked. reply: chance per email that a lead with no
+ * meeting replies (leads with a meeting always reply, as before). hardBounce: chance the first email
+ * bounces and ends the sequence (a bad address); softBounce: chance any email bounces temporarily.
+ */
+type SeqSpec = {
+  id: string; name: string; audience: string; steps: number; owner: string; created: string;
+  temperature: "cold" | "warm";
+  open: number; click: number; reply: number; hardBounce: number; softBounce: number;
+};
 const SEQUENCES: SeqSpec[] = [
-  { id: "seq_01", name: "Inbound demo follow-up", audience: "Inbound demo requests and partner referrals", steps: 4, owner: "Kenji Watanabe", open: 0.65, reply: 0.4, bounce: 0.01, created: "2026-01-12" },
-  { id: "seq_02", name: "Content nurture", audience: "Content downloads", steps: 6, owner: "Kenji Watanabe", open: 0.35, reply: 0.05, bounce: 0.02, created: "2026-01-12" },
-  { id: "seq_03", name: "Webinar follow-up", audience: "Webinar attendees", steps: 4, owner: "Grace Mensah", open: 0.5, reply: 0.14, bounce: 0.02, created: "2026-02-03" },
-  { id: "seq_04", name: "Event follow-up", audience: "Event booth scans and meetings", steps: 3, owner: "Grace Mensah", open: 0.55, reply: 0.18, bounce: 0.015, created: "2026-03-09" },
-  { id: "seq_05", name: "Outbound cold: enterprise", audience: "Enterprise target accounts", steps: 7, owner: "Sofia Marin", open: 0.45, reply: 0.1, bounce: 0.03, created: "2026-01-20" },
-  { id: "seq_06", name: "Outbound cold: commercial (bought list)", audience: "Purchased SMB and mid-market contact list", steps: 6, owner: "Kenji Watanabe", open: 0.22, reply: 0.03, bounce: 0.3, created: BOUGHT_LIST_FROM },
-  { id: "seq_07", name: "Re-engagement", audience: "Leads that went quiet for 60+ days", steps: 3, owner: "Grace Mensah", open: 0.3, reply: 0.07, bounce: 0.04, created: "2026-04-14" },
-  { id: "seq_08", name: "Outbound cold: commercial", audience: "SMB and mid-market target accounts (researched contacts)", steps: 5, owner: "Grace Mensah", open: 0.42, reply: 0.09, bounce: 0.03, created: "2026-01-20" },
+  { id: "seq_01", name: "Inbound demo follow-up", audience: "Inbound demo requests and partner referrals", steps: 4, owner: "Kenji Watanabe", created: "2026-01-12", temperature: "warm", open: 0.55, click: 0.07, reply: 0.16, hardBounce: 0.01, softBounce: 0.004 },
+  { id: "seq_02", name: "Content nurture", audience: "Content downloads", steps: 6, owner: "Kenji Watanabe", created: "2026-01-12", temperature: "cold", open: 0.3, click: 0.022, reply: 0.012, hardBounce: 0.06, softBounce: 0.02 },
+  { id: "seq_03", name: "Webinar follow-up", audience: "Webinar attendees", steps: 4, owner: "Grace Mensah", created: "2026-02-03", temperature: "warm", open: 0.6, click: 0.07, reply: 0.17, hardBounce: 0.01, softBounce: 0.004 },
+  { id: "seq_04", name: "Event follow-up", audience: "Event booth scans and meetings", steps: 3, owner: "Grace Mensah", created: "2026-03-09", temperature: "warm", open: 0.56, click: 0.05, reply: 0.2, hardBounce: 0.005, softBounce: 0.003 },
+  { id: "seq_05", name: "Outbound cold: enterprise", audience: "Enterprise target accounts", steps: 7, owner: "Sofia Marin", created: "2026-01-20", temperature: "cold", open: 0.34, click: 0.02, reply: 0.02, hardBounce: 0.07, softBounce: 0.02 },
+  { id: "seq_06", name: "Outbound cold: commercial (bought list)", audience: "Purchased SMB and mid-market contact list", steps: 6, owner: "Kenji Watanabe", created: BOUGHT_LIST_FROM, temperature: "cold", open: 0.21, click: 0.025, reply: 0.02, hardBounce: 0.36, softBounce: 0.09 },
+  { id: "seq_07", name: "Re-engagement", audience: "Leads that went quiet for 60+ days", steps: 3, owner: "Grace Mensah", created: "2026-04-14", temperature: "cold", open: 0.24, click: 0.011, reply: 0.02, hardBounce: 0.05, softBounce: 0.02 },
+  { id: "seq_08", name: "Outbound cold: commercial", audience: "SMB and mid-market target accounts (researched contacts)", steps: 5, owner: "Grace Mensah", created: "2026-01-20", temperature: "cold", open: 0.33, click: 0.018, reply: 0.004, hardBounce: 0.07, softBounce: 0.02 },
 ];
 const seq = (id: string) => SEQUENCES.find((s) => s.id === id)!;
+/** Each sequence's temperature (cold = early funnel, warm = later stage), for the reconciliation. */
+export const SEQUENCE_TEMPERATURE: Record<string, "cold" | "warm"> = Object.fromEntries(SEQUENCES.map((x) => [x.id, x.temperature]));
 
 const FIRST = ["Ava", "Ben", "Chloe", "Diego", "Elif", "Felix", "Gemma", "Hugo", "Isla", "Jamal", "Keira", "Luca", "Mila", "Nikhil", "Olivia", "Pablo", "Rosa", "Samir", "Tara", "Uri", "Vera", "Wes", "Yara", "Zane", "Anya", "Bram", "Carmen", "Dev", "Esme", "Finn"];
 const LAST = ["Achebe", "Bergstrom", "Coelho", "Dumont", "Eriksen", "Farouk", "Gallagher", "Hoffmann", "Ishikawa", "Jovanovic", "Kowalczyk", "Larsen", "Mendes", "Nwosu", "Oyelaran", "Pellegrini", "Rahman", "Silva", "Takahashi", "Uchenna", "Vasquez", "Weiss", "Yilmaz", "Zielinski"];
@@ -537,7 +552,7 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
     const adrName = l.assigned_adr_id ? nameOf.get(l.assigned_adr_id)! : null;
     const replyRate = Math.min(0.95, s.reply * (adrName ? ADR_STYLE[adrName].reply : 0.7));
     const booked = l.sql_at !== null && label === "main";
-    let sent = 0, opens = 0, replies = 0, bounces = 0;
+    let sent = 0, opens = 0, clicks = 0, replies = 0, bounces = 0;
     let status: EnrollmentStatus = "finished";
     let endMs = startMs;
     for (let step = 1; step <= s.steps; step++) {
@@ -548,13 +563,23 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
       }
       sent++;
       endMs = stepMs;
-      if (!booked && step === 1 && r.chance(s.bounce)) {
-        bounces = 1;
+      if (!booked && step === 1 && r.chance(s.hardBounce)) {
+        bounces++;
         status = "bounced";
         break;
       }
-      if (r.chance(s.open)) opens++;
-      if (booked ? step >= Math.min(2, s.steps) : r.chance(replyRate / s.steps)) {
+      if (r.chance(s.softBounce)) {
+        bounces++; // a temporary bounce: not opened, the sequence carries on
+        continue;
+      }
+      // Leads with a meeting reply to the 2nd email of a warm sequence, the 3rd of a cold one
+      const replyNow = booked ? step >= Math.min(s.temperature === "warm" ? 2 : 3, s.steps) : r.chance(replyRate);
+      const opened = replyNow || r.chance(s.open); // a reply means the email was opened
+      if (opened) {
+        opens++;
+        if (r.chance(s.click / s.open)) clicks++;
+      }
+      if (replyNow) {
         replies = 1;
         status = "replied";
         break;
@@ -567,8 +592,8 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
     if (booked && status !== "replied") {
       replies = 1;
       status = "replied";
+      opens = Math.max(opens, 1);
     }
-    opens = Math.max(opens, replies); // a reply means the email was opened
     enrollments.push({
       id: "",
       sequence_id: s.id,
@@ -581,6 +606,7 @@ export function buildAdrData(input: { accounts: AdrAccount[]; deals: AdrDeal[]; 
       opens,
       replies,
       bounces,
+      clicks,
       meeting_booked: booked,
       meeting_booked_at: booked ? l.sql_at : null,
     });

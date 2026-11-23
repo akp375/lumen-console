@@ -2975,9 +2975,11 @@ export type AdrEnrollmentRow = {
   lead_id: string;
   adr_id: string | null;
   enrolled_at: string;
-  opens: number;
+  emails_sent: number;
+  opens: number; // emails opened
+  clicks: number; // emails with a click
   replies: number;
-  bounces: number;
+  bounces: number; // emails that bounced
   meeting_booked: boolean;
   meeting_booked_at: string | null;
 };
@@ -3212,15 +3214,22 @@ export type AdrSpeedRow = {
 export type AdrSequenceRowResult = {
   id: string;
   name: string;
-  owner: string;
+  /** The ADRs who enrolled leads in it, most enrollments first. */
+  usedBy: string[];
+  /** Enrollments with no ADR (unassigned leads). */
+  unassignedEnrollments: number;
   enrollments: number;
+  emailsSent: number;
+  /** Per email sent. */
   openRate: number | null;
+  clickRate: number | null;
   replyRate: number | null;
-  meetingRate: number | null;
   bounceRate: number | null;
-  meetings: number;
-  rank: "best" | "worst" | null; // by meeting rate, among sequences with enough enrollments
-  bounceAlert: boolean;
+  /** Booked calls (meeting_booked) per enrollment: meetings with an AE and ADR qualifying calls. */
+  callBookedRate: number | null;
+  callsBooked: number;
+  rank: "best" | "worst" | null; // by call-booked rate, among sequences with enough enrollments
+  bounceAlert: boolean; // bounce rate per email above sequenceBounceAlertAbove
 };
 export type AdrScorecardRow = {
   adrId: string;
@@ -3300,23 +3309,38 @@ export function calcAdrInsights(input: AdrInputs, asOf: string): AdrInsightsResu
   const sequences: AdrSequenceRowResult[] = input.sequences.map((s) => {
     const es = enrolled.filter((e) => e.sequence_id === s.id);
     const n = es.length;
-    const meetings = es.filter((e) => e.meeting_booked).length;
-    const bounceRate = ratio(es.filter((e) => e.bounces > 0).length, n);
+    const sent = es.reduce((t, e) => t + e.emails_sent, 0);
+    const perEmail = (f: (e: AdrEnrollmentRow) => number) => ratio(es.reduce((t, e) => t + f(e), 0), sent);
+    const callsBooked = es.filter((e) => e.meeting_booked).length;
+    const bounceRate = perEmail((e) => e.bounces);
+    const byAdr = new Map<string, number>();
+    for (const e of es) if (e.adr_id) byAdr.set(e.adr_id, (byAdr.get(e.adr_id) ?? 0) + 1);
     return {
-      id: s.id, name: s.name, owner: ctx.nameOf.get(s.owner_id) ?? s.owner_id, enrollments: n,
-      openRate: ratio(es.filter((e) => e.opens > 0).length, n), replyRate: ratio(es.filter((e) => e.replies > 0).length, n),
-      meetingRate: ratio(meetings, n), bounceRate, meetings, rank: null, bounceAlert: bounceRate !== null && bounceRate > R.sequenceBounceAlertAbove,
+      id: s.id,
+      name: s.name,
+      usedBy: [...byAdr].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([id]) => ctx.nameOf.get(id) ?? id),
+      unassignedEnrollments: es.filter((e) => !e.adr_id).length,
+      enrollments: n,
+      emailsSent: sent,
+      openRate: perEmail((e) => e.opens),
+      clickRate: perEmail((e) => e.clicks),
+      replyRate: perEmail((e) => e.replies),
+      bounceRate,
+      callBookedRate: ratio(callsBooked, n),
+      callsBooked,
+      rank: null,
+      bounceAlert: bounceRate !== null && bounceRate > R.sequenceBounceAlertAbove,
     };
   });
-  // Ties on meeting rate: the higher bounce rate ranks lower.
+  // Ties on call-booked rate: the higher bounce rate ranks lower.
   const ranked = sequences
-    .filter((s) => s.enrollments >= R.sequenceMinEnrollments && s.meetingRate !== null)
-    .sort((a, b) => b.meetingRate! - a.meetingRate! || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
+    .filter((s) => s.enrollments >= R.sequenceMinEnrollments && s.callBookedRate !== null)
+    .sort((a, b) => b.callBookedRate! - a.callBookedRate! || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
   if (ranked.length >= 2) {
     ranked[0].rank = "best";
     ranked[ranked.length - 1].rank = "worst";
   }
-  sequences.sort((a, b) => (b.meetingRate ?? -1) - (a.meetingRate ?? -1) || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
+  sequences.sort((a, b) => (b.callBookedRate ?? -1) - (a.callBookedRate ?? -1) || (a.bounceRate ?? 0) - (b.bounceRate ?? 0) || a.id.localeCompare(b.id));
 
   // Per ADR. Leads owned and deals created: the ADR's leads created in the window. Stage counts: reached in the window.
   const scorecard: AdrScorecardRow[] = ctx.adrs.map((a) => {
@@ -3396,16 +3420,17 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
       })),
     },
     sequences: insights.sequences.map((s) => ({
-      sequence: s.name, owner: s.owner, enrollments: s.enrollments, calls_booked: s.meetings,
-      open_pct: pct1(s.openRate), reply_pct: pct1(s.replyRate), call_booked_pct: pct1(s.meetingRate), bounce_pct: pct1(s.bounceRate),
+      sequence: s.name, used_by: s.usedBy, enrollments: s.enrollments, emails_sent: s.emailsSent,
+      per_email: { open_pct: pct1(s.openRate), click_through_pct: pct1(s.clickRate), reply_pct: pct1(s.replyRate), bounce_pct: pct1(s.bounceRate) },
+      calls_booked: s.callsBooked, call_booked_per_enrollment_pct: pct1(s.callBookedRate),
       ranked: s.rank, bounce_alert: s.bounceAlert,
     })),
     sequence_comparisons: {
       ranked_sequences: ranked.length,
-      best_by_call_booked_rate: best ? { sequence: best.name, call_booked_pct: pct1(best.meetingRate) } : null,
-      worst_by_call_booked_rate: worst ? { sequence: worst.name, call_booked_pct: pct1(worst.meetingRate) } : null,
-      highest_bounce: highestBounce ? { sequence: highestBounce.name, bounce_pct: pct1(highestBounce.bounceRate), enrollments: highestBounce.enrollments } : null,
-      highest_bounce_among_the_others_pct: otherBounces.length ? pct1(Math.max(...otherBounces)) : null,
+      best_by_call_booked_rate: best ? { sequence: best.name, call_booked_per_enrollment_pct: pct1(best.callBookedRate) } : null,
+      worst_by_call_booked_rate: worst ? { sequence: worst.name, call_booked_per_enrollment_pct: pct1(worst.callBookedRate) } : null,
+      highest_bounce: highestBounce ? { sequence: highestBounce.name, bounce_per_email_pct: pct1(highestBounce.bounceRate), emails_sent: highestBounce.emailsSent } : null,
+      highest_bounce_per_email_among_the_others_pct: otherBounces.length ? pct1(Math.max(...otherBounces)) : null,
     },
     per_adr: insights.scorecard.map((s) => ({
       adr: s.name, leads_owned: s.leadsOwned, sla_on_time_pct: pct1(s.slaRate), sales_accepted: s.salesAccepted, sales_qualified: s.salesQualified,
@@ -3414,7 +3439,8 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
     terms: {
       qualifying: `"${QUALIFYING}" is the deal stage created when a meeting is booked: ${QUALIFYING_DESCRIPTION}.`,
       meetings_booked: "Meetings booked = leads that reached Meeting booked (a meeting set with an AE; each has a Qualifying deal).",
-      calls_booked: "A sequence's calls booked include ADR qualifying calls, so they can be more than meetings booked.",
+      calls_booked: "A sequence's calls booked include ADR qualifying calls, so they can be more than meetings booked. Call booked is per enrollment.",
+      sequence_email_rates: "Open, click-through, reply and bounce rates are per email sent.",
     },
   };
 }
@@ -3429,7 +3455,7 @@ async function loadAdrInputs(): Promise<AdrInputs> {
       "id, account_id, contact_name, lead_source, lead_stage, created_at, engaged_at, mql_at, first_touch_at, sales_accepted_at, sales_qualified_at, meeting_booked_at, converted_at, disqualified_at, nurtured_at, disqualify_reason, assigned_adr_id, opportunity_id",
       ["id"],
     ),
-    fetchAll("sequence_enrollments", "id, sequence_id, lead_id, adr_id, enrolled_at, opens, replies, bounces, meeting_booked, meeting_booked_at", ["id"]),
+    fetchAll("sequence_enrollments", "id, sequence_id, lead_id, adr_id, enrolled_at, emails_sent, opens, clicks, replies, bounces, meeting_booked, meeting_booked_at", ["id"]),
     fetchAll("sequences", "id, name, owner_id", ["id"]),
     fetchAll("opportunities", "id, account_id, stage, created_date, last_activity_date, ae_id, adr_id", ["id"]),
     fetchAll("accounts", "id, name, status, owner, icp_tier, target_account, territory", ["id"]),
@@ -3447,7 +3473,7 @@ async function loadAdrInputs(): Promise<AdrInputs> {
     })),
     enrollments: enrollments.map((r) => ({
       id: str(r.id), sequence_id: str(r.sequence_id), lead_id: str(r.lead_id), adr_id: strOrNull(r.adr_id), enrolled_at: str(r.enrolled_at),
-      opens: num(r.opens), replies: num(r.replies), bounces: num(r.bounces), meeting_booked: r.meeting_booked === true, meeting_booked_at: strOrNull(r.meeting_booked_at),
+      emails_sent: num(r.emails_sent), opens: num(r.opens), clicks: num(r.clicks), replies: num(r.replies), bounces: num(r.bounces), meeting_booked: r.meeting_booked === true, meeting_booked_at: strOrNull(r.meeting_booked_at),
     })),
     sequences: sequences.map((r) => ({ id: str(r.id), name: str(r.name), owner_id: str(r.owner_id) })),
     deals: deals.map((r) => ({

@@ -161,10 +161,11 @@ function Speed({ data, window }: { data: AdrInsightsResult; window: string }) {
 }
 
 function Sequences({ data, window }: { data: AdrInsightsResult; window: string }) {
+  const cols = ["Enrollments", "Emails sent", "Open", "Click-through", "Reply", "Bounce", "Call booked (per enrollment)"];
   return (
     <section>
       <SectionHeading title="Sequence Performance" detail={`Enrollments from ${window}, highest call-booked rate first.`} />
-      <Table head={[{ label: "Sequence" }, { label: "Owner" }, ...["Enrollments", "Open", "Reply", "Call booked", "Bounce"].map((label) => ({ label, numeric: true }))]}>
+      <Table minWidth="min-w-[1000px]" head={[{ label: "Sequence" }, { label: "Used by" }, ...cols.map((label) => ({ label, numeric: true }))]}>
         {data.sequences.map((s) => (
           <tr key={s.id} className={`${ROW} ${s.rank === "best" ? "bg-emerald-50/60 dark:bg-emerald-950/30" : s.rank === "worst" ? "bg-red-50/60 dark:bg-red-950/30" : ""}`}>
             <td className={`${TD} text-zinc-900 dark:text-zinc-100`}>
@@ -179,20 +180,31 @@ function Sequences({ data, window }: { data: AdrInsightsResult; window: string }
                 </span>
               )}
             </td>
-            <td className={`${TD} whitespace-nowrap text-zinc-700 dark:text-zinc-300`}>{s.owner}</td>
+            <td className={`${TD} text-zinc-700 dark:text-zinc-300`}>
+              {s.usedBy.length ? s.usedBy.join(", ") : "No ADR"}
+              {s.unassignedEnrollments > 0 && <span className="text-xs text-zinc-500 dark:text-zinc-400"> (+{s.unassignedEnrollments} unassigned)</span>}
+            </td>
             <td className={NUM}>{s.enrollments}</td>
+            <td className={NUM}>{s.emailsSent}</td>
             <td className={NUM}>{pct(s.openRate)}</td>
+            <td className={NUM}>{pct(s.clickRate)}</td>
             <td className={NUM}>{pct(s.replyRate)}</td>
-            <td className={`${NUM} font-medium`}>{pct(s.meetingRate)}</td>
             <td className={`${NUM} ${s.bounceAlert ? "font-semibold text-red-600 dark:text-red-400" : ""}`}>{pct(s.bounceRate)}</td>
+            <td className={`${NUM} font-medium`}>{pct(s.callBookedRate)}</td>
           </tr>
         ))}
       </Table>
-      <div className="mt-2">
+      <div className="mt-2 space-y-1">
         <RuleNote>
-          Each rate is the share of enrollments with at least one open, reply, booked call or bounce. A booked call is a meeting with an AE or an ADR&apos;s
-          qualifying call, so calls booked can be more than meetings booked. Best and worst are by call-booked rate among sequences with{" "}
-          {R.sequenceMinEnrollments}+ enrollments (a tie goes to the higher bounce rate as worse). Bounce rates above {pct(R.sequenceBounceAlertAbove)} are red.
+          Rates per email sent: <strong className="font-medium">Open</strong> = emails opened ÷ emails sent. <strong className="font-medium">Click-through</strong>{" "}
+          = emails with a link clicked ÷ emails sent. <strong className="font-medium">Reply</strong> = replies ÷ emails sent.{" "}
+          <strong className="font-medium">Bounce</strong> = emails that bounced ÷ emails sent (red above {pct(R.sequenceBounceAlertAbove)}).{" "}
+          <strong className="font-medium">Call booked</strong> is per enrollment: enrollments that booked a call ÷ enrollments. A booked call is a meeting with an AE
+          or an ADR&apos;s qualifying call, so calls booked can be more than meetings booked.
+        </RuleNote>
+        <RuleNote>
+          Used by = the ADRs who enrolled leads in the sequence, most enrollments first. Best and worst are by call-booked rate among sequences with{" "}
+          {R.sequenceMinEnrollments}+ enrollments (a tie goes to the higher bounce rate as worse).
         </RuleNote>
       </div>
     </section>

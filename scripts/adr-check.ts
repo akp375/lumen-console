@@ -34,7 +34,7 @@ import {
   getWorkspaceSnapshot,
 } from "../src/lib/metrics.ts";
 import { loadAdrInputs, adrSummary } from "./adr-backfill.ts";
-import { buildAdrData, PAIRING_EFFECTIVE_FROM, SLA_HOURS, STALE_DAYS } from "./adr-lib.ts";
+import { buildAdrData, PAIRING_EFFECTIVE_FROM, SEQUENCE_TEMPERATURE, SLA_HOURS, STALE_DAYS } from "./adr-lib.ts";
 
 const SNAPSHOT = "reconciliation/adr-before.json";
 
@@ -197,12 +197,32 @@ async function main() {
     return ls.filter((l) => l.sql_at).length / ls.length;
   };
   check(`Conversion differs by source (lead->SQL: inbound demo ${Math.round(conv("inbound demo request") * 100)}%, outbound ${Math.round(conv("outbound") * 100)}%, content ${Math.round(conv("content download") * 100)}%)`, conv("inbound demo request") >= 3 * conv("outbound") && conv("outbound") > conv("content download"));
-  const bounce = (id: string) => {
+  // Sequence engagement per email sent, by temperature (24 Nov 2026)
+  const perEmail = (id: string) => {
     const e = built.enrollments.filter((x) => x.sequence_id === id);
-    return e.filter((x) => x.bounces > 0).length / e.length;
+    const sent = e.reduce((t, x) => t + x.emails_sent, 0);
+    const r = (f: (x: (typeof e)[number]) => number) => e.reduce((t, x) => t + f(x), 0) / sent;
+    return { open: r((x) => x.opens), ctr: r((x) => x.clicks), reply: r((x) => x.replies), bounce: r((x) => x.bounces) };
   };
-  const others = built.sequences.filter((s) => s.id !== "seq_06").map((s) => bounce(s.id));
-  check(`Bought-list sequence bounces far more (${Math.round(bounce("seq_06") * 100)}% vs at most ${Math.round(Math.max(...others) * 100)}% elsewhere)`, bounce("seq_06") >= 2 * Math.max(...others));
+  const RANGES = {
+    cold: { open: [0.2, 0.4], ctr: [0.01, 0.03], reply: [0.01, 0.05], bounce: [0.02, 0.06] },
+    warm: { open: [0.5, 0.7], ctr: [0.04, 0.1], reply: [0.15, 0.4], bounce: [0, 0.02] },
+  } as const;
+  for (const sq of built.sequences) {
+    const m = perEmail(sq.id);
+    const temp = SEQUENCE_TEMPERATURE[sq.id];
+    const rg = { ...RANGES[temp], ...(sq.id === "seq_06" ? { bounce: [0.15, 0.165] as const } : {}) };
+    const inRange = (k: keyof typeof m) => m[k] >= rg[k][0] && (k === "bounce" && temp === "warm" ? m[k] < rg[k][1] : m[k] <= rg[k][1]);
+    const p = (x: number) => `${(x * 100).toFixed(1)}%`;
+    check(`${sq.name} (${temp}) per email: open ${p(m.open)}, CTR ${p(m.ctr)}, reply ${p(m.reply)}, bounce ${p(m.bounce)}`, (["open", "ctr", "reply", "bounce"] as const).every(inRange));
+  }
+  check("Clicks never exceed opens, opens never exceed emails sent", built.enrollments.every((x) => x.clicks <= x.opens && x.opens <= x.emails_sent && x.bounces <= x.emails_sent));
+  const leadById = new Map(L.map((l) => [l.id, l]));
+  const calls = built.enrollments.filter((x) => x.meeting_booked);
+  check(
+    `Calls booked unchanged: ${calls.length}, one per lead with a call (sql_at), at that time`,
+    calls.length === L.filter((l) => l.sql_at).length && calls.every((x) => x.meeting_booked_at === leadById.get(x.lead_id)?.sql_at) && new Set(calls.map((x) => x.lead_id)).size === calls.length,
+  );
   const today = Date.parse(`${AS_OF_DATE}T00:00:00Z`);
   const stale = stage01.filter((o) => (today - Date.parse(`${o.last_activity_date}T00:00:00Z`)) / 86_400_000 >= STALE_DAYS);
   check(`Stage 0.1 deals (${stage01.length}); stale ${STALE_DAYS}+ days (${stale.length})`, stage01.length >= 20 && stale.length === built.planted.staleDeals.length);

@@ -47,24 +47,27 @@ const LEADS: AdrLeadRow[] = [
 ];
 
 const enr = (id: string, seq: string, over: Partial<AdrEnrollmentRow> = {}): AdrEnrollmentRow => ({
-  id, sequence_id: seq, lead_id: `X${id}`, adr_id: null, enrolled_at: "2026-10-01T00:00:00Z", opens: 0, replies: 0, bounces: 0, meeting_booked: false, meeting_booked_at: null, ...over,
+  id, sequence_id: seq, lead_id: `X${id}`, adr_id: null, enrolled_at: "2026-10-01T00:00:00Z", emails_sent: 1, opens: 0, clicks: 0, replies: 0, bounces: 0, meeting_booked: false, meeting_booked_at: null, ...over,
 });
 const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 const meeting = (lead_id: string, adr_id: string) => ({ lead_id, adr_id, meeting_booked: true, meeting_booked_at: "2026-10-05T00:00:00Z" });
 
 const ENROLLMENTS: AdrEnrollmentRow[] = [
-  // S1: 20 enrollments; 10 opened, 6 replied, 1 bounced, 5 meetings (L7 and X1 for d1; L9, L10 and X2 for d2)
+  // S1: 20 enrollments, 2 emails each = 40 emails; 10 opened, 2 clicked, 6 replies, 1 bounce; 5 calls booked
+  // (L7 and X1 for d1; L9, L10 and X2 for d2)
   ...range(20).map((i) =>
     enr(`s1_${i}`, "S1", {
+      emails_sent: 2,
       opens: i < 10 ? 1 : 0,
+      clicks: i < 2 ? 1 : 0,
       replies: i < 6 ? 1 : 0,
       bounces: i === 19 ? 1 : 0,
       ...(i === 0 ? meeting("L7", "d1") : i === 1 ? meeting("X1", "d1") : i === 2 ? meeting("L9", "d2") : i === 3 ? meeting("L10", "d2") : i === 4 ? meeting("X2", "d2") : {}),
     }),
   ),
-  // S2: 20 enrollments, no meetings, 4 bounced (20%: above the 10% alert)
+  // S2: 20 enrollments of 1 email, no calls, 4 bounced (20% of emails: above the 10% alert)
   ...range(20).map((i) => enr(`s2_${i}`, "S2", { bounces: i < 4 ? 1 : 0 })),
-  // S3: 20 enrollments, no meetings, 2 bounced (exactly 10%: not an alert)
+  // S3: 20 enrollments of 1 email, no calls, 2 bounced (exactly 10% of emails: not an alert)
   ...range(20).map((i) => enr(`s3_${i}`, "S3", { bounces: i < 2 ? 1 : 0 })),
   // S4: 19 enrollments, 10 meetings: the best rate, but too few enrollments to be ranked
   ...range(19).map((i) => enr(`s4_${i}`, "S4", i < 10 ? { meeting_booked: true, meeting_booked_at: "2026-10-02T00:00:00Z" } : {})),
@@ -202,19 +205,26 @@ test("ADR insights: speed to lead per ADR and for the team", () => {
   assert.deepEqual([s.team.mqls, s.team.onTime, s.team.late, s.team.never, s.team.medianHoursToTouch], [7, 5, 1, 1, 7.5]);
 });
 
-test("ADR insights: sequence rates, best and worst, bounce alert", () => {
+test("ADR insights: sequence rates per email sent, call booked per enrollment, best and worst, bounce alert, Used by", () => {
   const seq = calcAdrInsights(INPUT, AS_OF).sequences;
   const by = (id: string) => seq.find((x) => x.id === id)!;
-  assert.deepEqual([by("S1").enrollments, by("S1").openRate, by("S1").replyRate, by("S1").meetingRate, by("S1").bounceRate], [20, 0.5, 0.3, 0.25, 0.05]);
-  assert.equal(by("S1").rank, "best");
-  // S2 and S3 tie at 0% meetings; S2 bounces more, so it is the worst
+  const s1 = by("S1");
+  // Per email (40 sent): open 10/40, click-through 2/40, reply 6/40, bounce 1/40. Call booked per enrollment: 5/20.
+  assert.deepEqual([s1.enrollments, s1.emailsSent, s1.openRate, s1.clickRate, s1.replyRate, s1.bounceRate], [20, 40, 0.25, 0.05, 0.15, 0.025]);
+  assert.deepEqual([s1.callsBooked, s1.callBookedRate], [5, 0.25]);
+  assert.deepEqual(s1.usedBy, ["Dan", "Ada"]); // Dan enrolled 3, Ada 2 (most first)
+  assert.equal(s1.unassignedEnrollments, 15);
+  assert.equal(s1.rank, "best");
+  // S2 and S3 tie at 0% calls booked; S2 bounces more, so it is the worst
   assert.equal(by("S2").rank, "worst");
   assert.equal(by("S3").rank, null);
   assert.equal(by("S4").rank, null); // 19 enrollments: too few to rank, even with the best rate
-  assert.equal(by("S2").bounceAlert, true); // 20%
-  assert.equal(by("S3").bounceAlert, false); // exactly 10%
+  assert.equal(by("S2").bounceAlert, true); // 20% of emails
+  assert.equal(by("S3").bounceAlert, false); // exactly 10% of emails
+  assert.deepEqual(by("S3").usedBy, []); // no ADR enrolled anyone
   assert.equal(by("S5").enrollments, 0); // its one enrollment is before the window
-  assert.equal(by("S5").meetingRate, null);
+  assert.equal(by("S5").callBookedRate, null);
+  assert.equal(by("S5").openRate, null); // no emails sent: no rate, not 0%
 });
 
 test("ADR insights: per-ADR table counts stages reached and Meeting booked from the lead", () => {

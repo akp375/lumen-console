@@ -93,9 +93,11 @@ export function adrSummary(d: AdrData, team: AdrTeamMember[]): string[] {
   for (const s of d.sequences) {
     const e = d.enrollments.filter((x) => x.sequence_id === s.id);
     const sent = e.reduce((t, x) => t + x.emails_sent, 0);
+    const sum = (f: (x: (typeof e)[number]) => number) => e.reduce((t, x) => t + f(x), 0);
+    const p1 = (n: number, d: number) => (d ? `${((n / d) * 100).toFixed(1)}%` : "n/a");
     out.push(
-      `    ${s.name.padEnd(40)} ${String(e.length).padStart(4)} enrolled, owner ${name.get(s.owner_id)}, open ${pct(e.reduce((t, x) => t + x.opens, 0), sent)} of emails, ` +
-        `reply ${pct(e.filter((x) => x.replies > 0).length, e.length)}, bounce ${pct(e.filter((x) => x.bounces > 0).length, e.length)}, meetings ${pct(e.filter((x) => x.meeting_booked).length, e.length)}`,
+      `    ${s.name.padEnd(40)} ${String(e.length).padStart(4)} enrolled, ${String(sent).padStart(4)} emails | per email: open ${p1(sum((x) => x.opens), sent)}, ` +
+        `CTR ${p1(sum((x) => x.clicks), sent)}, reply ${p1(sum((x) => x.replies), sent)}, bounce ${p1(sum((x) => x.bounces), sent)} | call booked ${p1(e.filter((x) => x.meeting_booked).length, e.length)} of enrollments`,
     );
   }
   for (const adr of [...new Set(d.enrollments.map((e) => e.adr_id))].sort()) {

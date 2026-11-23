@@ -26,13 +26,13 @@ export type NavSection = {
 };
 
 /**
- * The four nav sections. Pipeline is for anything top of funnel (Deal Risk, ADR Hygiene and ADR
- * Insights); Customer Success will also hold Consumption. Workspace isn't in the nav,
+ * The four nav sections. Pipeline is for anything top of funnel (ADR Insights first, then ADR Hygiene
+ * and Deal Risk); Customer Success will also hold Consumption. Workspace isn't in the nav,
  * but its page still works at /workspace.
  */
 export const NAV: readonly NavSection[] = [
   { title: PAGES.overview.title, href: PAGES.overview.href, prefix: null, pages: [] },
-  { title: "Pipeline", href: PAGES.dealRisk.href, prefix: "/pipeline", pages: [PAGES.dealRisk, PAGES.adrHygiene, PAGES.adrInsights] },
+  { title: "Pipeline", href: PAGES.adrInsights.href, prefix: "/pipeline", pages: [PAGES.adrInsights, PAGES.adrHygiene, PAGES.dealRisk] },
   { title: "Customer Success", href: PAGES.health.href, prefix: "/customer-success", pages: [PAGES.health, PAGES.renewals] },
   { title: PAGES.integrations.title, href: PAGES.integrations.href, prefix: PAGES.integrations.href, pages: [] },
 ];
@@ -42,7 +42,7 @@ export const NAV_REDIRECTS: readonly { source: string; destination: string }[] =
   { source: "/deal-risk", destination: PAGES.dealRisk.href },
   { source: "/health", destination: PAGES.health.href },
   { source: "/renewals", destination: PAGES.renewals.href },
-  { source: "/pipeline", destination: PAGES.dealRisk.href },
+  { source: "/pipeline", destination: PAGES.adrInsights.href },
   { source: "/customer-success", destination: PAGES.health.href },
 ];
 
