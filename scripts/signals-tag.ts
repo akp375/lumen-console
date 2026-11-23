@@ -7,7 +7,7 @@
  *   npm run signals:tag -- --limit 20      tag at most 20 texts (a pilot)
  *   npm run signals:tag                    tag everything that's left
  *   npm run signals:tag -- --retag-eval    re-tag the 20 eval texts (reconciliation/topic-eval-key.json), replacing their results
- *   npm run signals:tag -- --retag-all     re-tag every text in the window, replacing their results (after a prompt change)
+ *   npm run signals:tag -- --retag-all     re-tag every text in the window except the 20 eval texts (they keep the tags the owner scored), replacing their results
  *
  * Never re-tags a text: anything already in text_signals is skipped, and the table allows one
  * row per text. Stops before today's Claude spend (all features, real calendar day UTC) would
@@ -73,9 +73,10 @@ async function main() {
     ...acts.map((a) => ({ id: `sig_cs_activity_${a.id}`, source: "cs_activity" as const, sourceId: String(a.id), accountId: String(a.account_id), date: String(a.activity_date), kind: String(a.type), text: String(a.note) })),
   ];
   // Normally a text is never tagged twice. --retag-eval / --retag-all replace results on purpose, after a prompt change.
-  const evalIds = retagEval ? new Set((JSON.parse(readFileSync("reconciliation/topic-eval-key.json", "utf8")) as { id: string }[]).map((x) => x.id)) : null;
+  const evalKey = retagEval || retagAll ? new Set((JSON.parse(readFileSync("reconciliation/topic-eval-key.json", "utf8")) as { id: string }[]).map((x) => x.id)) : null;
+  const evalIds = retagEval ? evalKey : null;
   const todo = all
-    .filter((t) => (evalIds ? evalIds.has(t.id) : retagAll ? true : !tagged.has(`${t.source}:${t.sourceId}`)))
+    .filter((t) => (evalIds ? evalIds.has(t.id) : retagAll ? !evalKey!.has(t.id) : !tagged.has(`${t.source}:${t.sourceId}`)))
     .sort((x, y) => order(x.id) - order(y.id) || x.id.localeCompare(y.id));
   if (evalIds && todo.length !== evalIds.size) throw new Error(`Found ${todo.length} of the ${evalIds.size} eval texts.`);
   const batch = todo.slice(0, limit);
