@@ -13,7 +13,7 @@ import { ADR_RULES, calcAdrHygiene, calcAdrInsights, type AdrEnrollmentRow, type
 const AS_OF = "2026-11-13";
 
 const lead = (id: string, over: Partial<AdrLeadRow>): AdrLeadRow => ({
-  id, account_id: "A1", contact_name: `Contact ${id}`, lead_source: "inbound demo request", lead_stage: "new",
+  id, account_id: "A1", contact_name: `Contact ${id}`, contact_title: "Head of Operations", lead_source: "inbound demo request", lead_stage: "new",
   created_at: "2026-11-01T00:00:00Z", engaged_at: null, mql_at: null, first_touch_at: null, sales_accepted_at: null, sales_qualified_at: null,
   meeting_booked_at: null, converted_at: null, disqualified_at: null, nurtured_at: null, disqualify_reason: null,
   assigned_adr_id: null, opportunity_id: null, ...over,
@@ -81,17 +81,17 @@ const INPUT: AdrInputs = {
   sequences: ["S1", "S2", "S3", "S4", "S5"].map((id) => ({ id, name: `Sequence ${id}`, owner_id: "d1" })),
   deals: [
     // O1: Stage 0.1, last update 2026-10-30 = 14 days ago -> stale. Bob (a2) with his paired ADR d2, so no mismatch.
-    { id: "O1", account_id: "A2", stage: "Stage 0.1", created_date: "2026-10-20", last_activity_date: "2026-10-30", ae_id: "a2", adr_id: "d2" },
+    { type: "new", amount_usd: 24000, id: "O1", account_id: "A2", stage: "Stage 0.1", created_date: "2026-10-20", last_activity_date: "2026-10-30", ae_id: "a2", adr_id: "d2" },
     // O3: Stage 0.1, 13 days since update -> not stale; ADR d2 with AE a1 (paired with d1), created after 1 Oct -> mismatch, 19 days
-    { id: "O3", account_id: "A1", stage: "Stage 0.1", created_date: "2026-10-25", last_activity_date: "2026-10-31", ae_id: "a1", adr_id: "d2" },
+    { type: "new", amount_usd: 24000, id: "O3", account_id: "A1", stage: "Stage 0.1", created_date: "2026-10-25", last_activity_date: "2026-10-31", ae_id: "a1", adr_id: "d2" },
     // O2: Discovery, d1 with a2, but created before the pairing date -> not judged
-    { id: "O2", account_id: "A2", stage: "Discovery", created_date: "2026-08-10", last_activity_date: "2026-11-01", ae_id: "a2", adr_id: "d1" },
+    { type: "new", amount_usd: 24000, id: "O2", account_id: "A2", stage: "Discovery", created_date: "2026-08-10", last_activity_date: "2026-11-01", ae_id: "a2", adr_id: "d1" },
     // O4: closed -> not judged
-    { id: "O4", account_id: "A1", stage: "Closed Lost", created_date: "2026-10-05", last_activity_date: "2026-10-20", ae_id: "a1", adr_id: "d2" },
+    { type: "new", amount_usd: 24000, id: "O4", account_id: "A1", stage: "Closed Lost", created_date: "2026-10-05", last_activity_date: "2026-10-20", ae_id: "a1", adr_id: "d2" },
     // O5: Demo created on the pairing date itself -> mismatch, 43 days
-    { id: "O5", account_id: "A1", stage: "Demo", created_date: "2026-10-01", last_activity_date: "2026-11-10", ae_id: "a1", adr_id: "d2" },
+    { type: "new", amount_usd: 24000, id: "O5", account_id: "A1", stage: "Demo", created_date: "2026-10-01", last_activity_date: "2026-11-10", ae_id: "a1", adr_id: "d2" },
     // O6: created the day before the pairing date -> not judged
-    { id: "O6", account_id: "A1", stage: "Demo", created_date: "2026-09-30", last_activity_date: "2026-11-10", ae_id: "a1", adr_id: "d2" },
+    { type: "new", amount_usd: 24000, id: "O6", account_id: "A1", stage: "Demo", created_date: "2026-09-30", last_activity_date: "2026-11-10", ae_id: "a1", adr_id: "d2" },
   ],
   accounts: [
     { id: "A1", name: "Alpha", status: "prospect", owner: "Ann", icp_tier: 1, target_account: true, territory: "T1" }, // clean
@@ -141,6 +141,13 @@ test("ADR hygiene: every check, its edges and the total", () => {
   assert.equal(items("pairingMismatch").find((i) => i.recordId === "O3")!.problem, "Qualifying: Ann is paired with Ada");
   assert.equal(items("pairingMismatch").find((i) => i.recordId === "O5")!.problem, "Demo: Ann is paired with Ada");
   assert.equal(items("staleStage01")[0].ageDays, 14);
+  // The first column: the contact (with job title) for lead checks, the deal (with its ID) for deal checks, none for account tags
+  assert.deepEqual(h.checks.map((c) => [c.key, c.recordColumn]), [
+    ["unassigned", "Contact"], ["slaBreach", "Contact"], ["staleStage01", "Deal"], ["handoffLeak", "Contact"], ["pairingMismatch", "Deal"], ["accountTags", null],
+  ]);
+  assert.deepEqual([items("unassigned")[0].record, items("unassigned")[0].recordDetail], ["Contact L5", "Head of Operations"]);
+  assert.deepEqual([items("staleStage01")[0].record, items("staleStage01")[0].recordDetail], ["New business, $24,000", "O1"]);
+  assert.equal(items("accountTags")[0].recordDetail, null);
   assert.equal(items("handoffLeak")[0].recordId, "L7");
   assert.equal(items("handoffLeak")[0].ageDays, 3);
   assert.deepEqual(items("pairingMismatch").map((i) => [i.recordId, i.ageDays]), [["O5", 43], ["O3", 19]]); // oldest first

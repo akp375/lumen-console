@@ -2953,6 +2953,7 @@ export type AdrLeadRow = {
   id: string;
   account_id: string;
   contact_name: string;
+  contact_title: string | null;
   lead_source: string;
   lead_stage: LeadStage;
   created_at: string;
@@ -2984,7 +2985,7 @@ export type AdrEnrollmentRow = {
   meeting_booked_at: string | null;
 };
 export type AdrSequenceRow = { id: string; name: string; owner_id: string };
-export type AdrDealRow = { id: string; account_id: string; stage: string; created_date: string; last_activity_date: string | null; ae_id: string | null; adr_id: string | null };
+export type AdrDealRow = { id: string; account_id: string; type: string; amount_usd: number; stage: string; created_date: string; last_activity_date: string | null; ae_id: string | null; adr_id: string | null };
 export type AdrAccountRow = { id: string; name: string; status: string; owner: string; icp_tier: number | null; target_account: boolean | null; territory: string | null };
 export type AdrTeamRow = { id: string; name: string; role: string; territory: string | null };
 export type AdrPairingRow = { adr_id: string; ae_id: string; effective_from: string };
@@ -3032,19 +3033,28 @@ function adrContext(input: AdrInputs) {
 
 // --- Hygiene ---------------------------------------------------------------
 
+const DEAL_TYPE_LABELS: Record<string, string> = { new: "New business", expansion: "Expansion", renewal: "Renewal" };
+/** A deal as users read it: "New business, $24,000" (the account has its own column). */
+function dealLabel(d: AdrDealRow): string {
+  return `${DEAL_TYPE_LABELS[d.type] ?? d.type}, $${Math.round(d.amount_usd).toLocaleString("en-US")}`;
+}
+
+/** recordColumn: the first column's heading. "Contact" for lead checks, "Deal" for deal checks, null when the account is the record. */
 export const ADR_HYGIENE_CHECKS = [
-  { key: "unassigned", title: "Unassigned leads", why: "Nobody follows up a lead with no owner, so it goes cold." },
-  { key: "slaBreach", title: "MQLs past the 24-hour SLA", why: "Leads contacted within a day convert far better than leads left waiting." },
-  { key: "staleStage01", title: `Stale ${QUALIFYING} deals`, why: "A meeting held that nobody qualifies or moves forward is pipeline quietly going cold." },
-  { key: "handoffLeak", title: "Qualified leads not handed to an AE", why: "The ADR qualified the lead but no meeting with an AE was booked: an ADR-to-AE handoff leak." },
-  { key: "pairingMismatch", title: "ADR–AE pairing mismatches", why: "Deals with the wrong ADR-AE pair confuse ownership and credit, and break territory reporting." },
-  { key: "accountTags", title: "Account tag problems", why: "Wrong ICP tier, target or territory tags send ADR effort to the wrong accounts." },
+  { key: "unassigned", recordColumn: "Contact", title: "Unassigned leads", why: "Nobody follows up a lead with no owner, so it goes cold." },
+  { key: "slaBreach", recordColumn: "Contact", title: "MQLs past the 24-hour SLA", why: "Leads contacted within a day convert far better than leads left waiting." },
+  { key: "staleStage01", recordColumn: "Deal", title: `Stale ${QUALIFYING} deals`, why: "A meeting held that nobody qualifies or moves forward is pipeline quietly going cold." },
+  { key: "handoffLeak", recordColumn: "Contact", title: "Qualified leads not handed to an AE", why: "The ADR qualified the lead but no meeting with an AE was booked: an ADR-to-AE handoff leak." },
+  { key: "pairingMismatch", recordColumn: "Deal", title: "ADR–AE pairing mismatches", why: "Deals with the wrong ADR-AE pair confuse ownership and credit, and break territory reporting." },
+  { key: "accountTags", recordColumn: null, title: "Account tag problems", why: "Wrong ICP tier, target or territory tags send ADR effort to the wrong accounts." },
 ] as const;
 export type AdrHygieneCheckKey = (typeof ADR_HYGIENE_CHECKS)[number]["key"];
 
 export type AdrHygieneItem = {
   id: string; // unique per item
-  record: string; // what the item is about, e.g. the contact or deal
+  record: string; // the contact's name, the deal as "New business, $24,000", or the account
+  /** A second line under the record: the contact's job title, or the deal's ID. */
+  recordDetail: string | null;
   recordId: string;
   accountId: string;
   accountName: string;
@@ -3054,7 +3064,15 @@ export type AdrHygieneItem = {
   /** How long it has been a problem, in whole days; null when that isn't recorded. */
   ageDays: number | null;
 };
-export type AdrHygieneCheck = { key: AdrHygieneCheckKey; title: string; why: string; count: number; items: AdrHygieneItem[] };
+export type AdrHygieneCheck = {
+  key: AdrHygieneCheckKey;
+  title: string;
+  why: string;
+  /** The first column's heading: "Contact", "Deal", or null when the account is the record (it has its own column). */
+  recordColumn: "Contact" | "Deal" | null;
+  count: number;
+  items: AdrHygieneItem[];
+};
 export type AdrHygieneResult = {
   asOf: string;
   adrId: string | null; // the filter applied, null = all
@@ -3087,7 +3105,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     // Unassigned
     if (!l.assigned_adr_id && R.unassignedStages.includes(l.lead_stage)) {
       items.unassigned.push({
-        id: `unassigned:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+        id: `unassigned:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
         owner: leadOwner(l), adrId: ctx.leadAdr(l),
         problem: `${LEAD_STAGE_LABELS[l.lead_stage]} from ${l.lead_source}, no ADR`, ageDays: wholeDays(ms(l.created_at), now),
       });
@@ -3098,7 +3116,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
       const touched = l.first_touch_at !== null && ms(l.first_touch_at) <= now;
       if (!touched && deadline < now) {
         items.slaBreach.push({
-          id: `sla:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+          id: `sla:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
           owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `MQL from ${l.lead_source}, not touched`, ageDays: wholeDays(deadline, now),
         });
       }
@@ -3106,7 +3124,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     // Handoff leak: still at Sales qualified with no meeting booked, past the grace period
     if (l.lead_stage === "sales_qualified" && l.sales_qualified_at && ms(l.sales_qualified_at) <= now - R.handoffGraceDays * DAY_MS) {
       items.handoffLeak.push({
-        id: `handoff:${l.id}`, record: l.contact_name, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+        id: `handoff:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
         owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `Sales qualified (${l.lead_source}), no meeting with an AE booked`, ageDays: wholeDays(ms(l.sales_qualified_at), now),
       });
     }
@@ -3120,7 +3138,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
       const days = daysBetween(since, asOf);
       if (days >= R.staleStage01Days) {
         items.staleStage01.push({
-          id: `stale:${d.id}`, record: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
+          id: `stale:${d.id}`, record: dealLabel(d), recordDetail: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
           owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id, problem: `No update since ${since}`, ageDays: days,
         });
       }
@@ -3131,7 +3149,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     if (open && d.adr_id && d.ae_id && from && d.created_date >= from && !ctx.paired.has(`${d.adr_id}|${d.ae_id}`)) {
       const should = ctx.adrOfAe.get(d.ae_id) ?? null;
       items.pairingMismatch.push({
-        id: `pairing:${d.id}`, record: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
+        id: `pairing:${d.id}`, record: dealLabel(d), recordDetail: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
         owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id,
         problem: `${stageLabel(d.stage)}: ${name(d.ae_id)} is paired with ${name(should)}`, ageDays: daysBetween(d.created_date, asOf),
       });
@@ -3149,7 +3167,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     else if (ae?.territory && a.territory !== ae.territory) problems.push(`Territory is ${a.territory}, owner's is ${ae.territory}`);
     for (const p of problems) {
       items.accountTags.push({
-        id: `tags:${a.id}:${p}`, record: a.name, recordId: a.id, accountId: a.id, accountName: a.name,
+        id: `tags:${a.id}:${p}`, record: a.name, recordDetail: null, recordId: a.id, accountId: a.id, accountName: a.name,
         owner: `${a.owner} (AE)`, adrId: ctx.territoryAdr(a.id), problem: p, ageDays: null,
       });
     }
@@ -3160,7 +3178,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
   const keep = (i: AdrHygieneItem) => filter === null || i.adrId === filter;
   const checks = ADR_HYGIENE_CHECKS.map((c) => {
     const list = items[c.key].filter(keep).sort((x, y) => (y.ageDays ?? -1) - (x.ageDays ?? -1) || x.id.localeCompare(y.id));
-    return { key: c.key, title: c.title, why: c.why, count: list.length, items: list };
+    return { key: c.key, title: c.title, why: c.why, recordColumn: c.recordColumn, count: list.length, items: list };
   });
 
   // 30-day SLA breach rate
@@ -3452,19 +3470,19 @@ async function loadAdrInputs(): Promise<AdrInputs> {
   const [leads, enrollments, sequences, deals, accounts, team, pairings] = await Promise.all([
     fetchAll(
       "leads",
-      "id, account_id, contact_name, lead_source, lead_stage, created_at, engaged_at, mql_at, first_touch_at, sales_accepted_at, sales_qualified_at, meeting_booked_at, converted_at, disqualified_at, nurtured_at, disqualify_reason, assigned_adr_id, opportunity_id",
+      "id, account_id, contact_name, contact_title, lead_source, lead_stage, created_at, engaged_at, mql_at, first_touch_at, sales_accepted_at, sales_qualified_at, meeting_booked_at, converted_at, disqualified_at, nurtured_at, disqualify_reason, assigned_adr_id, opportunity_id",
       ["id"],
     ),
     fetchAll("sequence_enrollments", "id, sequence_id, lead_id, adr_id, enrolled_at, emails_sent, opens, clicks, replies, bounces, meeting_booked, meeting_booked_at", ["id"]),
     fetchAll("sequences", "id, name, owner_id", ["id"]),
-    fetchAll("opportunities", "id, account_id, stage, created_date, last_activity_date, ae_id, adr_id", ["id"]),
+    fetchAll("opportunities", "id, account_id, type, amount_usd, stage, created_date, last_activity_date, ae_id, adr_id", ["id"]),
     fetchAll("accounts", "id, name, status, owner, icp_tier, target_account, territory", ["id"]),
     fetchAll("team", "id, name, role, territory", ["id"]),
     fetchAll("adr_ae_pairings", "adr_id, ae_id, effective_from", ["adr_id", "ae_id"]),
   ]);
   return {
     leads: leads.map((r) => ({
-      id: str(r.id), account_id: str(r.account_id), contact_name: str(r.contact_name), lead_source: str(r.lead_source),
+      id: str(r.id), account_id: str(r.account_id), contact_name: str(r.contact_name), contact_title: strOrNull(r.contact_title), lead_source: str(r.lead_source),
       lead_stage: (r.lead_stage === null || r.lead_stage === undefined ? (() => { throw new Error("leads.lead_stage is empty: run npm run adr:backfill after the lead lifecycle migration"); })() : str(r.lead_stage)) as LeadStage,
       created_at: str(r.created_at), engaged_at: strOrNull(r.engaged_at), mql_at: strOrNull(r.mql_at), first_touch_at: strOrNull(r.first_touch_at),
       sales_accepted_at: strOrNull(r.sales_accepted_at), sales_qualified_at: strOrNull(r.sales_qualified_at), meeting_booked_at: strOrNull(r.meeting_booked_at),
@@ -3477,7 +3495,7 @@ async function loadAdrInputs(): Promise<AdrInputs> {
     })),
     sequences: sequences.map((r) => ({ id: str(r.id), name: str(r.name), owner_id: str(r.owner_id) })),
     deals: deals.map((r) => ({
-      id: str(r.id), account_id: str(r.account_id), stage: str(r.stage), created_date: str(r.created_date),
+      id: str(r.id), account_id: str(r.account_id), type: str(r.type), amount_usd: num(r.amount_usd), stage: str(r.stage), created_date: str(r.created_date),
       last_activity_date: strOrNull(r.last_activity_date), ae_id: strOrNull(r.ae_id), adr_id: strOrNull(r.adr_id),
     })),
     accounts: accounts.map((r) => ({

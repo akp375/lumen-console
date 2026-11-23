@@ -129,7 +129,7 @@ function CheckCard({ check }: { check: AdrHygieneCheck }) {
           <table className="w-full min-w-[760px] text-sm">
             <thead className="sticky top-0 bg-zinc-50 dark:bg-zinc-900">
               <tr className="border-b border-zinc-200 text-left dark:border-zinc-800">
-                <th scope="col" className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-300">Record</th>
+                {check.recordColumn && <th scope="col" className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-300">{check.recordColumn}</th>}
                 <th scope="col" className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-300">Account</th>
                 <th scope="col" className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-300">Problem</th>
                 <th scope="col" className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-300">Owner</th>
@@ -139,7 +139,12 @@ function CheckCard({ check }: { check: AdrHygieneCheck }) {
             <tbody className="align-top">
               {check.items.map((i) => (
                 <tr key={i.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/60">
-                  <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">{i.record}</td>
+                  {check.recordColumn && (
+                    <td className="px-3 py-2">
+                      <div className="text-zinc-900 dark:text-zinc-100">{i.record}</div>
+                      {i.recordDetail && <div className="text-xs text-zinc-500 dark:text-zinc-400">{i.recordDetail}</div>}
+                    </td>
+                  )}
                   <td className="px-3 py-2">
                     <Link href={`/accounts/${i.accountId}`} className={ACCOUNT_LINK}>
                       {i.accountName}
