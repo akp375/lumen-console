@@ -110,3 +110,15 @@ export const LEAD_STAGE_DESCRIPTIONS: Record<string, string> = {
 export function leadStageLabel(stage: string): string {
   return LEAD_STAGE_LABELS[stage] ?? stage;
 }
+
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/**
+ * 2026-11-23T17:41:46Z -> "23 Nov 2026, 17:41" (UTC). Built by hand, not with Intl, so the server and
+ * every browser print exactly the same text (Intl's date-and-time wording differs between browsers,
+ * e.g. "23 Nov 2026 at 17:41", which breaks React hydration).
+ */
+export function dateTimeUtc(iso: string): string {
+  const d = new Date(iso);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+}

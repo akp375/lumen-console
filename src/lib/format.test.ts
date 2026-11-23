@@ -2,7 +2,7 @@
 // one-decimal percentages, dates like "16 Dec 2026".
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { QUALIFYING_DESCRIPTION, pct, pctChange, shortDate, signedInt, stageLabel, usd, usdCompact } from "./format.ts";
+import { dateTimeUtc, QUALIFYING_DESCRIPTION, pct, pctChange, shortDate, signedInt, stageLabel, usd, usdCompact } from "./format.ts";
 
 test("usdCompact: $1.2M, $387K, $950", () => {
   assert.equal(usdCompact(1_234_567), "$1.2M");
@@ -39,4 +39,10 @@ test("stageLabel: Stage 0.1 shows as Qualifying; other stages unchanged", () => 
   assert.equal(stageLabel("Stage 0.1"), "Qualifying");
   assert.equal(stageLabel("Discovery"), "Discovery");
   assert.equal(QUALIFYING_DESCRIPTION, "meeting held, not yet qualified as an opportunity");
+});
+
+test("dateTimeUtc: same text everywhere, in UTC, zero-padded time", () => {
+  assert.equal(dateTimeUtc("2026-11-23T17:41:46.660614+00:00"), "23 Nov 2026, 17:41");
+  assert.equal(dateTimeUtc("2026-01-05T03:07:00Z"), "5 Jan 2026, 03:07");
+  assert.equal(dateTimeUtc("2026-11-23T23:30:00-05:00"), "24 Nov 2026, 04:30"); // converted to UTC
 });

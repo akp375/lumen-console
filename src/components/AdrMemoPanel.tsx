@@ -3,14 +3,13 @@
 import { useState, type ReactNode } from "react";
 import { generateAdrMemoAction } from "@/app/pipeline/adr-insights/actions";
 import { FIELD_LABELS, REC_FIELDS, memoFieldKey, type AdrMemo } from "@/lib/adr-memo-shared";
-import { modelLabel, shortDate } from "@/lib/format";
+import { dateTimeUtc, modelLabel, shortDate } from "@/lib/format";
 import { ErrorNote, FlagButton, LimitNotice } from "./RiskUi";
 import { Spinner } from "./Spinner";
 
 // The AI memo for the ADR manager. Display only: Claude writes the text from metrics.ts numbers,
 // and the grounding check (run on the server) lists any number it couldn't find in that data.
 
-const dateTime = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 
 export function AdrMemoPanel({ initial, missingMigration, adrManager }: { initial: AdrMemo | null; missingMigration: boolean; adrManager: string | null }) {
   const [memo, setMemo] = useState<AdrMemo | null>(initial);
@@ -66,7 +65,7 @@ export function AdrMemoPanel({ initial, missingMigration, adrManager }: { initia
       {memo && (
         <div className={`mt-4 ${busy ? "opacity-50" : ""}`}>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Generated {dateTime.format(new Date(memo.createdAt))} UTC · data as of {shortDate(memo.asOfDate)} · {modelLabel(memo.model)} · ${memo.costUsd.toFixed(4)}
+            Generated {dateTimeUtc(memo.createdAt)} UTC · data as of {shortDate(memo.asOfDate)} · {modelLabel(memo.model)} · ${memo.costUsd.toFixed(4)}
           </p>
           <p className="mt-3 text-lg font-medium text-zinc-900 dark:text-zinc-50">
             <Marked text={memo.content.headline} flags={flagsFor(memoFieldKey(null, "headline"))} />
