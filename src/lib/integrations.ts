@@ -1,6 +1,6 @@
 // Status of Cockpit's data sources for the Integrations page. Server-side only.
 import { createClient } from "@supabase/supabase-js";
-import { DAILY_BUDGET_USD, getSpendToDate, getTodaySpend } from "./claude";
+import { DAILY_BUDGET_USD, getSpendByFeature, getSpendToDate, getTodaySpend, type FeatureSpendRow } from "./claude";
 import { accountTypeLabel, getHubSpotAccount } from "./hubspot";
 
 export type HubSpotStatus = { connected: boolean; portalId: number | null; accountType: string | null; checkedAt: string; error?: string };
@@ -17,7 +17,17 @@ export async function getHubSpotStatus(): Promise<HubSpotStatus> {
 }
 
 export type SupabaseStatus = { connected: boolean; lastSeededAt: string | null; asOfDate: string | null; error?: string };
-export type ClaudeStatus = { connected: boolean; spendTodayUsd: number; callsToday: number; spendToDateUsd: number; callsToDate: number; budgetUsd: number; error?: string };
+export type ClaudeStatus = {
+  connected: boolean;
+  spendTodayUsd: number;
+  callsToday: number;
+  spendToDateUsd: number;
+  callsToDate: number;
+  budgetUsd: number;
+  /** All-time spend and calls by feature and model. */
+  byFeature: FeatureSpendRow[];
+  error?: string;
+};
 
 export async function getSupabaseStatus(): Promise<SupabaseStatus> {
   const url = process.env.SUPABASE_URL;
@@ -39,7 +49,7 @@ export async function getClaudeStatus(): Promise<ClaudeStatus> {
   const connected = Boolean(process.env.ANTHROPIC_API_KEY); // checks the key is set; never reads it out
   try {
     // Both use the real clock: llm_calls is real API spend, not demo data.
-    const [spend, total] = await Promise.all([getTodaySpend(), getSpendToDate()]);
+    const [spend, total, byFeature] = await Promise.all([getTodaySpend(), getSpendToDate(), getSpendByFeature()]);
     return {
       connected,
       spendTodayUsd: spend.costUsd,
@@ -47,8 +57,9 @@ export async function getClaudeStatus(): Promise<ClaudeStatus> {
       spendToDateUsd: total.costUsd,
       callsToDate: total.calls,
       budgetUsd: DAILY_BUDGET_USD,
+      byFeature,
     };
   } catch (e) {
-    return { connected, spendTodayUsd: 0, callsToday: 0, spendToDateUsd: 0, callsToDate: 0, budgetUsd: DAILY_BUDGET_USD, error: e instanceof Error ? e.message : String(e) };
+    return { connected, spendTodayUsd: 0, callsToday: 0, spendToDateUsd: 0, callsToDate: 0, budgetUsd: DAILY_BUDGET_USD, byFeature: [], error: e instanceof Error ? e.message : String(e) };
   }
 }

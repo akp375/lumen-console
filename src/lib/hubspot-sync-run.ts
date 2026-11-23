@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCrmSyncData, type CrmAccountRow, type CrmDealRow } from "./metrics.ts";
 import { hubspot } from "./hubspot.ts";
+import { recordSyncRun } from "./sync-runs.ts";
 import {
   checkbox,
   DEAL_TYPE_TO_HUBSPOT_LABEL,
@@ -34,6 +35,8 @@ export type SyncOptions = {
   one?: boolean;
   /** Called with a short line at each step. */
   onProgress?: (line: string) => void;
+  /** Where the run started, for the sync_runs record. Defaults to "cli". */
+  source?: "button" | "cli";
 };
 
 export type SyncCount = { synced: number; created: number; updated: number };
@@ -46,6 +49,8 @@ export type SyncResult = {
   deals: SyncCount;
   contacts: SyncCount;
   lifecycleCleared: number;
+  /** Qualifying deals left out (they aren't in HubSpot's pipelines). */
+  dealsLeftOut: number;
   /** Dry runs only: the first record of each kind, as it would be sent. */
   samples?: { company?: Props; deal?: Props; contact?: Props; sponsorContact?: Props; dealsPerPipeline: Record<string, number> };
 };
@@ -120,7 +125,51 @@ const count = (m: Map<string, { isNew: boolean }>): SyncCount => {
 };
 const NONE: SyncCount = { synced: 0, created: 0, updated: 0 };
 
+/**
+ * Runs the sync and records it in sync_runs (real runs only, success or failure). A failure to record
+ * is reported as a progress line and never fails the sync.
+ */
 export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult> {
+  const say = opts.onProgress ?? (() => {});
+  const startedAt = new Date().toISOString();
+  const scope = opts.accountId || opts.one ? "one" : "full";
+  const base = { scope, account_id: opts.accountId ?? null, source: opts.source ?? "cli", started_at: startedAt } as const;
+  try {
+    const r = await syncOnce(opts);
+    if (!r.dryRun) {
+      const problem = await recordSyncRun({
+        ...base,
+        account_id: r.scope.kind === "one" ? r.scope.accountId : null,
+        status: "success",
+        finished_at: new Date().toISOString(),
+        companies_synced: r.companies.synced,
+        companies_created: r.companies.created,
+        deals_synced: r.deals.synced,
+        deals_created: r.deals.created,
+        contacts_synced: r.contacts.synced,
+        contacts_created: r.contacts.created,
+        deals_left_out: r.dealsLeftOut,
+        error: null,
+      });
+      if (problem) say(problem);
+    }
+    return r;
+  } catch (e) {
+    if (!opts.dryRun) {
+      const problem = await recordSyncRun({
+        ...base,
+        status: "failed",
+        finished_at: new Date().toISOString(),
+        companies_synced: 0, companies_created: 0, deals_synced: 0, deals_created: 0, contacts_synced: 0, contacts_created: 0, deals_left_out: 0,
+        error: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+      });
+      if (problem) say(problem);
+    }
+    throw e;
+  }
+}
+
+async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   const say = opts.onProgress ?? (() => {});
   const dryRun = Boolean(opts.dryRun);
   if (dryRun) say("Dry run: reading only; nothing will be sent to HubSpot.");
@@ -275,6 +324,7 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
       deals: { ...NONE, synced: dealInputs.length },
       contacts: { ...NONE, synced: contactInputs.length },
       lifecycleCleared: 0,
+      dealsLeftOut: skipped,
       samples: { company: companyInputs[0]?.properties, deal: dealInputs[0]?.properties, contact: contactInputs[0]?.properties, sponsorContact: contactList.find((c) => c.input.properties.lumen_role)?.input.properties, dealsPerPipeline },
     };
   }
@@ -332,5 +382,5 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
 
   if (scope.kind === "one") scope.hubspotId = companyIds.get(scope.accountId)?.id ?? null;
   say("Sync finished.");
-  return { dryRun, scope, companies, deals: dealCount, contacts, lifecycleCleared: toClear.length };
+  return { dryRun, scope, companies, deals: dealCount, contacts, lifecycleCleared: toClear.length, dealsLeftOut: skipped };
 }

@@ -73,6 +73,10 @@ const ENROLLMENTS: AdrEnrollmentRow[] = [
   ...range(19).map((i) => enr(`s4_${i}`, "S4", i < 10 ? { meeting_booked: true, meeting_booked_at: "2026-10-02T00:00:00Z" } : {})),
   // S5: one enrollment before the window, with a meeting for d1 -> counted nowhere
   enr("s5_0", "S5", { enrolled_at: "2026-04-01T00:00:00Z", meeting_booked: true, meeting_booked_at: "2026-04-02T00:00:00Z", adr_id: "d1" }),
+  // S6 (not in the sequence table): L5 (open, no ADR) enrolled 2026-11-04 -> in a sequence with no owner, 9 days.
+  // L6 (Disqualified, no ADR) is enrolled too, but has ended -> not counted.
+  enr("s6_L5", "S6", { lead_id: "L5", enrolled_at: "2026-11-04T00:00:00Z" }),
+  enr("s6_L6", "S6", { lead_id: "L6", enrolled_at: "2026-11-02T00:00:00Z" }),
 ];
 
 const INPUT: AdrInputs = {
@@ -127,8 +131,15 @@ test("ADR hygiene: every check, its edges and the total", () => {
   const h = calcAdrHygiene(INPUT, AS_OF);
   // unassigned L5; open breach L3 (not L4); stale O1 (14 days, not O3 at 13); leak L7 (not L8 inside the grace);
   // mismatches O3 and O5 (not O2/O6 before the date, not closed O4); tags: A2, A3 x2, A4 (not churned A5)
-  assert.deepEqual(counts(h), { unassigned: 1, slaBreach: 1, staleStage01: 1, handoffLeak: 1, pairingMismatch: 2, accountTags: 4 });
+  assert.deepEqual(counts(h), { unassigned: 1, slaBreach: 1, staleStage01: 1, handoffLeak: 1, pairingMismatch: 2, sequenceNoOwner: 1, accountTags: 4 });
+  // The sequence-with-no-owner card repeats unassigned leads, so it isn't added to the total
   assert.equal(h.total, 10);
+  assert.equal(h.checks.find((c) => c.key === "sequenceNoOwner")!.inTotal, false);
+  const noOwner = h.checks.find((c) => c.key === "sequenceNoOwner")!.items[0];
+  assert.deepEqual([noOwner.recordId, noOwner.ageDays, noOwner.ownerAdrId, noOwner.adrId], ["L5", 9, null, "d1"]);
+  // ownerAdrId is the ADR who owns it, never the territory ADR
+  assert.equal(h.checks.find((c) => c.key === "unassigned")!.items[0].ownerAdrId, null);
+  assert.equal(h.checks.find((c) => c.key === "handoffLeak")!.items[0].ownerAdrId, "d1");
   const items = (k: string) => h.checks.find((c) => c.key === k)!.items;
   assert.equal(items("unassigned")[0].recordId, "L5");
   assert.equal(items("unassigned")[0].ageDays, 10);
@@ -143,7 +154,7 @@ test("ADR hygiene: every check, its edges and the total", () => {
   assert.equal(items("staleStage01")[0].ageDays, 14);
   // The first column: the contact (with job title) for lead checks, the deal (with its ID) for deal checks, none for account tags
   assert.deepEqual(h.checks.map((c) => [c.key, c.recordColumn]), [
-    ["unassigned", "Contact"], ["slaBreach", "Contact"], ["staleStage01", "Deal"], ["handoffLeak", "Contact"], ["pairingMismatch", "Deal"], ["accountTags", null],
+    ["unassigned", "Contact"], ["slaBreach", "Contact"], ["staleStage01", "Deal"], ["handoffLeak", "Contact"], ["pairingMismatch", "Deal"], ["sequenceNoOwner", "Contact"], ["accountTags", null],
   ]);
   assert.deepEqual([items("unassigned")[0].record, items("unassigned")[0].recordDetail], ["Contact L5", "Head of Operations"]);
   assert.deepEqual([items("staleStage01")[0].record, items("staleStage01")[0].recordDetail], ["New business, $24,000", "O1"]);
@@ -169,8 +180,8 @@ test("ADR hygiene: the ADR filter splits every issue to one ADR", () => {
   const d1 = calcAdrHygiene(INPUT, AS_OF, "d1");
   const d2 = calcAdrHygiene(INPUT, AS_OF, "d2");
   // d1: L5 (territory), L7, A3 x2 (Ann's accounts). d2: L3, O1, O3, O5, A2, A4 (Bob's accounts).
-  assert.deepEqual(counts(d1), { unassigned: 1, slaBreach: 0, staleStage01: 0, handoffLeak: 1, pairingMismatch: 0, accountTags: 2 });
-  assert.deepEqual(counts(d2), { unassigned: 0, slaBreach: 1, staleStage01: 1, handoffLeak: 0, pairingMismatch: 2, accountTags: 2 });
+  assert.deepEqual(counts(d1), { unassigned: 1, slaBreach: 0, staleStage01: 0, handoffLeak: 1, pairingMismatch: 0, sequenceNoOwner: 1, accountTags: 2 });
+  assert.deepEqual(counts(d2), { unassigned: 0, slaBreach: 1, staleStage01: 1, handoffLeak: 0, pairingMismatch: 2, sequenceNoOwner: 0, accountTags: 2 });
   assert.equal(d1.total + d2.total, 10);
   assert.deepEqual(d1.slaBreachRate30d, { breached: 1, eligible: 4, rate: 0.25 }); // L1, L2, L7, L8; L2 late
 });
@@ -197,6 +208,16 @@ test("ADR insights: funnel by source, every stage with conversion from the stage
   assert.deepEqual(all.reached, [10, 8, 8, 6, 4, 2, 1]);
   assert.deepEqual([all.disqualified, all.nurture, all.open], [1, 0, 8]);
   assert.equal(all.overall, 0.1);
+});
+
+test("ADR insights: unassigned MQLs are their own row, outside the team rate", () => {
+  // Add an unassigned MQL, never touched, whose 24 hours are up
+  const extra = lead("L12", { lead_stage: "mql", engaged_at: "2026-11-01T00:00:00Z", mql_at: "2026-11-05T00:00:00Z" });
+  const s = calcAdrInsights({ ...INPUT, leads: [...LEADS, extra] }, AS_OF);
+  const un = s.speed.find((x) => x.adrId === null)!;
+  assert.deepEqual([un.name, un.mqls, un.never], ["Unassigned", 1, 1]);
+  // The team is unchanged: 7 assigned MQLs, 5 on time
+  assert.deepEqual([s.team.name, s.team.mqls, s.team.onTime, s.team.never], ["Team (assigned ADRs)", 7, 5, 1]);
 });
 
 test("ADR insights: speed to lead per ADR and for the team", () => {

@@ -697,3 +697,41 @@ Both snapshots are in `reconciliation/adr-numbers-before-lifecycle.json` and `re
   3. Pause the bought list (15.6% bounce per email, 0 calls) and move contacts to Outbound cold: commercial (Nadia).
   4. Tighten MQL criteria for content and webinar leads (Nadia).
   5. Clear the 5 stale Qualifying deals and the 2 handoffs (Sofia).
+
+### Fixes before the demo
+
+1. **Memo prompt, bounce rule:** contacts from a high-bounce list must never be moved to another sequence. The action is to pause, remove the bounced addresses and verify the rest before re-enrolling.
+2. **Memo summary, territory labels:** each hygiene check now has `owned_by_adr` (items an ADR actually owns) and `no_adr_by_territory` ("in [name]'s territory"). Unassigned leads are never counted as that ADR's. The prompt says the same.
+   - This also corrected a count: Kenji owns **9** of the 29 MQLs past SLA. The other 7 counted before are unassigned leads in his territory.
+   - Hygiene items now carry `ownerAdrId`, the real owner, next to the filter's territory attribution.
+3. **New hygiene card, "Leads in sequences with no owner":** open leads (not Converted, Disqualified or Nurture) enrolled in a sequence with no ADR. How long = since the first enrollment.
+   - Today it's **24**, the same 24 leads as "Unassigned leads", because every lead is enrolled in a sequence. So the card shows a note and **isn't added to the hygiene total** (still 83), which would otherwise count each lead twice.
+4. **Speed to lead:** the team rate covers assigned ADRs only, **75.0% across 308 MQLs** (was 69.4% with unassigned included). Unassigned (25 MQLs, 0% on time) is its own row, outside the team rate and the green/red comparison.
+5. **HubSpot sync runs recorded:**
+   - **Migration** `20261129000000_sync_runs.sql` (to run in Supabase). The parked `20261120000000_add_sync_runs.sql` was never run here and is marked superseded.
+   - **What's recorded:** every real sync, from the button or `npm run hubspot:sync`, success or failure, saves one row (`src/lib/sync-runs.ts`). The row holds scope, source, times, synced and created counts, Qualifying deals left out, and any error. Dry runs aren't recorded, and a failure to record never fails a sync.
+   - **On the card:** the last run's time, result and counts, plus the last full sync if a single-account run came after it.
+6. **Claude card:** spend and calls to date by feature and model, read in pages from `llm_calls`. Timeouts count under their feature. Today:
+
+   | Feature | Model | Calls | Spend |
+   |---|---|---|---|
+   | Topic tagging | Haiku 5.5 | 4,800 | $0.7338 |
+   | Workspace chat | Sonnet 5.5 | 7 | $0.3867 |
+   | Flag reasons: Renewals | Sonnet 5.5 | 14 | $0.3025 |
+   | Flag reasons: Deal Risk | Sonnet 5.5 | 9 | $0.2571 |
+   | ADR memo | Sonnet 5.5 | 4 | $0.0983 |
+
+7. **Gainsight card (planned):** "push health scores to scorecards and renewal risk as CTAs."
+
+**Memo regenerated (23 Nov):**
+- **Cost:** $0.0280 (6,482 input and 1,505 output tokens). Grounding: all 54 numbers and dates were found in the data.
+- **Recommendations:**
+  1. Assign the 24 unassigned leads ("10 in Kenji Watanabe's territory and 11 in Grace Mensah's territory").
+  2. Clear Kenji's 9 MQLs past SLA (64.5% against the team's 75%).
+  3. Pause the bought list, remove bounced addresses and verify the rest, and don't move the contacts.
+  4. Focus on demo and partner leads.
+  5. Clear the stale Qualifying deals and the 2 handoffs.
+
+**Checks.**
+- **`npm run adr:check`:** all customer, health and renewal tables and all 30 page sections are unchanged, and all ADR checks pass.
+- **Tests:** 112 pass. New coverage: the new card and its exclusion from the total, owner vs territory attribution, and unassigned MQLs kept out of the team rate.

@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const send = (msg: unknown) => controller.enqueue(encoder.encode(JSON.stringify(msg) + "\n"));
       try {
-        const result = await runHubSpotSync({ onProgress: (line) => send({ type: "progress", line }) });
+        const result = await runHubSpotSync({ source: "button", onProgress: (line) => send({ type: "progress", line }) });
         send({ type: "done", result });
       } catch (e) {
         send({ type: "error", message: e instanceof Error ? e.message : String(e) });

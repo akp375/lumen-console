@@ -1,3 +1,6 @@
+-- SUPERSEDED (24 Nov 2026): don't run this file. It was never run in the Cockpit project; use
+-- 20261129000000_sync_runs.sql instead, which adds status, source, created counts and failures.
+--
 -- Cockpit (built for Lumen AI): one row each time `npm run hubspot:sync` finishes
 -- (dry runs are not recorded), so the Integrations page can show when HubSpot
 -- was last synced and how many records were sent.

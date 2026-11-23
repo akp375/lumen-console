@@ -3046,9 +3046,15 @@ export const ADR_HYGIENE_CHECKS = [
   { key: "staleStage01", recordColumn: "Deal", title: `Stale ${QUALIFYING} deals`, why: "A meeting held that nobody qualifies or moves forward is pipeline quietly going cold." },
   { key: "handoffLeak", recordColumn: "Contact", title: "Qualified leads not handed to an AE", why: "The ADR qualified the lead but no meeting with an AE was booked: an ADR-to-AE handoff leak." },
   { key: "pairingMismatch", recordColumn: "Deal", title: "ADR–AE pairing mismatches", why: "Deals with the wrong ADR-AE pair confuse ownership and credit, and break territory reporting." },
+  { key: "sequenceNoOwner", recordColumn: "Contact", title: "Leads in sequences with no owner", why: "A lead getting sequence emails with no ADR behind it has nobody to answer a reply or book the meeting." },
   { key: "accountTags", recordColumn: null, title: "Account tag problems", why: "Wrong ICP tier, target or territory tags send ADR effort to the wrong accounts." },
 ] as const;
 export type AdrHygieneCheckKey = (typeof ADR_HYGIENE_CHECKS)[number]["key"];
+/**
+ * Cards left out of the hygiene total: every lead in a sequence with no owner is also an unassigned
+ * lead (every lead is enrolled in a sequence), so adding them would count the same leads twice.
+ */
+const NOT_IN_TOTAL: ReadonlySet<AdrHygieneCheckKey> = new Set(["sequenceNoOwner"]);
 
 export type AdrHygieneItem = {
   id: string; // unique per item
@@ -3059,7 +3065,9 @@ export type AdrHygieneItem = {
   accountId: string;
   accountName: string;
   owner: string; // who should fix it
-  adrId: string | null; // the ADR it counts under (for the filter)
+  adrId: string | null; // the ADR it counts under for the filter: its own ADR, or (if it has none) the ADR who covers its territory
+  /** The ADR who actually owns it (null for unassigned leads and account tags). Never the territory ADR. */
+  ownerAdrId: string | null;
   problem: string; // short description
   /** How long it has been a problem, in whole days; null when that isn't recorded. */
   ageDays: number | null;
@@ -3070,6 +3078,8 @@ export type AdrHygieneCheck = {
   why: string;
   /** The first column's heading: "Contact", "Deal", or null when the account is the record (it has its own column). */
   recordColumn: "Contact" | "Deal" | null;
+  /** False when the card repeats records another card already counts (they aren't added to the total twice). */
+  inTotal: boolean;
   count: number;
   items: AdrHygieneItem[];
 };
@@ -3098,7 +3108,11 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     return adr ? `Unassigned (territory ADR: ${name(adr)})` : "Unassigned";
   };
   const acct = (id: string) => ctx.accountById.get(id)?.name ?? id;
-  const items: Record<AdrHygieneCheckKey, AdrHygieneItem[]> = { unassigned: [], slaBreach: [], staleStage01: [], handoffLeak: [], pairingMismatch: [], accountTags: [] };
+  const items: Record<AdrHygieneCheckKey, AdrHygieneItem[]> = { unassigned: [], slaBreach: [], staleStage01: [], handoffLeak: [], pairingMismatch: [], sequenceNoOwner: [], accountTags: [] };
+  const seqName = new Map(input.sequences.map((q) => [q.id, q.name]));
+  const enrollmentsOf = new Map<string, AdrEnrollmentRow[]>();
+  for (const e of input.enrollments) if (ms(e.enrolled_at) <= now) enrollmentsOf.set(e.lead_id, [...(enrollmentsOf.get(e.lead_id) ?? []), e]);
+  const ENDINGS: readonly LeadStage[] = ["converted", "disqualified", "nurture"];
 
   for (const l of input.leads) {
     if (ms(l.created_at) > now) continue;
@@ -3106,7 +3120,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     if (!l.assigned_adr_id && R.unassignedStages.includes(l.lead_stage)) {
       items.unassigned.push({
         id: `unassigned:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
-        owner: leadOwner(l), adrId: ctx.leadAdr(l),
+        owner: leadOwner(l), adrId: ctx.leadAdr(l), ownerAdrId: l.assigned_adr_id,
         problem: `${LEAD_STAGE_LABELS[l.lead_stage]} from ${l.lead_source}, no ADR`, ageDays: wholeDays(ms(l.created_at), now),
       });
     }
@@ -3117,15 +3131,26 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
       if (!touched && deadline < now) {
         items.slaBreach.push({
           id: `sla:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
-          owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `MQL from ${l.lead_source}, not touched`, ageDays: wholeDays(deadline, now),
+          owner: leadOwner(l), adrId: ctx.leadAdr(l), ownerAdrId: l.assigned_adr_id, problem: `MQL from ${l.lead_source}, not touched`, ageDays: wholeDays(deadline, now),
         });
       }
+    }
+    // In a sequence with no owner: an open lead (not at an ending) enrolled in a sequence, with no ADR
+    const enrolled = enrollmentsOf.get(l.id);
+    if (!l.assigned_adr_id && enrolled && !ENDINGS.includes(l.lead_stage)) {
+      const first = enrolled.reduce((a, b) => (a.enrolled_at <= b.enrolled_at ? a : b));
+      const names = [...new Set(enrolled.map((e) => seqName.get(e.sequence_id) ?? e.sequence_id))].join(", ");
+      items.sequenceNoOwner.push({
+        id: `seqowner:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
+        owner: leadOwner(l), adrId: ctx.leadAdr(l), ownerAdrId: null,
+        problem: `${LEAD_STAGE_LABELS[l.lead_stage]}, enrolled in ${names}, no ADR`, ageDays: wholeDays(ms(first.enrolled_at), now),
+      });
     }
     // Handoff leak: still at Sales qualified with no meeting booked, past the grace period
     if (l.lead_stage === "sales_qualified" && l.sales_qualified_at && ms(l.sales_qualified_at) <= now - R.handoffGraceDays * DAY_MS) {
       items.handoffLeak.push({
         id: `handoff:${l.id}`, record: l.contact_name, recordDetail: l.contact_title, recordId: l.id, accountId: l.account_id, accountName: acct(l.account_id),
-        owner: leadOwner(l), adrId: ctx.leadAdr(l), problem: `Sales qualified (${l.lead_source}), no meeting with an AE booked`, ageDays: wholeDays(ms(l.sales_qualified_at), now),
+        owner: leadOwner(l), adrId: ctx.leadAdr(l), ownerAdrId: l.assigned_adr_id, problem: `Sales qualified (${l.lead_source}), no meeting with an AE booked`, ageDays: wholeDays(ms(l.sales_qualified_at), now),
       });
     }
   }
@@ -3139,7 +3164,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
       if (days >= R.staleStage01Days) {
         items.staleStage01.push({
           id: `stale:${d.id}`, record: dealLabel(d), recordDetail: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
-          owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id, problem: `No update since ${since}`, ageDays: days,
+          owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id, ownerAdrId: d.adr_id, problem: `No update since ${since}`, ageDays: days,
         });
       }
     }
@@ -3150,7 +3175,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
       const should = ctx.adrOfAe.get(d.ae_id) ?? null;
       items.pairingMismatch.push({
         id: `pairing:${d.id}`, record: dealLabel(d), recordDetail: d.id, recordId: d.id, accountId: d.account_id, accountName: acct(d.account_id),
-        owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id,
+        owner: `${name(d.adr_id)} (ADR), ${name(d.ae_id)} (AE)`, adrId: d.adr_id, ownerAdrId: d.adr_id,
         problem: `${stageLabel(d.stage)}: ${name(d.ae_id)} is paired with ${name(should)}`, ageDays: daysBetween(d.created_date, asOf),
       });
     }
@@ -3168,7 +3193,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
     for (const p of problems) {
       items.accountTags.push({
         id: `tags:${a.id}:${p}`, record: a.name, recordDetail: null, recordId: a.id, accountId: a.id, accountName: a.name,
-        owner: `${a.owner} (AE)`, adrId: ctx.territoryAdr(a.id), problem: p, ageDays: null,
+        owner: `${a.owner} (AE)`, adrId: ctx.territoryAdr(a.id), ownerAdrId: null, problem: p, ageDays: null,
       });
     }
   }
@@ -3178,7 +3203,7 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
   const keep = (i: AdrHygieneItem) => filter === null || i.adrId === filter;
   const checks = ADR_HYGIENE_CHECKS.map((c) => {
     const list = items[c.key].filter(keep).sort((x, y) => (y.ageDays ?? -1) - (x.ageDays ?? -1) || x.id.localeCompare(y.id));
-    return { key: c.key, title: c.title, why: c.why, recordColumn: c.recordColumn, count: list.length, items: list };
+    return { key: c.key, title: c.title, why: c.why, recordColumn: c.recordColumn, inTotal: !NOT_IN_TOTAL.has(c.key), count: list.length, items: list };
   });
 
   // 30-day SLA breach rate
@@ -3196,8 +3221,8 @@ export function calcAdrHygiene(input: AdrInputs, asOf: string, adrId: string | n
   return {
     asOf,
     adrId: filter,
-    total: checks.reduce((n, c) => n + c.count, 0),
-    teamTotal: Object.values(items).reduce((n, list) => n + list.length, 0),
+    total: checks.reduce((n, c) => n + (c.inTotal ? c.count : 0), 0),
+    teamTotal: (Object.keys(items) as AdrHygieneCheckKey[]).reduce((n, k) => n + (NOT_IN_TOTAL.has(k) ? 0 : items[k].length), 0),
     checks,
     slaBreachRate30d: { breached, eligible, rate: ratio(breached, eligible) },
     adrs: ctx.adrs,
@@ -3320,7 +3345,8 @@ export function calcAdrInsights(input: AdrInputs, asOf: string): AdrInsightsResu
   const speed = ctx.adrs.map((a) => speedRow(a.id, a.name, mqls.filter((l) => l.assigned_adr_id === a.id)));
   const unassigned = mqls.filter((l) => !l.assigned_adr_id);
   if (unassigned.length) speed.push(speedRow(null, "Unassigned", unassigned));
-  const team = speedRow(null, "Team", mqls);
+  // The team rate covers MQLs assigned to an ADR; unassigned MQLs are their own row, outside the team rate.
+  const team = speedRow(null, "Team (assigned ADRs)", mqls.filter((l) => l.assigned_adr_id));
 
   // Sequences: enrollments in the window
   const enrolled = input.enrollments.filter((e) => inWindow(e.enrolled_at));
@@ -3413,9 +3439,19 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
       checks: hygiene.checks.map((c) => ({
         check: c.title,
         count: c.count,
-        by_adr: Object.fromEntries(hygiene.adrs.map((a) => [a.name, c.items.filter((i) => i.adrId === a.id).length])),
+        counted_in_total: c.inTotal,
+        // Only items an ADR actually owns count as that ADR's. Unassigned items are grouped by the territory they
+        // sit in, and are never that ADR's leads.
+        owned_by_adr: Object.fromEntries(hygiene.adrs.map((a) => [a.name, c.items.filter((i) => i.ownerAdrId === a.id).length])),
+        no_adr_by_territory: Object.fromEntries(
+          hygiene.adrs
+            .map((a) => [`in ${a.name}'s territory`, c.items.filter((i) => i.ownerAdrId === null && i.adrId === a.id).length] as const)
+            .filter(([, n]) => n > 0),
+        ),
         oldest_days: c.items.reduce<number | null>((m, i) => (i.ageDays === null ? m : Math.max(m ?? 0, i.ageDays)), null),
       })),
+      territory_note:
+        "no_adr_by_territory counts items with no ADR, by the territory they are in. They are not that ADR's leads: write them as \"in [name]'s territory\".",
       sla_breach_rate_last_30_days_pct: pct1(hygiene.slaBreachRate30d.rate),
       sla_breaches_last_30_days: hygiene.slaBreachRate30d.breached,
       mqls_due_last_30_days: hygiene.slaBreachRate30d.eligible,
@@ -3430,8 +3466,12 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
     })),
     funnel_note: `Recent leads have had less time to convert. ${all.leads} leads in the window.`,
     speed_to_lead: {
-      team: { mqls: insights.team.mqls, on_time_pct: teamSla, never_touched: insights.team.never, median_hours_to_first_touch: r1(insights.team.medianHoursToTouch) },
-      by_adr: insights.speed.map((s) => ({
+      team_assigned_adrs_only: { mqls: insights.team.mqls, on_time_pct: teamSla, never_touched: insights.team.never, median_hours_to_first_touch: r1(insights.team.medianHoursToTouch) },
+      unassigned_mqls: (() => {
+        const u = insights.speed.find((s) => s.adrId === null);
+        return u ? { mqls: u.mqls, on_time_pct: pct1(u.onTimeRate), never_touched: u.never, median_hours_to_first_touch: r1(u.medianHoursToTouch), note: "Not part of the team rate." } : null;
+      })(),
+      by_adr: insights.speed.filter((s) => s.adrId !== null).map((s) => ({
         adr: s.name, mqls: s.mqls, on_time: s.onTime, late: s.late, never_touched: s.never, on_time_pct: pct1(s.onTimeRate),
         points_vs_team: s.onTimeRate === null || teamSla === null ? null : r1(pct1(s.onTimeRate)! - teamSla),
         median_hours_to_first_touch: r1(s.medianHoursToTouch),

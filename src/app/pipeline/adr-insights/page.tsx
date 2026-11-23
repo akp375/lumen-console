@@ -142,19 +142,32 @@ function Speed({ data, window }: { data: AdrInsightsResult; window: string }) {
     <section>
       <SectionHeading title="Speed to Lead by ADR" detail={`MQLs from ${window} whose ${R.slaHours} hours are up.`} />
       <Table minWidth="min-w-[640px]" head={[{ label: "ADR" }, ...["MQLs", `Touched within ${R.slaHours}h`, "Touched late", "Never touched", "Median time to first touch"].map((label) => ({ label, numeric: true }))]}>
-        {data.speed.map((s) => (
-          <tr key={s.adrId ?? "unassigned"} className={ROW}>
-            <td className={`${TD} text-zinc-900 dark:text-zinc-100`}>{s.name}</td>
-            {cells(s)}
-          </tr>
-        ))}
+        {data.speed
+          .filter((s) => s.adrId !== null)
+          .map((s) => (
+            <tr key={s.adrId} className={ROW}>
+              <td className={`${TD} text-zinc-900 dark:text-zinc-100`}>{s.name}</td>
+              {cells(s)}
+            </tr>
+          ))}
         <tr className={TOTAL_ROW}>
-          <td className={TD}>Team</td>
+          <td className={TD}>Team (assigned ADRs)</td>
           {cells(data.team)}
         </tr>
+        {data.speed
+          .filter((s) => s.adrId === null)
+          .map((s) => (
+            <tr key="unassigned" className="border-t-4 border-zinc-100 text-zinc-500 dark:border-zinc-900 dark:text-zinc-400">
+              <td className={TD}>Unassigned (no ADR; not in the team rate)</td>
+              {cells(s)}
+            </tr>
+          ))}
       </Table>
       <div className="mt-2">
-        <RuleNote>Green = at or above the team rate, red = below it. The median uses touched MQLs only; never-touched MQLs are counted separately.</RuleNote>
+        <RuleNote>
+          The team rate covers MQLs assigned to an ADR. Unassigned MQLs are shown on their own and aren&apos;t part of the team rate or the comparison. Green = at
+          or above the team rate, red = below it. The median uses touched MQLs only; never-touched MQLs are counted separately.
+        </RuleNote>
       </div>
     </section>
   );

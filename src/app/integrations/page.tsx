@@ -4,7 +4,8 @@ import { connection } from "next/server";
 import { headers } from "next/headers";
 import { getClaudeStatus, getHubSpotStatus, getSupabaseStatus } from "@/lib/integrations";
 import { PAGES, tabTitle } from "@/lib/pages";
-import { shortDate, usd } from "@/lib/format";
+import { modelLabel, shortDate, usd } from "@/lib/format";
+import { getLastSyncRuns, type SyncRunRow } from "@/lib/sync-runs";
 import { PageHeader } from "@/components/PageHeader";
 import { BlockSkeleton } from "@/components/Skeleton";
 import { HubSpotSyncButton } from "@/components/HubSpotSyncButton";
@@ -33,6 +34,7 @@ export default function IntegrationsPage() {
           kind="CRM"
           note="Planned: sync accounts and deals as Salesforce accounts and opportunities."
         />
+        <PlannedCard name="Gainsight" initial="G" color="bg-teal-600" kind="Customer success" note="Planned: push health scores to scorecards and renewal risk as CTAs." />
       </div>
     </main>
   );
@@ -103,7 +105,7 @@ async function ClaudeCard() {
   const c = await getClaudeStatus();
   const share = c.budgetUsd > 0 ? Math.min(1, c.spendTodayUsd / c.budgetUsd) : 0;
   return (
-    <Card name="Anthropic Claude" initial="C" color="bg-[#d97757]" kind="AI · claude-sonnet-5-5" connected={c.connected}>
+    <Card name="Anthropic Claude" initial="C" color="bg-[#d97757]" kind={`AI · ${[...new Set(c.byFeature.map((f) => modelLabel(f.model)))].join(", ") || "no calls yet"}`} connected={c.connected}>
       {c.error ? (
         <p className="text-red-700 dark:text-red-300">Can&apos;t read today&apos;s spend: {c.error}</p>
       ) : (
@@ -112,6 +114,34 @@ async function ClaudeCard() {
           <Detail label="Calls today" value={c.callsToday.toLocaleString("en-US")} />
           <Detail label="Spend to date" value={`$${c.spendToDateUsd.toFixed(2)}`} />
           <Detail label="Calls to date" value={c.callsToDate.toLocaleString("en-US")} />
+          {c.byFeature.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">By feature and model, to date</div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-zinc-500 dark:text-zinc-400">
+                    <th scope="col" className="pb-1 font-normal">Feature</th>
+                    <th scope="col" className="pb-1 font-normal">Model</th>
+                    <th scope="col" className="pb-1 text-right font-normal">Calls</th>
+                    <th scope="col" className="pb-1 text-right font-normal">Spend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {c.byFeature.map((f) => (
+                    <tr key={`${f.feature}|${f.model}`} className="border-t border-zinc-100 dark:border-zinc-800">
+                      <td className="py-1 text-zinc-900 dark:text-zinc-100">
+                        {f.label}
+                        {f.timeouts > 0 && <span className="text-zinc-500"> ({f.timeouts} timed out)</span>}
+                      </td>
+                      <td className="py-1">{modelLabel(f.model)}</td>
+                      <td className="py-1 text-right tabular-nums">{f.calls.toLocaleString("en-US")}</td>
+                      <td className="py-1 text-right tabular-nums text-zinc-900 dark:text-zinc-100">${f.costUsd.toFixed(4)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div>
             <div className="mb-1 flex justify-between text-xs">
               <span>Daily budget</span>
@@ -141,7 +171,7 @@ async function ClaudeCard() {
 
 async function HubSpotCard() {
   await connection();
-  const h = await getHubSpotStatus();
+  const [h, runs] = await Promise.all([getHubSpotStatus(), getLastSyncRuns()]);
   const canSync = h.connected && isLocalDev((await headers()).get("host"));
   return (
     <Card name="HubSpot" initial="H" color="bg-orange-500" kind="CRM" connected={h.connected}>
@@ -157,13 +187,45 @@ async function HubSpotCard() {
           <Detail label="Last checked" value={dateTime(h.checkedAt)} />
         </>
       )}
-      {/* Sync runs aren't recorded yet (sync_runs is on the BUILD_LOG.md to-do list). */}
-      <Detail label="Last sync" value="Synced manually; see BUILD_LOG.md" />
+      {runs.notice ? (
+        <p className="text-xs text-zinc-500">{runs.notice}</p>
+      ) : runs.last ? (
+        <>
+          <Detail
+            label="Last sync"
+            value={
+              <>
+                {dateTime(runs.last.finished_at)}
+                <span className="block text-xs font-normal text-zinc-500">
+                  {runs.last.status === "failed" ? "Failed" : "Succeeded"} · {runs.last.scope === "full" ? "full sync" : `one account (${runs.last.account_id})`} ·{" "}
+                  {runs.last.source === "button" ? "Sync button" : "command line"}
+                </span>
+              </>
+            }
+          />
+          {runs.last.status === "failed" ? (
+            <p className="text-xs text-red-700 dark:text-red-300">{runs.last.error}</p>
+          ) : (
+            <Detail label="Sent in that run" value={syncCounts(runs.last)} />
+          )}
+          {runs.lastFull && runs.lastFull.id !== runs.last.id && (
+            <Detail label="Last full sync" value={<>{dateTime(runs.lastFull.finished_at)}<span className="block text-xs font-normal text-zinc-500">{syncCounts(runs.lastFull)}</span></>} />
+          )}
+        </>
+      ) : (
+        <Detail label="Last sync" value="No sync recorded yet" />
+      )}
       <div className="mt-auto pt-2">
         <HubSpotSyncButton available={canSync} unavailableNote={h.connected ? LOCAL_ONLY_NOTE : "HubSpot isn't connected"} />
       </div>
     </Card>
   );
+}
+
+/** "190 companies (0 new), 207 deals (0 new), 81 contacts (0 new)" */
+function syncCounts(r: SyncRunRow): string {
+  const part = (n: number, created: number, what: string) => `${n.toLocaleString("en-US")} ${what} (${created} new)`;
+  return `${part(r.companies_synced, r.companies_created, "companies")}, ${part(r.deals_synced, r.deals_created, "deals")}, ${part(r.contacts_synced, r.contacts_created, "contacts")}`;
 }
 
 function PlannedCard({ name, initial, color, kind, note }: { name: string; initial: string; color: string; kind: string; note: string }) {

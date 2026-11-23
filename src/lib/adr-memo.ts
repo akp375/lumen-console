@@ -34,6 +34,12 @@ Rules:
   summary, describe it in words.
 - Write dates only as they appear in the summary.
 - Recommend; don't restate the data. Every finding must lead to an action.
+- Never recommend moving contacts from a high-bounce list (any sequence with bounce_alert) into
+  another sequence: that spreads bad addresses and hurts sender reputation for the good sequences.
+  The right action is to pause the sequence, remove the bounced addresses and verify the rest
+  before re-enrolling anyone.
+- Leads with no ADR are counted by the territory they are in. Write them as "in [name]'s
+  territory", never as that ADR's leads. Only owned_by_adr counts are an ADR's own.
 - Name only people in the summary. Don't invent contacts, events, tools or causes. If a cause is a
   reasonable guess rather than shown by the data, say "likely".
 - Leads move through New, Engaged, MQL, Sales accepted, Sales qualified and Meeting booked, then

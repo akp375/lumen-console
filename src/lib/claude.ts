@@ -85,7 +85,41 @@ async function sumCalls(sinceIso?: string): Promise<{ costUsd: number; calls: nu
   return { costUsd, calls };
 }
 
-async function logCall(row: { feature: string; model: string; input_tokens: number; output_tokens: number; cost_usd: number; latency_ms: number }) {
+/** What each llm_calls feature is, as users read it. Timed-out calls ("<feature>:timeout") count under their feature. */
+export const FEATURE_LABELS: Record<string, string> = {
+  topic_tagging: "Topic tagging",
+  adr_memo: "ADR memo",
+  renewal_risk: "Flag reasons: Renewals",
+  deal_risk: "Flag reasons: Deal Risk",
+  workspace: "Workspace chat",
+};
+
+export type FeatureSpendRow = { feature: string; label: string; model: string; calls: number; costUsd: number; timeouts: number };
+
+/** All-time spend and calls per feature and model (real API spend), most expensive first. */
+export async function getSpendByFeature(): Promise<FeatureSpendRow[]> {
+  const PAGE = 1000; // read in pages, like sumCalls
+  const rows = new Map<string, FeatureSpendRow>();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db().from("llm_calls").select("feature, model, cost_usd").order("id").range(from, from + PAGE - 1);
+    if (error) throw new Error(`Reading llm_calls failed: ${error.message}`);
+    for (const r of data ?? []) {
+      const raw = String(r.feature);
+      const feature = raw.endsWith(":timeout") ? raw.slice(0, -":timeout".length) : raw;
+      const model = String(r.model);
+      const key = `${feature}|${model}`;
+      const row = rows.get(key) ?? { feature, label: FEATURE_LABELS[feature] ?? feature, model, calls: 0, costUsd: 0, timeouts: 0 };
+      row.calls++;
+      row.costUsd += Number(r.cost_usd ?? 0);
+      if (raw !== feature) row.timeouts++;
+      rows.set(key, row);
+    }
+    if ((data ?? []).length < PAGE) break;
+  }
+  return [...rows.values()].sort((a, b) => b.costUsd - a.costUsd || a.label.localeCompare(b.label));
+}
+
+async function logCall(row:{ feature: string; model: string; input_tokens: number; output_tokens: number; cost_usd: number; latency_ms: number }) {
   const { error } = await db().from("llm_calls").insert(row);
   if (error) console.error(`Logging to llm_calls failed: ${error.message}`);
 }

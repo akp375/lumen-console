@@ -76,7 +76,8 @@ async function HygieneContent({ searchParams }: Props) {
           Unassigned = an open lead at New, Engaged or MQL with no ADR. SLA breach = an MQL not touched within {R.slaHours} hours; the list shows MQLs still
           untouched, and the rate covers MQLs from the last {R.slaBreachRateDays} days whose {R.slaHours} hours are up. Stale = a deal at {QUALIFYING} ({QUALIFYING_DESCRIPTION}) with no update
           for {R.staleStage01Days}+ days. Handoff leak = a lead at Sales qualified for {R.handoffGraceDays}+ days with no meeting booked with an AE. Pairing mismatch = an open deal created
-          on or after the pairing date whose ADR isn&apos;t paired with its AE. Account tags cover prospects and customers. The ADR filter uses each lead&apos;s
+          on or after the pairing date whose ADR isn&apos;t paired with its AE. Leads in sequences with no owner = open leads (not Converted,
+          Disqualified or Nurture) enrolled in a sequence with no ADR; how long = since the first enrollment. Account tags cover prospects and customers. The ADR filter uses each lead&apos;s
           ADR (or, if unassigned, the ADR who covers its territory), each deal&apos;s ADR, and for accounts the ADR paired with the account owner.
         </RuleNote>
       </div>
@@ -116,6 +117,11 @@ function CheckCard({ check }: { check: AdrHygieneCheck }) {
         <span className="min-w-0 flex-1">
           <span className="block font-medium text-zinc-900 dark:text-zinc-50">{check.title}</span>
           <span className="block text-sm text-zinc-500 dark:text-zinc-400">{check.why}</span>
+          {!check.inTotal && (
+            <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">
+              Not added to the total: these leads are also unassigned leads, which the total already counts.
+            </span>
+          )}
         </span>
         {check.count > 0 && (
           <span className="mt-1 shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
