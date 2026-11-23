@@ -476,3 +476,10 @@ The live results table in section 1 shows the figures from before this fix. Over
 
 **Still open.** Sync runs aren't recorded (`sync_runs` is still parked), so the HubSpot card keeps saying "Synced manually; see BUILD_LOG.md", and the button's result disappears on reload.
 
+
+### Navigation in four sections
+
+- **Overview**, **Pipeline** (Deal Risk; ADR hygiene and ADR insights will join it, and anything top of funnel), **Customer Success** (Health and Renewals; Consumption will join it) and **Integrations**. Pipeline and Customer Success have a row of sub-tabs.
+- **New addresses:** `/pipeline/deal-risk`, `/customer-success/health`, `/customer-success/renewals`. The old ones (`/deal-risk`, `/health`, `/renewals`) redirect there, keeping anything after the `?`; `/pipeline` and `/customer-success` open their first page. Redirects are temporary (307) while the nav is still changing.
+- **Workspace** is out of the nav, but `/workspace` still works.
+- One list in `src/lib/pages.ts` drives the nav, the sub-tabs and the redirects.

@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ACCOUNT_LINK } from "@/lib/ui";
 import type { MissingRenewalDealRow, RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
-import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/renewals/actions";
+import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/customer-success/renewals/actions";
 import { pct, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
 import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";

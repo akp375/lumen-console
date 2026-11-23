@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { DealRiskResult, DealRiskRow, UpcomingDealRow, UpcomingDealsQuarter } from "@/lib/metrics";
-import { explainDealRisk, flagDealRisk, type AiNote } from "@/app/deal-risk/actions";
+import { explainDealRisk, flagDealRisk, type AiNote } from "@/app/pipeline/deal-risk/actions";
 import { pct, shortDate, usd, usdCompact } from "@/lib/format";
 import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";
