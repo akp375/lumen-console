@@ -1,6 +1,6 @@
 {
   "asOf": "2026-11-13",
-  "takenAt": "2026-11-23T02:26:02.073Z",
+  "takenAt": "2026-11-23T16:34:03.940Z",
   "tables": {
     "accounts": {
       "rows": 190,
@@ -39,8 +39,8 @@
       "fingerprint": "0a0820a809ea"
     },
     "team": {
-      "rows": 15,
-      "fingerprint": "f4337162a2e9"
+      "rows": 16,
+      "fingerprint": "5ffa8ee62963"
     },
     "health_scores": {
       "rows": 900,

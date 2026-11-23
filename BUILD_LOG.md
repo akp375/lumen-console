@@ -586,4 +586,4 @@ The live results table in section 1 shows the figures from before this fix. Over
 
 **Open items.**
 - **Production build:** `next build` couldn't run in Claude's sandbox, because it can't download the Google font. Type-check and tests pass.
-- **Reconciliation snapshot:** `reconciliation/adr-before.json` still holds the 15-row team, so `adr:check` will keep reporting the `team` line until the snapshot is saved again.
+- ~~**Reconciliation snapshot:** `reconciliation/adr-before.json` still holds the 15-row team.~~ **Resolved 23 Nov:** saved again with `npm run adr:check -- --save-before` (team: 16 rows, `5ffa8ee62963`; nothing else changed), and `npm run adr:check` now passes with nothing changed.
