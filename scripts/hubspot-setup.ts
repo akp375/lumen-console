@@ -14,7 +14,7 @@ const PIPELINES_FILE = new URL("../hubspot/pipelines.json", import.meta.url);
 const DRY_RUN = process.argv.includes("--dry-run");
 
 type Spec = {
-  object: "companies" | "deals";
+  object: "companies" | "deals" | "contacts";
   label: string;
   name: string | null;
   madeByHand?: boolean;

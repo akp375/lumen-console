@@ -1,13 +1,15 @@
-// Syncs Supabase -> HubSpot: companies, deals (with their company), one made-up contact per prospect, and a
-// contact for each enterprise / mid-market customer's executive sponsor (current or former).
+// Syncs Supabase -> HubSpot: companies, deals (with their company), one made-up contact per prospect, a
+// contact for each enterprise / mid-market customer's executive sponsor (current or former), and a contact
+// for each ADR lead (matched on email first, then lumen_lead_id; never duplicated).
 // Shared by `npm run hubspot:sync` and the "Sync to HubSpot" button on the Integrations page. Server-side only.
 // All numbers come from metrics.ts (getCrmSyncData); mapping rules live in hubspot-sync.ts.
 // Records are matched on lumen_account_id / lumen_opportunity_id / email, so re-runs update instead of duplicating.
 // Never deletes anything in HubSpot. Stops at the first HubSpot error.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getCrmSyncData, type CrmAccountRow, type CrmDealRow } from "./metrics.ts";
+import { getCrmSyncData, getLeadCrmRows, type CrmAccountRow, type CrmDealRow, type LeadCrmRow } from "./metrics.ts";
 import { hubspot } from "./hubspot.ts";
+import { LEAD_STAGE_LABELS } from "./format.ts";
 import { recordSyncRun } from "./sync-runs.ts";
 import {
   checkbox,
@@ -18,7 +20,12 @@ import {
   FORECAST_TO_HUBSPOT_LABEL,
   isBackwardLifecycleMove,
   lifecycleLabel,
+  leadFlagProperties,
+  leadSourceLabel,
   multiSelect,
+  pickTestLead,
+  planLeadContacts,
+  type ExistingContact,
   optionValue,
   pickTestAccount,
   reasonsText,
@@ -33,6 +40,8 @@ export type SyncOptions = {
   /** Sync one customer and its deals: this account ID, or (with one: true) the default test account. */
   accountId?: string;
   one?: boolean;
+  /** With one / accountId: the lead to sync (default: pickTestLead). */
+  leadId?: string;
   /** Called with a short line at each step. */
   onProgress?: (line: string) => void;
   /** Where the run started, for the sync_runs record. Defaults to "cli". */
@@ -47,12 +56,15 @@ export type SyncResult = {
   scope: { kind: "all" } | { kind: "one"; accountId: string; name: string; hubspotId: string | null };
   companies: SyncCount;
   deals: SyncCount;
+  /** Prospect and sponsor contacts. */
   contacts: SyncCount;
+  /** ADR leads, as contacts. */
+  leads: SyncCount;
   lifecycleCleared: number;
   /** Qualifying deals left out (they aren't in HubSpot's pipelines). */
   dealsLeftOut: number;
   /** Dry runs only: the first record of each kind, as it would be sent. */
-  samples?: { company?: Props; deal?: Props; contact?: Props; sponsorContact?: Props; dealsPerPipeline: Record<string, number> };
+  samples?: { company?: Props; deal?: Props; contact?: Props; sponsorContact?: Props; leadContact?: Props; dealsPerPipeline: Record<string, number> };
 };
 
 const BATCH = 100; // HubSpot batch endpoints take up to 100 records per call
@@ -146,8 +158,8 @@ export async function runHubSpotSync(opts: SyncOptions = {}): Promise<SyncResult
         companies_created: r.companies.created,
         deals_synced: r.deals.synced,
         deals_created: r.deals.created,
-        contacts_synced: r.contacts.synced,
-        contacts_created: r.contacts.created,
+        contacts_synced: r.contacts.synced + r.leads.synced,
+        contacts_created: r.contacts.created + r.leads.created,
         deals_left_out: r.dealsLeftOut,
         error: null,
       });
@@ -178,7 +190,7 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   say("Reading Cockpit data…");
   const all = await getCrmSyncData();
   // Stage 0.1 deals ("meeting booked, qualifying") aren't in HubSpot's pipelines yet, so they stay out of the sync
-  // (owner's decision, 23 Nov 2026). Leads and sequences aren't synced either.
+  // (owner's decision, 23 Nov 2026). Sequences aren't synced.
   const skipped = all.deals.filter((d) => d.stage === STAGE_01).length;
   all.deals = all.deals.filter((d) => d.stage !== STAGE_01);
   let accounts: CrmAccountRow[] = all.accounts;
@@ -194,6 +206,17 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     say(`One account: ${single.name} (${single.accountId}), ${deals.length} deal(s).`);
   }
   const prospects = single ? [] : accounts.filter((a) => a.status === "prospect");
+
+  // ADR leads: all of them, or (one-account runs) a single test lead.
+  const allLeads = await getLeadCrmRows();
+  let leads: LeadCrmRow[] = allLeads;
+  if (single) {
+    const lead = opts.leadId ? (allLeads.find((l) => l.leadId === opts.leadId) ?? fail(`No lead with ID "${opts.leadId}".`)) : (pickTestLead(allLeads) ?? fail("No leads to test with."));
+    leads = [lead];
+    say(`One lead: ${lead.contactName} (${lead.leadId}) at ${lead.accountName}.`);
+  } else if (opts.leadId) fail("--lead only works with --one or --account.");
+  const noEmail = leads.find((l) => !l.email);
+  if (noEmail) fail(`Lead ${noEmail.leadId} has no email. Stopping before anything is sent.`);
 
   // 2. Read HubSpot's setup: pipelines, stages and dropdown options. Stop on anything missing.
   say("Checking HubSpot pipelines and dropdown options…");
@@ -219,6 +242,10 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     optionsOf("companies", "lumen_products_owned"),
     optionsOf("contacts", "lumen_role"),
   ]);
+  // The Lead dropdowns must exist (npm run hubspot:setup creates them).
+  const [leadStageOpts, leadSourceOpts] = leads.length
+    ? await Promise.all([optionsOf("contacts", "lumen_lead_stage").catch(() => fail("HubSpot has no Lead stage property. Run npm run hubspot:setup.")), optionsOf("contacts", "lumen_lead_source").catch(() => fail("HubSpot has no Lead source property. Run npm run hubspot:setup."))])
+    : [new Map<string, string>(), new Map<string, string>()];
   for (const label of Object.values(FORECAST_TO_HUBSPOT_LABEL)) valueFor(forecastOpts, label, "Forecast category");
 
   // 3. Companies
@@ -303,10 +330,35 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   if (dupe) fail(`Two contacts would share the email ${dupe}. Stopping before anything is sent.`);
   const contactInputs = contactList.map((c) => c.input);
 
+  // 6. Leads: find each one's HubSpot contact (email first, then lumen_lead_id), so nothing is duplicated.
+  for (const l of leads) {
+    ownOption(leadStageOpts, LEAD_STAGE_LABELS[l.leadStage] ?? l.leadStage, "Lead stage");
+    ownOption(leadSourceOpts, leadSourceLabel(l.leadSource), "Lead source");
+  }
+  say(leads.length ? `Looking up ${leads.length} lead(s) in HubSpot…` : "No leads to sync.");
+  const byEmail = await readContacts("email", leads.map((l) => l.email.toLowerCase()));
+  const byLeadId = await readContacts("lumen_lead_id", leads.map((l) => l.leadId));
+  const leadPlans = planLeadContacts(leads, byEmail, byLeadId);
+  // A lead whose email is also a prospect or sponsor contact in this run: one contact, with the Lead fields added.
+  const contactByEmail = new Map(contactInputs.map((i) => [i.id.toLowerCase(), i]));
+  const leadUpserts: Input[] = [];
+  const leadUpdates: { leadId: string; id: string; properties: Props }[] = [];
+  let merged = 0;
+  for (const p of leadPlans) {
+    if (p.kind === "update") leadUpdates.push({ leadId: p.leadId, id: p.hubspotId, properties: p.properties });
+    else if (contactByEmail.has(p.email)) {
+      const lead = leads.find((l) => l.leadId === p.leadId)!;
+      Object.assign(contactByEmail.get(p.email)!.properties, planLeadContacts([lead], new Map([[p.email, { id: "", email: p.email, leadId: null, lifecyclestage: null }]]), new Map())[0].properties);
+      merged++;
+    } else leadUpserts.push({ idProperty: "email", id: p.email, properties: p.properties });
+  }
+  const leadMatched = leadPlans.filter((p) => p.existing).length;
+  if (leads.length) say(`Leads: ${leadMatched} already in HubSpot, ${leads.length - leadMatched} to create${merged ? `, ${merged} merged with a prospect or sponsor contact` : ""}.`);
+
   if (skipped) say(`Left out: ${skipped} Qualifying deal(s), which aren't in HubSpot's pipelines.`);
   say(
     `To sync: ${companyInputs.length} companies, ${dealInputs.length} deals, ${contactInputs.length} contacts ` +
-      `(${prospects.length} prospect, ${sponsors.length} executive sponsor).`,
+      `(${prospects.length} prospect, ${sponsors.length} executive sponsor), ${leads.length} lead contact(s).`,
   );
   const scope: SyncResult["scope"] = single ? { kind: "one", accountId: single.accountId, name: single.name, hubspotId: null } : { kind: "all" };
 
@@ -323,13 +375,21 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       companies: { ...NONE, synced: companyInputs.length },
       deals: { ...NONE, synced: dealInputs.length },
       contacts: { ...NONE, synced: contactInputs.length },
+      leads: { ...NONE, synced: leads.length, created: leads.length - leadMatched, updated: leadMatched },
       lifecycleCleared: 0,
       dealsLeftOut: skipped,
-      samples: { company: companyInputs[0]?.properties, deal: dealInputs[0]?.properties, contact: contactInputs[0]?.properties, sponsorContact: contactList.find((c) => c.input.properties.lumen_role)?.input.properties, dealsPerPipeline },
+      samples: {
+        company: companyInputs[0]?.properties,
+        deal: dealInputs[0]?.properties,
+        contact: contactInputs[0]?.properties,
+        sponsorContact: contactList.find((c) => c.input.properties.lumen_role)?.input.properties,
+        leadContact: leadUpserts[0]?.properties ?? leadUpdates[0]?.properties,
+        dealsPerPipeline,
+      },
     };
   }
 
-  // 6. Lifecycle stages can't move backwards in HubSpot: clear those first.
+  // 7. Lifecycle stages can't move backwards in HubSpot: clear those first (companies and lead contacts).
   say("Checking lifecycle stages…");
   const existing = new Map<string, { id: string; lifecyclestage?: string }>();
   for (const part of chunks(companyInputs)) {
@@ -348,8 +408,14 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     checkBatch("lifecycle clear", r);
   }
   if (toClear.length) say(`Cleared lifecycle stage on ${toClear.length} compan${toClear.length === 1 ? "y" : "ies"} moving backwards.`);
+  const contactsToClear = leadPlans.filter((p) => p.existing && isBackwardLifecycleMove(p.existing.lifecyclestage, p.properties.lifecyclestage)).map((p) => p.existing!.id);
+  for (const part of chunks(contactsToClear)) {
+    const r = await hubspot<BatchResult>("POST", "/crm/v3/objects/contacts/batch/update", { inputs: part.map((id) => ({ id, properties: { lifecyclestage: "" } })) });
+    checkBatch("contact lifecycle clear", r);
+  }
+  if (contactsToClear.length) say(`Cleared lifecycle stage on ${contactsToClear.length} lead contact(s) moving backwards.`);
 
-  // 7. Write: companies, deals, deal → company, contacts, contact → company
+  // 8. Write: companies, deals, deal → company, contacts, contact → company, leads, lead → company
   say(`Sending ${companyInputs.length} companies…`);
   const companyIds = await upsert("companies", companyInputs);
   const companies = count(companyIds);
@@ -367,9 +433,11 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   say(`Deals attached to their companies: ${deals.length}.`);
 
   let contacts = NONE;
+  const contactIdsByEmail = new Map<string, string>();
   if (contactInputs.length) {
     say(`Sending ${contactInputs.length} contacts…`);
     const contactIds = await upsert("contacts", contactInputs);
+    for (const [email, v] of contactIds) contactIdsByEmail.set(email.toLowerCase(), v.id);
     contacts = count(contactIds);
     say(`Contacts: ${contacts.synced} synced (${contacts.created} new, ${contacts.updated} updated).`);
     await associate(
@@ -380,7 +448,81 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     say(`Contacts attached to their companies: ${contactList.length}.`);
   }
 
+  let leadCount = NONE;
+  if (leads.length) {
+    say(`Sending ${leads.length} lead contact(s)…`);
+    const upserted = leadUpserts.length ? await upsert("contacts", leadUpserts) : new Map<string, { id: string; isNew: boolean }>();
+    for (const part of chunks(leadUpdates)) {
+      const r = await hubspot<BatchResult>("POST", "/crm/v3/objects/contacts/batch/update", { inputs: part.map((u) => ({ id: u.id, properties: u.properties })) });
+      checkBatch("lead contacts update", r);
+    }
+    // Every lead's contact id: from this run's upserts, its update, or the prospect/sponsor contact it was merged into.
+    const contactIdOf = (p: (typeof leadPlans)[number]) =>
+      p.kind === "update" ? p.hubspotId : (upserted.get(p.email)?.id ?? contactIdsByEmail.get(p.email) ?? fail(`No HubSpot contact id for lead ${p.leadId}.`));
+    const created = leadPlans.filter((p) => p.kind === "upsert" && upserted.get(p.email)?.isNew).length;
+    leadCount = { synced: leads.length, created, updated: leads.length - created };
+    say(`Lead contacts: ${leadCount.synced} synced (${leadCount.created} new, ${leadCount.updated} updated).`);
+    // Companies this run didn't send (one-lead runs) are looked up by their Lumen id.
+    const needCompanies = [...new Set(leads.map((l) => l.accountId).filter((id) => !companyIds.has(id)))];
+    const otherCompanies = await readIds("companies", "lumen_account_id", needCompanies);
+    await associate(
+      "contacts",
+      "companies",
+      leadPlans.map((p) => {
+        const accountId = leads.find((l) => l.leadId === p.leadId)!.accountId;
+        return { from: contactIdOf(p), to: companyIds.get(accountId)?.id ?? otherCompanies.get(accountId) ?? fail(`Company ${accountId} for lead ${p.leadId} isn't in HubSpot. Run the full sync.`) };
+      }),
+    );
+    say(`Lead contacts attached to their companies: ${leads.length}.`);
+  }
+
   if (scope.kind === "one") scope.hubspotId = companyIds.get(scope.accountId)?.id ?? null;
   say("Sync finished.");
-  return { dryRun, scope, companies, deals: dealCount, contacts, lifecycleCleared: toClear.length, dealsLeftOut: skipped };
+  return { dryRun, scope, companies, deals: dealCount, contacts, leads: leadCount, lifecycleCleared: toClear.length + contactsToClear.length, dealsLeftOut: skipped };
+}
+
+/** Reads contacts by email or lumen_lead_id. Returns the ones that exist, keyed by that value (emails lower-cased). */
+async function readContacts(idProperty: "email" | "lumen_lead_id", values: string[]): Promise<Map<string, ExistingContact>> {
+  const out = new Map<string, ExistingContact>();
+  for (const part of chunks(values)) {
+    // Missing records come back as errors in the response; that's expected here.
+    const r = await hubspot<BatchResult>("POST", "/crm/v3/objects/contacts/batch/read", {
+      idProperty,
+      properties: ["email", "lumen_lead_id", "lifecyclestage"],
+      inputs: part.map((id) => ({ id })),
+    });
+    for (const res of r.results) {
+      const c: ExistingContact = { id: res.id, email: (res.properties.email ?? "").toLowerCase(), leadId: res.properties.lumen_lead_id || null, lifecyclestage: res.properties.lifecyclestage || null };
+      const key = idProperty === "email" ? c.email : c.leadId;
+      if (key) out.set(key, c);
+    }
+  }
+  return out;
+}
+
+/** HubSpot ids of records, by one of our unique properties. Missing ones are left out. */
+async function readIds(object: string, idProperty: string, values: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const part of chunks(values)) {
+    const r = await hubspot<BatchResult>("POST", `/crm/v3/objects/${object}/batch/read`, { idProperty, properties: [idProperty], inputs: part.map((id) => ({ id })) });
+    for (const res of r.results) if (res.properties[idProperty]) out.set(res.properties[idProperty], res.id);
+  }
+  return out;
+}
+
+/**
+ * Updates ADR owner, MQL past SLA and Unassigned on these leads' HubSpot contacts (matched on lumen_lead_id),
+ * from lib/metrics.ts. Used when a Pipeline agent reassignment is approved or reverted. Never creates contacts.
+ */
+export async function updateLeadOwnership(leadIds: string[]): Promise<{ updated: number; notInHubSpot: string[] }> {
+  if (leadIds.length === 0) return { updated: 0, notInHubSpot: [] };
+  const rows = await getLeadCrmRows(leadIds);
+  const found = await readIds("contacts", "lumen_lead_id", rows.map((r) => r.leadId));
+  const notInHubSpot = rows.filter((r) => !found.has(r.leadId)).map((r) => r.leadId);
+  const present = rows.filter((r) => found.has(r.leadId));
+  for (const part of chunks(present)) {
+    const r = await hubspot<BatchResult>("POST", "/crm/v3/objects/contacts/batch/update", { inputs: part.map((row) => ({ id: found.get(row.leadId)!, properties: leadFlagProperties(row) })) });
+    checkBatch("lead ownership update", r);
+  }
+  return { updated: present.length, notInHubSpot };
 }

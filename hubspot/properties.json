@@ -59,6 +59,29 @@
     },
     { "object": "deals", "label": "ADR name", "name": "lumen_adr_name", "type": "string", "fieldType": "text" },
     { "object": "deals", "label": "CSM name", "name": "lumen_csm_name", "type": "string", "fieldType": "text" },
-    { "object": "contacts", "label": "Lumen role", "name": "lumen_role", "type": "enumeration", "fieldType": "select", "options": ["Executive sponsor", "Former sponsor"] }
+    { "object": "contacts", "label": "Lumen role", "name": "lumen_role", "type": "enumeration", "fieldType": "select", "options": ["Executive sponsor", "Former sponsor"] },
+    { "object": "contacts", "label": "Lumen lead ID", "name": "lumen_lead_id", "unique": true, "type": "string", "fieldType": "text" },
+    {
+      "object": "contacts",
+      "label": "Lead stage",
+      "name": "lumen_lead_stage",
+      "type": "enumeration",
+      "fieldType": "select",
+      "options": ["New", "Engaged", "MQL", "Sales accepted", "Sales qualified", "Meeting booked", "Converted", "Disqualified", "Nurture"]
+    },
+    {
+      "object": "contacts",
+      "label": "Lead source",
+      "name": "lumen_lead_source",
+      "type": "enumeration",
+      "fieldType": "select",
+      "options": ["Inbound demo request", "Content download", "Webinar", "Outbound", "Partner", "Event"]
+    },
+    { "object": "contacts", "label": "ADR owner", "name": "lumen_adr_owner", "type": "string", "fieldType": "text" },
+    { "object": "contacts", "label": "MQL date", "name": "lumen_mql_date", "type": "datetime", "fieldType": "date" },
+    { "object": "contacts", "label": "First touch date", "name": "lumen_first_touch_date", "type": "datetime", "fieldType": "date" },
+    { "object": "contacts", "label": "Disqualify reason", "name": "lumen_disqualify_reason", "type": "string", "fieldType": "text" },
+    { "object": "contacts", "label": "MQL past SLA", "name": "lumen_mql_past_sla", "type": "enumeration", "fieldType": "booleancheckbox", "options": ["Yes", "No"] },
+    { "object": "contacts", "label": "Unassigned", "name": "lumen_unassigned", "type": "enumeration", "fieldType": "booleancheckbox", "options": ["Yes", "No"] }
   ]
 }

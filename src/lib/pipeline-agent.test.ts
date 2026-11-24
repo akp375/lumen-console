@@ -271,8 +271,10 @@ test("MQLs past the SLA: the memo, the agent's list, its capacity and its hygien
 // --- Approve, reject, revert --------------------------------------------------------
 
 /** An in-memory ActionDb that counts every write. */
-function fakeActionDb(actions: AgentActionView[], inputs = makeInputs()) {
+function fakeActionDb(actions: AgentActionView[], inputs = makeInputs(), opts: { hubspotDown?: boolean } = {}) {
   const writes: string[] = [];
+  /** Lead ids sent to HubSpot's contact update, per call. */
+  const hubspotLeadUpdates: string[][] = [];
   const leads = new Map(inputs.leads.map((l) => [l.id, l.assigned_adr_id]));
   const enrollments = new Map([["en1", { lead: "L1", adr: "d1" as string | null }], ["en2", { lead: "L2", adr: "d1" as string | null }]]);
   const sequences = new Map(inputs.sequences.map((s) => [s.id, s.status ?? "active"]));
@@ -306,9 +308,14 @@ function fakeActionDb(actions: AgentActionView[], inputs = makeInputs()) {
       writes.push(`hubspot:${t.recordId}`);
       return { taskId: "hs_task_1", hubspotRecordId: "hs_co_1" };
     },
+    updateLeadContacts: async (ids) => {
+      if (opts.hubspotDown) throw new Error("Couldn't reach HubSpot");
+      hubspotLeadUpdates.push([...ids]);
+      return { updated: ids.length, notInHubSpot: [] };
+    },
     doneActions: async () => [...byId.values()].filter((a) => a.status === "approved" && a.outcome === "done").reverse(),
   };
-  return { db, writes, leads, enrollments, sequences, byId };
+  return { db, writes, leads, enrollments, sequences, byId, hubspotLeadUpdates };
 }
 
 /** The real date plus some days: approval checks due dates against the real calendar. */
@@ -376,6 +383,32 @@ test("Approve: a task whose due date has passed (real calendar) creates nothing"
     assert.match(String(r.action.result!.error), /due date .* has passed/);
   }
   assert.deepEqual(f.writes, []);
+});
+
+test("Approve: a reassignment updates the leads' HubSpot contacts and records the result; revert sends them back", async () => {
+  const f = fakeActionDb([REASSIGN]);
+  assert.ok((await approveAction(f.db, "act1", "m1", "23 Nov 2026")).ok);
+  assert.deepEqual(f.hubspotLeadUpdates, [["L1", "L2"]]);
+  assert.deepEqual(f.byId.get("act1")!.result!.hubspot, { updated: 2, not_in_hubspot: [] });
+  await revertApprovedActions(f.db);
+  assert.deepEqual(f.hubspotLeadUpdates, [["L1", "L2"], ["L1", "L2"]]);
+  assert.deepEqual(f.byId.get("act1")!.result!.hubspot_revert, { updated: 2, not_in_hubspot: [] });
+});
+
+test("Approve: if HubSpot is down, the reassignment in Cockpit stands and the HubSpot error is recorded", async () => {
+  const f = fakeActionDb([REASSIGN], makeInputs(), { hubspotDown: true });
+  const r = await approveAction(f.db, "act1", "m1", "23 Nov 2026");
+  assert.ok(r.ok);
+  assert.equal(f.leads.get("L1"), "d2");
+  assert.equal(f.byId.get("act1")!.outcome, "done");
+  assert.deepEqual(f.byId.get("act1")!.result!.hubspot, { error: "Couldn't reach HubSpot" });
+});
+
+test("Reject and other actions never touch HubSpot contacts", async () => {
+  const f = fakeActionDb([REASSIGN, PAUSE]);
+  await rejectAction(f.db, "act1", "m1");
+  await approveAction(f.db, "act2", "m1", "23 Nov 2026");
+  assert.deepEqual(f.hubspotLeadUpdates, []);
 });
 
 test("Approve: if a lead changed hands since the proposal, nothing changes and the card says why", async () => {

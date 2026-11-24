@@ -339,7 +339,16 @@ function StatusBadge({ action: a }: { action: AgentActionView }) {
 }
 
 function doneNote(a: AgentActionView): string {
-  if (a.type === "reassign_leads") return `${(a.details as ReassignDetails).leads.length} lead(s) now owned by ${(a.details as ReassignDetails).to_adr}.`;
+  if (a.type === "reassign_leads") {
+    const d = a.details as ReassignDetails;
+    const hs = a.result?.hubspot as { updated?: number; not_in_hubspot?: string[]; error?: string } | undefined;
+    const hubspot = !hs
+      ? ""
+      : hs.error
+        ? ` Saved in Cockpit; HubSpot not updated: ${hs.error} The next sync will fix it.`
+        : ` HubSpot: ${hs.updated} contact(s) updated${hs.not_in_hubspot?.length ? `, ${hs.not_in_hubspot.length} not in HubSpot yet (the next sync adds them)` : ""}.`;
+    return `${d.leads.length} lead(s) now owned by ${d.to_adr}.${hubspot}`;
+  }
   if (a.type === "pause_sequence") return `${(a.details as PauseDetails).sequence} is paused.`;
   return `HubSpot task created (id ${String(a.result?.hubspot_task_id ?? "?")}).`;
 }

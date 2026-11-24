@@ -1,5 +1,6 @@
 // npm run agent:reset: undoes the Pipeline agent's approved actions so a demo can be rehearsed again.
 //   - Reassigned leads go back to their previous ADR (and their sequence enrollments with them).
+//   - Those leads' HubSpot contacts get their ADR owner and Unassigned / MQL past SLA flags back.
 //   - Paused sequences go back to active.
 //   - Those actions are marked "reverted" (the decision log stays: who approved, when).
 // Left alone: rejected and waiting proposals, HubSpot tasks (they stay in HubSpot and stay "done"),
@@ -16,6 +17,7 @@ const noWrites: ActionDb = {
   setLeadOwner: async () => {},
   setEnrollmentAdr: async () => {},
   setSequenceStatus: async () => {},
+  updateLeadContacts: async (ids) => ({ updated: ids.length, notInHubSpot: [] }),
   createHubSpotTask: async () => {
     throw new Error("agent:reset never creates HubSpot tasks");
   },

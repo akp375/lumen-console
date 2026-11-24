@@ -823,3 +823,73 @@ Both snapshots are in `reconciliation/adr-numbers-before-lifecycle.json` and `re
   - a past-due task
   - revert keeping HubSpot tasks
   - the shared SLA definition
+
+### ADR leads synced to HubSpot as contacts
+
+**Why.** Lead ownership now lives where the team works. Every ADR lead is a HubSpot contact, with its stage, source, ADR owner and the two hygiene flags.
+
+**Properties.** Nine new contact properties in the Lumen Console group, created by `npm run hubspot:setup` and defined in `hubspot/properties.json`:
+- **Lumen lead ID:** unique; the sync matches on it.
+- **Lead stage:** a dropdown with the 9 stages.
+- **Lead source:** a dropdown with the 6 sources.
+- **ADR owner:** text, blank when the lead has no ADR.
+- **MQL date** and **First touch date:** date and time, because the SLA is 24 hours.
+- **Disqualify reason.**
+- **MQL past SLA** and **Unassigned:** checkboxes using the hygiene cards' own definitions, from `calcLeadCrmRows` in `lib/metrics.ts`. Today 29 and 24 are ticked, matching the cards. The 21 leads with no ADR that have already ended are not ticked as Unassigned.
+
+**Lifecycle stage** (HubSpot's built-in, checked as writable first):
+
+| Lead stage | Lifecycle stage |
+|---|---|
+| New, Engaged | Lead |
+| MQL, Sales accepted | MQL |
+| Sales qualified, Meeting booked | SQL |
+| Converted | Opportunity |
+| Disqualified, Nurture | The furthest stage reached before ending |
+
+- Moves backward are cleared first, as for companies.
+- **HubSpot's "Lead status" isn't touched,** because it's work state HubSpot owns.
+
+**No duplicates.**
+- **Order of matching:** email first, then `lumen_lead_id`, else create (`planLeadContacts` in `hubspot-sync.ts`).
+- **A lead whose email belongs to a prospect or sponsor contact:** the contact only gets the Lead fields, and its name, title and role are kept. Today 0 leads overlap.
+- **Each lead contact is linked to its company.**
+
+**Sync.**
+- **What's included:** leads are part of `npm run hubspot:sync` and the Sync button. The button shows a "Lead contacts" line, and `sync_runs` counts them in contacts.
+- **`--one`:** also syncs one test lead, by default the first MQL past the SLA that an ADR owns (lead_0044). `--lead <id>` picks another.
+
+**Pipeline agent.**
+- **On approval:** a reassignment also sends ADR owner, MQL past SLA and Unassigned (recalculated from `lib/metrics.ts`) to those leads' contacts, matched on `lumen_lead_id`. The HubSpot result is saved on the action.
+- **If HubSpot fails:** the reassignment in Cockpit stands, the error is saved, and the card says the next sync will fix it.
+- **`npm run agent:reset`:** sends the reverted values to HubSpot too and records that result.
+
+**Run on 23 Nov.**
+- `hubspot:setup` created the 9 properties.
+- `hubspot:sync -- --one` created Mila Takahashi (lead_0044, Tidewater Health). The owner checked it in HubSpot.
+- **Full sync, 26 seconds, no errors:**
+  - 190 companies, 207 deals and 81 contacts, all updated.
+  - 600 lead contacts: 599 new, plus Mila updated.
+- **HubSpot now has 683 contacts:**
+  - 600 leads
+  - 30 prospect contacts
+  - 51 executive sponsors
+  - HubSpot's 2 sample contacts
+- **No duplicates:** 683 distinct emails and 600 distinct lead ids.
+- **Lead lifecycle stages:**
+  - Lead: 264
+  - MQL: 242
+  - SQL: 50
+  - Opportunity: 44
+- **Companies:** all 190 lifecycle stages are as Cockpit sets them. Linking contacts didn't change any.
+- **A dry-run re-sync:** 600 already in HubSpot, 0 to create.
+
+**Checks.** 140 tests pass. The new `hubspot-leads.test.ts` covers:
+- the flags matching the hygiene cards
+- the lifecycle mapping, including endings
+- the contact fields
+- name splitting
+- email-first then lead-id matching, with nothing duplicated on a re-run
+- the test lead
+
+The agent tests now also cover HubSpot being updated on approve and on reset, a HubSpot failure leaving the reassignment in place, and reject never touching HubSpot.

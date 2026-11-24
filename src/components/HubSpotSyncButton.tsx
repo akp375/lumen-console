@@ -87,6 +87,7 @@ export function HubSpotSyncButton({ available, unavailableNote }: { available: b
             <li>{countLine("Companies", state.result.companies)}</li>
             <li>{countLine("Deals", state.result.deals)}</li>
             <li>{countLine("Contacts", state.result.contacts)}</li>
+            {state.result.leads && <li>{countLine("Lead contacts", state.result.leads)}</li>}
           </ul>
         </div>
       )}

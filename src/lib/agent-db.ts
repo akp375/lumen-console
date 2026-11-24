@@ -2,6 +2,7 @@
 // the page, and the writes an approved action makes. Server-side only (service-role key).
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { hubspot } from "./hubspot.ts";
+import { updateLeadOwnership } from "./hubspot-sync-run.ts";
 import type { ActionDb } from "./agent-actions.ts";
 import type { RunPatch, RunStore } from "./pipeline-agent.ts";
 import type { AcceptanceStats, ActionType, AgentActionView, AgentRunView, ToolCallRecord } from "./pipeline-agent-shared.ts";
@@ -207,6 +208,7 @@ export const supabaseActionDb: ActionDb = {
     must(await db().from("sequences").update({ status, paused_at: pausedAt }).eq("id", id), "Updating the sequence");
   },
   createHubSpotTask,
+  updateLeadContacts: updateLeadOwnership,
   async doneActions() {
     const r = await db().from("agent_actions").select("*").eq("status", "approved").eq("outcome", "done").order("decided_at", { ascending: false });
     const names = await teamNames();

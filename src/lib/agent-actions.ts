@@ -3,7 +3,9 @@
 // - Reject records who decided and when, and changes nothing else.
 // - Approve records the decision first (only if the action is still "proposed"), then executes it:
 //   reassign_leads sets the leads' ADR (and their sequence enrollments' ADR); pause_sequence sets the
-//   sequence to paused; create_hubspot_task writes a task on the HubSpot company or deal. What
+//   sequence to paused; create_hubspot_task writes a task on the HubSpot company or deal. A reassignment
+//   also updates ADR owner and the Unassigned / MQL past SLA flags on those leads' HubSpot contacts; if
+//   HubSpot fails, the reassignment in Cockpit stands (Supabase is the source) and the error is saved. What
 //   changed (each lead's previous ADR, the HubSpot task id) is saved with the action, or the error.
 // - Revert (npm run agent:reset) undoes approved reassignments and pauses only. HubSpot tasks stay.
 //
@@ -25,9 +27,23 @@ export type ActionDb = {
   sequenceStatus(id: string): Promise<"active" | "paused" | null>;
   setSequenceStatus(id: string, status: "active" | "paused", pausedAt: string | null): Promise<void>;
   createHubSpotTask(t: { object: "company" | "deal"; recordId: string; title: string; body: string; dueDate: string }): Promise<{ taskId: string; hubspotRecordId: string }>;
+  /** Sends ADR owner and the two hygiene flags (from lib/metrics.ts) to these leads' HubSpot contacts. */
+  updateLeadContacts(leadIds: string[]): Promise<{ updated: number; notInHubSpot: string[] }>;
   /** Approved actions that executed, newest first (for revert). */
   doneActions(): Promise<AgentActionView[]>;
 };
+
+export type HubSpotLeadResult = { updated: number; not_in_hubspot: string[] } | { error: string };
+
+/** Updates the leads' HubSpot contacts; never throws (a HubSpot problem is recorded, not fatal). */
+async function updateHubSpotLeads(db: ActionDb, leadIds: string[]): Promise<HubSpotLeadResult> {
+  try {
+    const r = await db.updateLeadContacts(leadIds);
+    return { updated: r.updated, not_in_hubspot: r.notInHubSpot };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 export type DecisionResult = { ok: true; action: AgentActionView } | { ok: false; error: string };
 
@@ -71,7 +87,8 @@ async function execute(db: ActionDb, a: AgentActionView, deciderName: string, de
     const enrollments = await db.enrollmentIds(ids, d.from_adr_id);
     await db.setLeadOwner(ids, d.to_adr_id);
     await db.setEnrollmentAdr(enrollments, d.to_adr_id);
-    return { previous_adr_id: d.from_adr_id, new_adr_id: d.to_adr_id, lead_ids: ids, enrollment_ids: enrollments };
+    const hubspot = await updateHubSpotLeads(db, ids);
+    return { previous_adr_id: d.from_adr_id, new_adr_id: d.to_adr_id, lead_ids: ids, enrollment_ids: enrollments, hubspot };
   }
   if (a.type === "pause_sequence") {
     const d = a.details as PauseDetails;
@@ -120,8 +137,10 @@ export async function revertApprovedActions(db: ActionDb): Promise<RevertLine[]>
       const enr = ((r.enrollment_ids as string[] | undefined) ?? []);
       const enrNow = await db.enrollmentIds(back, now);
       await db.setEnrollmentAdr(enr.filter((e) => enrNow.includes(e)), prev);
-      await db.setOutcome(a.id, { outcome: "reverted", result: { ...r, reverted_leads: back, not_reverted_leads: skipped }, revertedAt: nowIso() });
-      out.push({ id: a.id, type: a.type, status: "reverted", note: `${back.length} lead(s) back to ${prev ?? "unassigned"}${skipped.length ? `; ${skipped.length} left alone (changed hands since)` : ""}` });
+      const hubspot = await updateHubSpotLeads(db, back);
+      await db.setOutcome(a.id, { outcome: "reverted", result: { ...r, reverted_leads: back, not_reverted_leads: skipped, hubspot_revert: hubspot }, revertedAt: nowIso() });
+      const hs = "error" in hubspot ? `HubSpot not updated: ${hubspot.error}` : `HubSpot: ${hubspot.updated} contact(s) updated${hubspot.not_in_hubspot.length ? `, ${hubspot.not_in_hubspot.length} not in HubSpot` : ""}`;
+      out.push({ id: a.id, type: a.type, status: "reverted", note: `${back.length} lead(s) back to ${prev ?? "unassigned"}${skipped.length ? `; ${skipped.length} left alone (changed hands since)` : ""}. ${hs}` });
       continue;
     }
     if (a.type === "pause_sequence") {

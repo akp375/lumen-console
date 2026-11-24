@@ -1,6 +1,7 @@
 // How Cockpit's values map onto HubSpot fields. Pure formatting rules, no network and no business math:
 // every number comes from calcCrmSyncData in metrics.ts. Used by scripts/hubspot-sync.ts.
-import type { CrmAccountRow, CrmDealRow, CrmSyncData } from "./metrics.ts";
+import type { CrmAccountRow, CrmDealRow, CrmSyncData, LeadCrmRow, LeadStage } from "./metrics.ts";
+import { LEAD_STAGE_LABELS } from "./format.ts";
 
 /** Our forecast category -> the LABEL of HubSpot's built-in Forecast category option (hs_manual_forecast_category).
  *  The sync reads HubSpot's real options and stops if any label is missing. */
@@ -123,4 +124,102 @@ export function fictionalContact(a: Pick<CrmAccountRow, "accountId" | "name">): 
   const lastname = LAST[hash(`last:${a.accountId}`) % LAST.length];
   const jobtitle = TITLES[hash(`title:${a.accountId}`) % TITLES.length];
   return { firstname, lastname, jobtitle, email: `${firstname}.${lastname}@${slug(a.name)}.example.com`.toLowerCase() };
+}
+
+// --- ADR leads as HubSpot contacts --------------------------------------------------
+
+/**
+ * Lead stage -> HubSpot's built-in lifecycle stage (internal value). HubSpot has no "accepted" stage,
+ * so Sales accepted stays MQL; Sales qualified (passed the ADR's qualifying call) is SQL.
+ * Disqualified and Nurture keep the furthest stage the lead reached before it ended.
+ */
+export const LEAD_STAGE_TO_LIFECYCLE: Record<Exclude<LeadStage, "disqualified" | "nurture">, string> = {
+  new: "lead",
+  engaged: "lead",
+  mql: "marketingqualifiedlead",
+  sales_accepted: "marketingqualifiedlead",
+  sales_qualified: "salesqualifiedlead",
+  meeting_booked: "salesqualifiedlead",
+  converted: "opportunity",
+};
+
+export function leadLifecycleStage(r: Pick<LeadCrmRow, "leadStage" | "furthestStage">): string {
+  const stage = r.leadStage === "disqualified" || r.leadStage === "nurture" ? r.furthestStage : r.leadStage;
+  return LEAD_STAGE_TO_LIFECYCLE[stage as keyof typeof LEAD_STAGE_TO_LIFECYCLE] ?? "lead";
+}
+
+/** "Mary Ann O'Neil" -> { firstname: "Mary Ann", lastname: "O'Neil" }; one word -> first name only. */
+export function splitName(full: string): { firstname: string; lastname: string } {
+  const parts = full.trim().split(/\s+/);
+  if (parts.length === 1) return { firstname: parts[0], lastname: "" };
+  return { firstname: parts.slice(0, -1).join(" "), lastname: parts[parts.length - 1] };
+}
+
+/** "inbound demo request" -> "Inbound demo request" (the Lead source dropdown's label). */
+export function leadSourceLabel(source: string): string {
+  return source.charAt(0).toUpperCase() + source.slice(1);
+}
+
+/** A timestamp as HubSpot's date-and-time fields take it ("2026-11-10T00:00:00.000Z"); blank when missing. */
+export function isoTime(ts: string | null): string {
+  return ts ? new Date(ts).toISOString() : "";
+}
+
+/** The Lead fields only (lumen_*), as the dropdowns created by hubspot:setup store them. */
+export function leadProperties(r: LeadCrmRow): Record<string, string> {
+  return {
+    lumen_lead_id: r.leadId,
+    lumen_lead_stage: optionValue(LEAD_STAGE_LABELS[r.leadStage] ?? r.leadStage),
+    lumen_lead_source: optionValue(leadSourceLabel(r.leadSource)),
+    lumen_adr_owner: r.adrName ?? "",
+    lumen_mql_date: isoTime(r.mqlAt),
+    lumen_first_touch_date: isoTime(r.firstTouchAt),
+    lumen_disqualify_reason: r.disqualifyReason ?? "",
+    ...leadFlagProperties(r),
+  };
+}
+
+/** The fields a reassignment changes: ADR owner and the two hygiene flags. */
+export function leadFlagProperties(r: Pick<LeadCrmRow, "adrName" | "mqlPastSla" | "unassigned">): Record<string, string> {
+  return { lumen_adr_owner: r.adrName ?? "", lumen_mql_past_sla: checkbox(r.mqlPastSla), lumen_unassigned: checkbox(r.unassigned) };
+}
+
+/** Everything a lead's contact gets: name, title, company and lifecycle stage, plus the Lead fields. */
+export function leadContactProperties(r: LeadCrmRow): Record<string, string> {
+  const { firstname, lastname } = splitName(r.contactName);
+  return { email: r.email, firstname, lastname, jobtitle: r.contactTitle ?? "", company: r.accountName, lifecyclestage: leadLifecycleStage(r), ...leadProperties(r) };
+}
+
+/** A contact already in HubSpot, as the sync reads it. */
+export type ExistingContact = { id: string; email: string; leadId: string | null; lifecyclestage: string | null };
+
+export type LeadContactPlan =
+  /** Upsert on email: creates the contact, or updates the one with this email. */
+  | { kind: "upsert"; leadId: string; email: string; properties: Record<string, string>; existing: ExistingContact | null }
+  /** The contact with this lumen_lead_id has another email: update it by its HubSpot id. */
+  | { kind: "update"; leadId: string; hubspotId: string; properties: Record<string, string>; existing: ExistingContact };
+
+/**
+ * How each lead reaches HubSpot without duplicates: match on email first, then on lumen_lead_id,
+ * else create. A contact matched by email that isn't a lead contact (a prospect or sponsor contact)
+ * only gets the Lead fields: its name, title and role are kept.
+ */
+export function planLeadContacts(rows: LeadCrmRow[], byEmail: Map<string, ExistingContact>, byLeadId: Map<string, ExistingContact>): LeadContactPlan[] {
+  return rows.map((r) => {
+    const email = r.email.toLowerCase();
+    const sameEmail = byEmail.get(email) ?? null;
+    if (sameEmail) {
+      const isOtherContact = sameEmail.leadId !== r.leadId;
+      const properties = isOtherContact ? { ...leadProperties(r), lifecyclestage: leadLifecycleStage(r) } : leadContactProperties(r);
+      return { kind: "upsert", leadId: r.leadId, email, properties, existing: sameEmail };
+    }
+    const sameLead = byLeadId.get(r.leadId);
+    if (sameLead) return { kind: "update", leadId: r.leadId, hubspotId: sameLead.id, properties: leadContactProperties(r), existing: sameLead };
+    return { kind: "upsert", leadId: r.leadId, email, properties: leadContactProperties(r), existing: null };
+  });
+}
+
+/** The default test lead for --one: the first MQL past the SLA that an ADR owns (fills the most fields). */
+export function pickTestLead(rows: LeadCrmRow[]): LeadCrmRow | undefined {
+  return rows.find((r) => r.mqlPastSla && r.adrName !== null) ?? rows[0];
 }

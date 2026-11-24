@@ -3693,6 +3693,65 @@ export function calcAgentUnassignedLeads(input: AdrInputs, asOf: string, territo
   return { total: rows.length, shown: Math.min(rows.length, AGENT_LIST_LIMIT), leads: rows.slice(0, AGENT_LIST_LIMIT) };
 }
 
+// --- ADR leads for the CRM (HubSpot contacts) ----------------------------------
+// What the HubSpot sync and the Pipeline agent send for each lead. The two flags use the hygiene
+// cards' own definitions, so a HubSpot filter on them matches the card counts.
+
+export type LeadCrmRow = {
+  leadId: string;
+  email: string;
+  accountId: string;
+  accountName: string;
+  contactName: string;
+  contactTitle: string | null;
+  leadStage: LeadStage;
+  /** The furthest funnel stage the lead reached (for an ending, the stage before it ended). */
+  furthestStage: LeadStage;
+  leadSource: string;
+  /** The assigned ADR's name; null when the lead has no ADR. */
+  adrName: string | null;
+  mqlAt: string | null;
+  firstTouchAt: string | null;
+  disqualifyReason: string | null;
+  /** On the "MQLs past the 24-hour SLA" card. */
+  mqlPastSla: boolean;
+  /** On the "Unassigned leads" card (open New, Engaged or MQL with no ADR; ended leads aren't). */
+  unassigned: boolean;
+};
+
+/** Every lead created by the as-of date, with its CRM fields. emails: lead id -> contact email. */
+export function calcLeadCrmRows(input: AdrInputs, asOf: string, emails: Map<string, string>): LeadCrmRow[] {
+  const h = calcAdrHygiene(input, asOf);
+  const ids = (key: AdrHygieneCheckKey) => new Set(h.checks.find((c) => c.key === key)!.items.map((i) => i.recordId));
+  const pastSla = ids("slaBreach");
+  const unassigned = ids("unassigned");
+  const now = asOfEndMs(asOf);
+  const ctx = adrContext(input);
+  return input.leads
+    .filter((l) => ms(l.created_at) <= now)
+    .map((l) => {
+      const reached = LEAD_FUNNEL.filter((f) => l[f.column] !== null);
+      return {
+        leadId: l.id,
+        email: emails.get(l.id) ?? "",
+        accountId: l.account_id,
+        accountName: ctx.accountById.get(l.account_id)?.name ?? l.account_id,
+        contactName: l.contact_name,
+        contactTitle: l.contact_title,
+        leadStage: l.lead_stage,
+        furthestStage: reached.length ? reached[reached.length - 1].stage : "new",
+        leadSource: l.lead_source,
+        adrName: l.assigned_adr_id ? (ctx.nameOf.get(l.assigned_adr_id) ?? l.assigned_adr_id) : null,
+        mqlAt: l.mql_at,
+        firstTouchAt: l.first_touch_at,
+        disqualifyReason: l.disqualify_reason,
+        mqlPastSla: pastSla.has(l.id),
+        unassigned: unassigned.has(l.id),
+      };
+    })
+    .sort((a, b) => a.leadId.localeCompare(b.leadId));
+}
+
 // --- Loaders ---------------------------------------------------------------
 
 /** Every ADR table, as the ADR pages and the Pipeline agent read them. */
@@ -3737,6 +3796,15 @@ export async function loadAdrInputs(): Promise<AdrInputs> {
     team: team.map((r) => ({ id: str(r.id), name: str(r.name), role: str(r.role), territory: strOrNull(r.territory) })),
     pairings: pairings.map((r) => ({ adr_id: str(r.adr_id), ae_id: str(r.ae_id), effective_from: str(r.effective_from) })),
   };
+}
+
+/** Every lead's CRM fields (for the HubSpot sync and the Pipeline agent). leadIds limits the result. */
+export async function getLeadCrmRows(leadIds?: string[], asOf: string = AS_OF_DATE): Promise<LeadCrmRow[]> {
+  const [input, emails] = await Promise.all([loadAdrInputs(), fetchAll("leads", "id, contact_email", ["id"])]);
+  const rows = calcLeadCrmRows(input, asOf, new Map(emails.map((r) => [str(r.id), str(r.contact_email)])));
+  if (!leadIds) return rows;
+  const want = new Set(leadIds);
+  return rows.filter((r) => want.has(r.leadId));
 }
 
 export async function getAdrHygiene(adrId: string | null = null, asOf: string = AS_OF_DATE): Promise<AdrHygieneResult> {
