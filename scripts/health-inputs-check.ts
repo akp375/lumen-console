@@ -199,10 +199,12 @@ async function main() {
       opps.filter((o) => o.ae_id !== aeIdByName.get(String(accById.get(String(o.account_id))?.owner))).map((o) => `${o.id} ae_id ${o.ae_id}`),
     ),
     check(
-      "ADR on new inbound/outbound deals only",
+      "ADR on new inbound/outbound deals and every Qualifying deal only",
       opps
         .filter((o) => {
-          const wants = o.type === "new" && (o.source === "inbound" || o.source === "outbound");
+          // Qualifying (Stage 0.1) deals come from an ADR's lead and carry that ADR, whatever the source,
+          // partner included (ADR data, 22 Nov). Other partner deals have no ADR.
+          const wants = (o.type === "new" && (o.source === "inbound" || o.source === "outbound")) || o.stage === "Stage 0.1";
           return wants ? !o.adr_id || roleOf.get(String(o.adr_id)) !== "ADR" : Boolean(o.adr_id);
         })
         .map((o) => `${o.id} ${o.type}/${o.source} adr ${o.adr_id}`),

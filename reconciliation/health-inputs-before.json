@@ -1,6 +1,6 @@
 {
   "asOf": "2026-11-13",
-  "takenAt": "2026-11-22T06:20:06.711Z",
+  "takenAt": "2026-11-24T06:10:39.247Z",
   "totalArr": 3069960,
   "customerCount": 150,
   "highRisk": [
@@ -16,13 +16,16 @@
     "acc_0069": "High",
     "acc_0054": "Medium",
     "acc_0083": "Medium",
+    "acc_0013": "Medium",
     "acc_0039": "Medium",
+    "acc_0099": "Medium",
     "acc_0131": "Medium",
     "acc_0074": "Medium",
     "acc_0147": "Medium",
     "acc_0125": "Medium",
     "acc_0123": "Medium",
     "acc_0016": "Medium",
+    "acc_0139": "Medium",
     "acc_0128": "Medium"
   },
   "tables": {
@@ -30,6 +33,7 @@
       "rows": 190,
       "columns": [
         "churn_date",
+        "icp_tier",
         "id",
         "included_tokens_monthly",
         "mrr_usd",
@@ -40,12 +44,14 @@
         "seats",
         "segment",
         "start_date",
-        "status"
+        "status",
+        "target_account",
+        "territory"
       ],
-      "fingerprint": "392842b47a24"
+      "fingerprint": "4769902895b5"
     },
     "opportunities": {
-      "rows": 207,
+      "rows": 232,
       "columns": [
         "account_id",
         "amount_usd",
@@ -63,7 +69,7 @@
         "stage_entered_date",
         "type"
       ],
-      "fingerprint": "b3cb88ef4b7e"
+      "fingerprint": "42943bb960c5"
     },
     "invoices": {
       "rows": 1901,
@@ -105,12 +111,13 @@
       "columns": [
         "account_id",
         "closed_at",
+        "description",
         "id",
         "opened_at",
         "severity",
         "status"
       ],
-      "fingerprint": "aba01b8a760c"
+      "fingerprint": "f96d94fb81b2"
     },
     "nps_responses": {
       "rows": 328,

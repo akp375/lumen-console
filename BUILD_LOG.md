@@ -1000,3 +1000,20 @@ No new features. I clicked through every page: Overview, ADR Insights, ADR Hygie
   - `contracts:check` and `health-inputs:check` still print FAIL lines. Their "before" snapshots are from 21–22 Nov, and later planned changes moved those numbers: the Qualifying deals, the sponsor-gap trigger and the ticket text backfill.
   - The health-inputs rule "ADR on new inbound/outbound deals only" predates the ADR module, which gives partner-sourced Qualifying deals an ADR (4 deals).
   - Neither was changed. Re-saving the baselines or updating the rule is the owner's call.
+
+### Reconciliation baselines re-saved
+
+`contracts:check` and `health-inputs:check` were still comparing against "before" snapshots from 21–22 Nov. Each FAIL line was traced to an intended change before re-saving. A read-only script recomputed each fingerprint using only the columns and rows that existed when the snapshot was saved.
+
+| FAIL line | Cause | Proof |
+|---|---|---|
+| contracts: Renewal-risk levels, 13 changed | **Renewal-risk rebuild** (c4511e1, health-driven with segment windows): 12 levels moved. **Sponsor-gap trigger** (5776b05): 3 levels moved. Copperleaf Media appears in both, so 13 net. | Old levels give 6 High + 10 Medium; now 4 High + 13 Medium. That is the same 13 changes as the 22 Nov HubSpot sync. |
+| contracts: High-risk 6 → 4 | **Renewal-risk rebuild:** Ionic Retail and Copperleaf Labs went to High. Larkspur Systems, Quillon Retail, Umbra Energy and Larkspur Analytics went to Medium. | The 4 High accounts match the health-inputs snapshot taken right after the rebuild. |
+| contracts: Deal amounts | **ADR data** (bd015e0) added 25 Qualifying (Stage 0.1) deals. | Over the 207 original deals the fingerprint is unchanged (`ba7600cc44e9`). |
+| health-inputs: Renewal-risk levels, 3 changed | **Sponsor-gap trigger:** Copperleaf Media (sponsor left), Nimbus Health and Nimbus Media (no sponsor), all Low → Medium. | — |
+| health-inputs: accounts | **ADR data** added the columns `icp_tier`, `target_account` and `territory`. | On the original columns, unchanged (`392842b47a24`). |
+| health-inputs: opportunities | **ADR data** added 25 Qualifying deals. | On the original 207 rows, unchanged (`b3cb88ef4b7e`). |
+| health-inputs: support_tickets | **Ticket text** (999bfbb) added the column `description`. | On the original columns, unchanged (`aba01b8a760c`). |
+| health-inputs rule: ADR on new inbound/outbound deals only, 4 break it | **ADR data:** every Qualifying deal carries the ADR whose lead it came from, partner leads included (opp_s01_005, 010, 015, 020). The rule predates the ADR module. | The rule now also expects an ADR on every Qualifying deal. |
+
+**Result.** Both baselines were re-saved with `--save-before`. Both checks now pass with "Nothing changed", and all ownership and data rules pass.
