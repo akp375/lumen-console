@@ -8,6 +8,8 @@ const monthFmt = new Intl.DateTimeFormat("en-US", { month: "short", year: "numer
 //   Tables: full money, $13,500
 //   Percentages: one decimal, 62.3%
 //   Dates: 16 Dec 2026
+//   Claude spend: $0.0276 under $1, $2.04 from $1 (aiUsd)
+//   Signed changes: ASCII sign, -7 / +3 / -35.1%
 
 /** $1.2M, $387K, $950 */
 export function usdCompact(n: number): string {
@@ -16,6 +18,11 @@ export function usdCompact(n: number): string {
   if (a >= 999_500) return `${sign}$${(a / 1_000_000).toFixed(1)}M`;
   if (a >= 1_000) return `${sign}$${Math.round(a / 1_000)}K`;
   return `${sign}$${Math.round(a)}`;
+}
+
+/** Claude spend: $0.0276 under $1 (small calls stay readable), $2.04 from $1. */
+export function aiUsd(n: number): string {
+  return `$${n.toFixed(Math.abs(n) >= 1 ? 2 : 4)}`;
 }
 
 /** $13,500 */

@@ -97,10 +97,13 @@ export function AiCell({ state, note }: { state: AiState; note?: { reason: strin
 }
 
 /** Title Case section heading with a one-line detail. */
-export function SectionHeading({ title, detail }: { title: string; detail: string }) {
+export function SectionHeading({ title, detail, badge }: { title: string; detail: string; badge?: ReactNode }) {
   return (
     <div className="mb-2">
-      <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{title}</h2>
+      <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-50">
+        {title}
+        {badge}
+      </h2>
       <p className="text-xs text-zinc-500 dark:text-zinc-400">{detail}</p>
     </div>
   );

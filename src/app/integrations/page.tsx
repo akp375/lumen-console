@@ -4,7 +4,7 @@ import { connection } from "next/server";
 import { headers } from "next/headers";
 import { getClaudeStatus, getHubSpotStatus, getSupabaseStatus } from "@/lib/integrations";
 import { PAGES, tabTitle } from "@/lib/pages";
-import { modelLabel, shortDate, usd } from "@/lib/format";
+import { aiUsd, modelLabel, shortDate, usd } from "@/lib/format";
 import { getLastSyncRuns, type SyncRunRow } from "@/lib/sync-runs";
 import { PageHeader } from "@/components/PageHeader";
 import { BlockSkeleton } from "@/components/Skeleton";
@@ -110,9 +110,9 @@ async function ClaudeCard() {
         <p className="text-red-700 dark:text-red-300">Can&apos;t read today&apos;s spend: {c.error}</p>
       ) : (
         <>
-          <Detail label="Spend today (UTC)" value={`$${c.spendTodayUsd.toFixed(2)}`} />
+          <Detail label="Spend today (UTC)" value={aiUsd(c.spendTodayUsd)} />
           <Detail label="Calls today" value={c.callsToday.toLocaleString("en-US")} />
-          <Detail label="Spend to date" value={`$${c.spendToDateUsd.toFixed(2)}`} />
+          <Detail label="Spend to date" value={aiUsd(c.spendToDateUsd)} />
           <Detail label="Calls to date" value={c.callsToDate.toLocaleString("en-US")} />
           {c.byFeature.length > 0 && (
             <div>
@@ -135,7 +135,7 @@ async function ClaudeCard() {
                       </td>
                       <td className="py-1">{modelLabel(f.model)}</td>
                       <td className="py-1 text-right tabular-nums">{f.calls.toLocaleString("en-US")}</td>
-                      <td className="py-1 text-right tabular-nums text-zinc-900 dark:text-zinc-100">${f.costUsd.toFixed(4)}</td>
+                      <td className="py-1 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{aiUsd(f.costUsd)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -146,7 +146,7 @@ async function ClaudeCard() {
             <div className="mb-1 flex justify-between text-xs">
               <span>Daily budget</span>
               <span className="tabular-nums">
-                ${c.spendTodayUsd.toFixed(2)} of {usd(c.budgetUsd)}
+                {aiUsd(c.spendTodayUsd)} of {usd(c.budgetUsd)}
               </span>
             </div>
             <div
@@ -236,7 +236,7 @@ function PlannedCard({ name, initial, color, kind, note }: { name: string; initi
         <button
           type="button"
           disabled
-          title="Coming soon"
+          title="Planned, not connected yet"
           className="cursor-not-allowed rounded-md border border-zinc-200 px-4 py-2 text-sm text-zinc-400 dark:border-zinc-800 dark:text-zinc-500"
         >
           Connect {name}

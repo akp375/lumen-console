@@ -59,7 +59,7 @@ function metricText(k: HealthMetric, i: HealthScoreRow["inputs"]): string {
       return `Overdue invoices, last 6 months: ${i.overdueInvoices}`;
     case "netExpansion":
       return `Invoice change, last 12 months: ${
-        i.invoiceChange12m === null ? "no history" : i.invoiceChange12m === 0 ? "flat" : `${i.invoiceChange12m > 0 ? "+" : "−"}${usd(Math.abs(i.invoiceChange12m))} a month`
+        i.invoiceChange12m === null ? "no history" : i.invoiceChange12m === 0 ? "flat" : `${i.invoiceChange12m > 0 ? "+" : "-"}${usd(Math.abs(i.invoiceChange12m))} a month`
       }`;
   }
 }

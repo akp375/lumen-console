@@ -20,7 +20,8 @@ import {
   type TaskDetails,
   type ToolCallRecord,
 } from "@/lib/pipeline-agent-shared";
-import { dateTimeUtc, modelLabel, pct, shortDate } from "@/lib/format";
+import { dateTimeUtc, pct, shortDate } from "@/lib/format";
+import { AiBadge } from "./AiBadge";
 import { Marked } from "./AdrMemoPanel";
 import { ErrorNote, FlagButton, LimitNotice } from "./RiskUi";
 import { Spinner } from "./Spinner";
@@ -125,7 +126,10 @@ export function PipelineAgentPanel({ initial, acceptance, deciders, canDecide, u
     <section className="mb-8 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="max-w-2xl">
-          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">AI agent</h2>
+          <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-50">
+            AI agent
+            {run && !busy && <AiBadge model={run.model} costUsd={run.costUsd} costNote={`· ${run.claudeCalls} call${run.claudeCalls === 1 ? "" : "s"}`} />}
+          </h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             Claude Sonnet investigates with read-only tools (up to {PIPELINE_AGENT_LIMITS.maxToolCalls} calls), then proposes up to {PIPELINE_AGENT_LIMITS.maxProposals} fixes. Nothing changes until
             someone approves a proposal.
@@ -198,8 +202,7 @@ export function PipelineAgentPanel({ initial, acceptance, deciders, canDecide, u
       {run && !busy && (
         <div className="mt-4">
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Ran {dateTimeUtc(run.createdAt)} UTC · data as of {shortDate(run.asOfDate)} · {run.model ? modelLabel(run.model) : "no model"} · {run.claudeCalls} Claude call
-            {run.claudeCalls === 1 ? "" : "s"} · ${run.costUsd.toFixed(4)} · {STOP_REASON_LABELS[run.stopReason ?? ""] ?? run.stopReason ?? run.status}
+            Ran {dateTimeUtc(run.createdAt)} UTC · data as of {shortDate(run.asOfDate)} · {STOP_REASON_LABELS[run.stopReason ?? ""] ?? run.stopReason ?? run.status}
           </p>
           {run.status === "running" && <LimitNotice message="This run didn't finish (the server stopped or the page lost contact). Run the agent again." />}
           {run.summary ? (

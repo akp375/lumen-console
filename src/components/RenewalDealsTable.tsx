@@ -21,7 +21,7 @@ function Difference({ row }: { row: RenewalDealRow }) {
   const up = row.differenceKind === "uplift";
   return (
     <span className={`whitespace-nowrap tabular-nums ${up ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>
-      {up ? "+" : "−"}
+      {up ? "+" : "-"}
       {usd(Math.abs(row.difference))} {row.differenceKind}
     </span>
   );

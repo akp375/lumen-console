@@ -14,7 +14,7 @@ export default function Home() {
   return (
     <div className="flex-1 bg-zinc-50 dark:bg-black">
       <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-        <PageHeader title={PAGES.overview.title} description={PAGES.overview.description} />
+        <PageHeader title={PAGES.overview.title} tagline={PAGES.overview.tagline} description={PAGES.overview.description} />
 
         <Suspense fallback={<DashboardSkeleton />}>
           <Dashboard />
@@ -140,8 +140,8 @@ async function Dashboard() {
           back={[
             { label: "Starting MRR", value: usd(d.nrr.startingMrr) },
             { label: `+ Upgrades (${d.nrr.upgradedCount})`, value: usd(d.nrr.upgrades) },
-            { label: `− Downgrades (${d.nrr.downgradedCount})`, value: usd(d.nrr.downgrades) },
-            { label: `− Churned (${d.nrr.churnedCount})`, value: usd(d.nrr.churnedMrr) },
+            { label: `- Downgrades (${d.nrr.downgradedCount})`, value: usd(d.nrr.downgrades) },
+            { label: `- Churned (${d.nrr.churnedCount})`, value: usd(d.nrr.churnedMrr) },
           ]}
         />
       </section>

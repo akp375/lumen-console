@@ -8,6 +8,7 @@ import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";
 import { PageHeader } from "./PageHeader";
 import { SectionSkeleton } from "./Skeleton";
+import { AiBadge } from "./AiBadge";
 import { AiCell, type AiState, BackButton, ErrorNote, FlagButton, LimitNotice, RuleNote, SectionHeading, SignalChips, Stat } from "./RiskUi";
 
 
@@ -62,6 +63,7 @@ export function DealRiskPanel({ rules, upcoming }: { rules: string; upcoming: Up
   const [ai, setAi] = useState<AiState>("idle");
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
+  const [aiMeta, setAiMeta] = useState<{ model: string; costUsd: number } | null>(null);
 
   const run = async () => {
     if (busy || ai === "loading") return; // one run at a time
@@ -70,6 +72,7 @@ export function DealRiskPanel({ rules, upcoming }: { rules: string; upcoming: Up
     setAiError(null);
     setAiNotice(null);
     setNotes({});
+    setAiMeta(null);
     const res = await flagDealRisk();
     setBusy(false);
     if (res.error || !res.data) return setError(res.error ?? "Something went wrong.");
@@ -85,6 +88,7 @@ export function DealRiskPanel({ rules, upcoming }: { rules: string; upcoming: Up
       setAiError(`Claude notes unavailable: ${explained.error}`);
     } else {
       setNotes(explained.notes ?? {});
+      if (explained.model) setAiMeta({ model: explained.model, costUsd: explained.costUsd ?? 0 });
       setAi("done");
     }
   };
@@ -147,7 +151,7 @@ export function DealRiskPanel({ rules, upcoming }: { rules: string; upcoming: Up
             {aiNotice && <LimitNotice message={aiNotice} />}
             {aiError && <ErrorNote message={aiError} />}
             <section>
-              <SectionHeading title="At-Risk Deals" detail="Open deals with at least one warning sign, largest first" />
+              <SectionHeading title="At-Risk Deals" detail="Open deals with at least one warning sign, largest first" badge={aiMeta && <AiBadge model={aiMeta.model} costUsd={aiMeta.costUsd} costNote="· reasons and next steps" />} />
               <DataTable
                 columns={riskColumns}
                 rows={data.rows}

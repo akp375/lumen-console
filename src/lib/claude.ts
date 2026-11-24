@@ -97,6 +97,26 @@ export const FEATURE_LABELS: Record<string, string> = {
 
 export type FeatureSpendRow = { feature: string; label: string; model: string; calls: number; costUsd: number; timeouts: number };
 
+/** All-time spend and calls for one feature (timeouts included), and the model it used most. */
+export async function getFeatureSpend(feature: string): Promise<{ model: string | null; calls: number; costUsd: number }> {
+  const PAGE = 1000;
+  const byModel = new Map<string, number>();
+  let calls = 0;
+  let costUsd = 0;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db().from("llm_calls").select("model, cost_usd").in("feature", [feature, `${feature}:timeout`]).order("id").range(from, from + PAGE - 1);
+    if (error) throw new Error(`Reading llm_calls failed: ${error.message}`);
+    for (const r of data ?? []) {
+      calls++;
+      costUsd += Number(r.cost_usd ?? 0);
+      byModel.set(String(r.model), (byModel.get(String(r.model)) ?? 0) + 1);
+    }
+    if ((data ?? []).length < PAGE) break;
+  }
+  const model = [...byModel].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return { model, calls, costUsd };
+}
+
 /** All-time spend and calls per feature and model (real API spend), most expensive first. */
 export async function getSpendByFeature(): Promise<FeatureSpendRow[]> {
   const PAGE = 1000; // read in pages, like sumCalls

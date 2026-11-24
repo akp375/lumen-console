@@ -967,3 +967,36 @@ Reports that add up all open deal amounts should filter out forecast category "N
 **Checks.**
 - **Tests:** 146 pass. New: a company task about a deal moved onto the deal, and an open task reused instead of duplicated (a completed one doesn't count).
 - **Typecheck and lint:** clean.
+
+## 2026-11-24 (Tuesday)
+
+### Demo polish
+
+No new features. I clicked through every page: Overview, ADR Insights, ADR Hygiene, Deal Risk, Health, Renewals, Integrations, Workspace, and the Ionic Retail and Copperleaf Media account pages. None showed console or server errors or broken links.
+
+**What changed.**
+- **One AI badge.** A small violet "AI · model · cost" pill (`AiBadge`) now marks every section Claude wrote:
+  - the ADR memo
+  - the AI agent (its latest run, with the number of calls)
+  - flag reasons on Deal Risk and Renewals: the server actions now return the model and cost
+  - "What Customers Are Saying": the tagging model and the total tagging spend
+  - each Workspace chat answer
+
+  Model and cost were removed from the memo and agent footer lines, since the badge shows them.
+- **Number formats:**
+  - **Claude spend:** shown one way everywhere (`aiUsd`): 4 decimals under $1, 2 from $1. The Integrations page used a mix before.
+  - **Signed changes:** use the house-style "-". Health arrows, renewal differences and the MRR bridge used "−" before.
+- **Overview:** a new line under the title: "Signals for the ADR and CS teams, pushed into HubSpot." `PageHeader` has an optional tagline for it.
+- **Labels and copy:**
+  - The Integrations description now says where the signals go, not "the CRMs it will sync with".
+  - The planned connectors' tooltip says "Planned, not connected yet" instead of "Coming soon".
+  - The Health section on account pages names the as-of date, not "the app's date".
+  - The customer-quotes note now explains its two time windows (Claude tagged 180 days; the section counts the last 90).
+- **README.md:** rewritten for a hiring manager. It covers the problem, what Cockpit does for ADR and CS, the architecture, the safety design and what's next. It replaces the create-next-app boilerplate.
+
+**Checks.**
+- **Tests:** 146 pass. Typecheck and lint are clean.
+- **Reconciliation:** `adr:check` and `text:check` pass.
+  - `contracts:check` and `health-inputs:check` still print FAIL lines. Their "before" snapshots are from 21–22 Nov, and later planned changes moved those numbers: the Qualifying deals, the sponsor-gap trigger and the ticket text backfill.
+  - The health-inputs rule "ADR on new inbound/outbound deals only" predates the ADR module, which gives partner-sourced Qualifying deals an ADR (4 deals).
+  - Neither was changed. Re-saving the baselines or updating the rule is the owner's call.

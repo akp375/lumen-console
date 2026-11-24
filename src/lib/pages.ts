@@ -4,14 +4,14 @@
 export const PRODUCT_NAME = "Cockpit";
 
 export const PAGES = {
-  overview: { href: "/", title: "Overview", description: "Revenue, pipeline and AI cost across Lumen AI's customers." },
+  overview: { href: "/", title: "Overview", tagline: "Signals for the ADR and CS teams, pushed into HubSpot.", description: "Revenue, pipeline and AI cost across Lumen AI's customers." },
   renewals: { href: "/customer-success/renewals", title: "Renewals", description: "Customers renewing this quarter and next. Flag the ones at risk to get Claude's next steps." },
   health: { href: "/customer-success/health", title: "Health", description: "Every customer's health score this week, its trend and the products losing adoption. Worst first." },
   dealRisk: { href: "/pipeline/deal-risk", title: "Deal Risk", description: "Open deals closing this quarter and next. Flag the ones at risk to get Claude's next steps." },
   adrHygiene: { href: "/pipeline/adr-hygiene", title: "ADR Hygiene", description: "Lead, deal and account-tag problems for the ADR team to fix, oldest first." },
   adrInsights: { href: "/pipeline/adr-insights", title: "ADR Insights", description: "How leads convert by source, how fast ADRs follow up, and which sequences book meetings." },
   workspace: { href: "/workspace", title: "Workspace", description: "Ask questions about Lumen AI's revenue, renewals, pipeline and margins." },
-  integrations: { href: "/integrations", title: "Integrations", description: "Where Cockpit's data comes from, and the CRMs it will sync with." },
+  integrations: { href: "/integrations", title: "Integrations", description: "Where Cockpit's data comes from, and where its signals go." },
 } as const;
 
 export type NavPage = { href: string; title: string };

@@ -3,7 +3,7 @@
 // Sends recent conversation plus a compact data snapshot from lib/metrics.ts to Claude via callClaude().
 //
 // Responses:
-//   200 { text, costUsd, latencyMs }   an answer
+//   200 { text, model, costUsd, latencyMs }   an answer
 //   429 { notice, kind }               a guardrail stopped it (show as a notice, not an error)
 //   400 / 500 { error }                bad request or something broke
 import { callClaude, ClaudeLimitError } from "@/lib/claude";
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
       messages,
       timeoutMs: TIMEOUT_MS,
     });
-    return respond({ text: result.text, costUsd: result.costUsd, latencyMs: result.latencyMs }, 200);
+    return respond({ text: result.text, model: result.model, costUsd: result.costUsd, latencyMs: result.latencyMs }, 200);
   } catch (e) {
     if (e instanceof ClaudeLimitError) return respond({ kind: e.kind, notice: e.message }, 429);
     return respond({ error: e instanceof Error ? e.message : String(e) }, 500);

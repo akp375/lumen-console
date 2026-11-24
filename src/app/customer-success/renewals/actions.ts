@@ -38,7 +38,7 @@ For every account, write:
 Use only the facts provided. Do not invent contacts, events or numbers. Return one entry per account id.`;
 
 /** Recomputes the flagged list on the server and asks Claude for a reason and next action per account. */
-export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiNote>; error?: string; notice?: string }> {
+export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiNote>; model?: string; costUsd?: number; error?: string; notice?: string }> {
   try {
     const { rows } = await getRenewalRisk();
     if (rows.length === 0) return { notes: {} };
@@ -64,7 +64,7 @@ export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiN
       jsonSchema: SCHEMA,
     });
     const parsed = result.json as { accounts: { id: string; reason: string; next_action: string }[] };
-    return { notes: Object.fromEntries(parsed.accounts.map((a) => [a.id, { reason: a.reason, nextAction: a.next_action }])) };
+    return { model: result.model, costUsd: result.costUsd, notes: Object.fromEntries(parsed.accounts.map((a) => [a.id, { reason: a.reason, nextAction: a.next_action }])) };
   } catch (e) {
     if (e instanceof ClaudeLimitError) return { notice: e.message };
     return { error: e instanceof Error ? e.message : String(e) };

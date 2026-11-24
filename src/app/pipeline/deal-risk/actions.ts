@@ -38,7 +38,7 @@ For every deal, write:
 Use only the facts provided. Do not invent contacts, events or numbers. Return one entry per deal id.`;
 
 /** Recomputes the flagged deals on the server and asks Claude for a reason and next step per deal. */
-export async function explainDealRisk(): Promise<{ notes?: Record<string, AiNote>; error?: string; notice?: string }> {
+export async function explainDealRisk(): Promise<{ notes?: Record<string, AiNote>; model?: string; costUsd?: number; error?: string; notice?: string }> {
   try {
     const { rows } = await getDealRisk();
     if (rows.length === 0) return { notes: {} };
@@ -63,7 +63,7 @@ export async function explainDealRisk(): Promise<{ notes?: Record<string, AiNote
       jsonSchema: SCHEMA,
     });
     const parsed = result.json as { deals: { id: string; reason: string; next_step: string }[] };
-    return { notes: Object.fromEntries(parsed.deals.map((d) => [d.id, { reason: d.reason, nextAction: d.next_step }])) };
+    return { model: result.model, costUsd: result.costUsd, notes: Object.fromEntries(parsed.deals.map((d) => [d.id, { reason: d.reason, nextAction: d.next_step }])) };
   } catch (e) {
     if (e instanceof ClaudeLimitError) return { notice: e.message };
     return { error: e instanceof Error ? e.message : String(e) };

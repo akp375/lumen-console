@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { AiBadge } from "./AiBadge";
 import { Markdown } from "./Markdown";
 import { PageHeader } from "./PageHeader";
 import { Spinner } from "./Spinner";
@@ -11,7 +12,7 @@ import { HISTORY_MESSAGES, MAX_QUESTION_CHARS, TIMEOUT_MS } from "@/lib/workspac
 // only (no database). Each question is sent with the last HISTORY_MESSAGES
 // messages so follow-ups work without resending the whole chat.
 
-type Message = { role: "user" | "assistant"; content: string; costUsd?: number; latencyMs?: number; error?: boolean };
+type Message = { role: "user" | "assistant"; content: string; model?: string; costUsd?: number; latencyMs?: number; error?: boolean };
 
 const STARTERS = [
   "Which renewals are most at risk this quarter?",
@@ -20,7 +21,6 @@ const STARTERS = [
   "What's our NRR and what's driving it?",
 ];
 
-const cost = (usd: number) => (usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(3)}`);
 
 export function WorkspaceChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -70,13 +70,13 @@ export function WorkspaceChat() {
         body: JSON.stringify({ messages: [...recent, { role: "user", content: text }].map(({ role, content }) => ({ role, content })) }),
         signal: abort.signal,
       });
-      const data = (await res.json()) as { text?: string; costUsd?: number; latencyMs?: number; error?: string; notice?: string };
+      const data = (await res.json()) as { text?: string; model?: string; costUsd?: number; latencyMs?: number; error?: string; notice?: string };
       if (id !== chatId.current) return;
       if (data.notice) return showNotice(data.notice);
       setMessages([
         ...next,
         res.ok && data.text
-          ? { role: "assistant", content: data.text, costUsd: data.costUsd, latencyMs: data.latencyMs }
+          ? { role: "assistant", content: data.text, model: data.model, costUsd: data.costUsd, latencyMs: data.latencyMs }
           : { role: "assistant", content: data.error ?? "Something went wrong.", error: true },
       ]);
     } catch (e) {
@@ -164,8 +164,9 @@ export function WorkspaceChat() {
                       {m.error ? m.content : <Markdown text={m.content} />}
                     </div>
                     {m.costUsd !== undefined && m.latencyMs !== undefined && (
-                      <p className="mt-1 pl-2 text-xs text-zinc-400">
-                        {cost(m.costUsd)} · {(m.latencyMs / 1000).toFixed(1)} s
+                      <p className="mt-1 flex items-center gap-2 pl-2 text-xs text-zinc-400">
+                        <AiBadge model={m.model ?? null} costUsd={m.costUsd} />
+                        {(m.latencyMs / 1000).toFixed(1)} s
                       </p>
                     )}
                   </div>

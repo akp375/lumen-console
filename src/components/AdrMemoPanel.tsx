@@ -3,7 +3,8 @@
 import { useState, type ReactNode } from "react";
 import { generateAdrMemoAction } from "@/app/pipeline/adr-insights/actions";
 import { FIELD_LABELS, REC_FIELDS, memoFieldKey, type AdrMemo } from "@/lib/adr-memo-shared";
-import { dateTimeUtc, modelLabel, shortDate } from "@/lib/format";
+import { dateTimeUtc, shortDate } from "@/lib/format";
+import { AiBadge } from "./AiBadge";
 import { ErrorNote, FlagButton, LimitNotice } from "./RiskUi";
 import { Spinner } from "./Spinner";
 
@@ -41,7 +42,10 @@ export function AdrMemoPanel({ initial, missingMigration, adrManager }: { initia
     <section className="mb-8 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Memo for the ADR Manager</h2>
+          <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-50">
+            Memo for the ADR Manager
+            {memo && <AiBadge model={memo.model} costUsd={memo.costUsd} />}
+          </h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             {adrManager ? `For ${adrManager}. ` : ""}Claude Sonnet turns this page&apos;s numbers into 3 to 5 recommendations. Every number is checked against the data
             it was given.
@@ -65,7 +69,7 @@ export function AdrMemoPanel({ initial, missingMigration, adrManager }: { initia
       {memo && (
         <div className={`mt-4 ${busy ? "opacity-50" : ""}`}>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Generated {dateTimeUtc(memo.createdAt)} UTC · data as of {shortDate(memo.asOfDate)} · {modelLabel(memo.model)} · ${memo.costUsd.toFixed(4)}
+            Generated {dateTimeUtc(memo.createdAt)} UTC · data as of {shortDate(memo.asOfDate)}
           </p>
           <p className="mt-3 text-lg font-medium text-zinc-900 dark:text-zinc-50">
             <Marked text={memo.content.headline} flags={flagsFor(memoFieldKey(null, "headline"))} />

@@ -25,6 +25,10 @@ import { BAND_LABEL, BAND_TEXT, HealthCategoryRows, TrendArrow } from "@/compone
 import { HealthChart } from "@/components/HealthChart";
 import { BackLink } from "@/components/BackLink";
 import { TOPIC_LABEL, type Sentiment } from "@/lib/signal-topics";
+import { getFeatureSpend } from "@/lib/claude";
+import { TAGGING_FEATURE } from "@/lib/topic-tagging";
+import { AS_OF_DATE } from "@/lib/as-of-date";
+import { AiBadge } from "@/components/AiBadge";
 
 export const metadata: Metadata = { title: tabTitle("Account") };
 
@@ -44,7 +48,7 @@ export default function AccountPage({ params }: Params) {
 async function AccountContent({ params }: Params) {
   await connection();
   const { id } = await params;
-  const data = await getAccountPageData(id);
+  const [data, tagging] = await Promise.all([getAccountPageData(id), getFeatureSpend(TAGGING_FEATURE).catch(() => null)]);
   if (!data) notFound();
   const { account: a, renewalRiskLevel, products, renewalDeals, health } = data;
   const isCustomer = a.status === "customer";
@@ -76,7 +80,7 @@ async function AccountContent({ params }: Params) {
 
       <div className="space-y-8">
         {health && <HealthSection health={health} />}
-        <CustomerVoiceSection voice={data.voice} />
+        <CustomerVoiceSection voice={data.voice} tagging={tagging} />
         <ProductsSection products={products} />
         <section>
           <SectionHeading
@@ -279,7 +283,7 @@ function HealthSection({ health: h }: { health: HealthTrendRow }) {
     <section>
       <SectionHeading
         title="Health"
-        detail="Score out of 100 as of the app's date and the last 6 weekly snapshots. Hover a category to see each metric's value and points."
+        detail={`Score out of 100 as of ${shortDate(AS_OF_DATE)} and the last 6 weekly snapshots. Hover a category to see each metric's value and points.`}
       />
       <div className="grid gap-4 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 lg:grid-cols-[180px_1fr]">
         <div>
@@ -307,12 +311,13 @@ const SENTIMENT_DOT: Record<Sentiment, string> = {
   negative: "bg-red-500",
 };
 
-function CustomerVoiceSection({ voice: v }: { voice: CustomerVoice }) {
+function CustomerVoiceSection({ voice: v, tagging }: { voice: CustomerVoice; tagging: { model: string | null; calls: number; costUsd: number } | null }) {
   const mentioned = v.topics.filter((t) => t.count > 0);
   return (
     <section>
       <SectionHeading
         title="What Customers Are Saying"
+        badge={tagging && tagging.calls > 0 && <AiBadge model={tagging.model} costUsd={tagging.costUsd} costNote={`· all ${tagging.calls.toLocaleString("en-US")} texts tagged`} />}
         detail={`Topics Claude found in support tickets and CSM notes, counted over the last ${v.windowDays} days (since ${shortDate(v.since)}), and the latest quotes.`}
       />
       {v.taggedTotal === 0 ? (
@@ -369,7 +374,7 @@ function CustomerVoiceSection({ voice: v }: { voice: CustomerVoice }) {
               ))}
             </ul>
           )}
-          <RuleNote>Tagged by Claude Haiku 5.5 from the last 180 days of tickets and notes; each quote is copied word for word from its text.</RuleNote>
+          <RuleNote>Claude Haiku 5.5 tagged every ticket and note from the last 180 days; this section counts the last {v.windowDays}. Each quote is copied word for word from its text.</RuleNote>
         </div>
       )}
     </section>
