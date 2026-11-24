@@ -6,7 +6,7 @@ export function AiBadge({ model, costUsd, costNote }: { model: string | null; co
   return (
     <span
       title="Written by Claude. Cost is the real API spend, logged for every call."
-      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 align-middle text-[11px] font-medium text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300"
+      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 align-middle text-xs font-medium text-violet-700 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-300"
     >
       <span className="font-semibold">AI</span>
       <span aria-hidden>·</span>

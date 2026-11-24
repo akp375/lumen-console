@@ -2,6 +2,8 @@
 
 import { getRenewalRisk, type RenewalRiskResult } from "@/lib/metrics";
 import { callClaude, ClaudeLimitError } from "@/lib/claude";
+import { checkGrounding, type GroundingResult } from "@/lib/grounding";
+import { AS_OF_DATE } from "@/lib/as-of-date";
 
 export type AiNote = { reason: string; nextAction: string };
 
@@ -38,7 +40,17 @@ For every account, write:
 Use only the facts provided. Do not invent contacts, events or numbers. Return one entry per account id.`;
 
 /** Recomputes the flagged list on the server and asks Claude for a reason and next action per account. */
-export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiNote>; model?: string; costUsd?: number; error?: string; notice?: string }> {
+export async function explainRenewalRisk(): Promise<{
+  notes?: Record<string, AiNote>;
+  model?: string;
+  costUsd?: number;
+  generatedAt?: string;
+  asOfDate?: string;
+  /** Every number in the reasons and next actions, checked against the facts Claude was given. */
+  grounding?: GroundingResult;
+  error?: string;
+  notice?: string;
+}> {
   try {
     const { rows } = await getRenewalRisk();
     if (rows.length === 0) return { notes: {} };
@@ -64,7 +76,9 @@ export async function explainRenewalRisk(): Promise<{ notes?: Record<string, AiN
       jsonSchema: SCHEMA,
     });
     const parsed = result.json as { accounts: { id: string; reason: string; next_action: string }[] };
-    return { model: result.model, costUsd: result.costUsd, notes: Object.fromEntries(parsed.accounts.map((a) => [a.id, { reason: a.reason, nextAction: a.next_action }])) };
+    const notes: Record<string, AiNote> = Object.fromEntries(parsed.accounts.map((a) => [a.id, { reason: a.reason, nextAction: a.next_action }]));
+    const fields = Object.fromEntries(Object.entries(notes).flatMap(([id, n]) => [[`${id}:reason`, n.reason], [`${id}:next`, n.nextAction]]));
+    return { model: result.model, costUsd: result.costUsd, generatedAt: new Date().toISOString(), asOfDate: AS_OF_DATE, grounding: checkGrounding(fields, facts), notes };
   } catch (e) {
     if (e instanceof ClaudeLimitError) return { notice: e.message };
     return { error: e instanceof Error ? e.message : String(e) };

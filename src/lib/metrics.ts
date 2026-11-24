@@ -15,7 +15,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AS_OF_DATE } from "./as-of-date.ts";
-import { LEAD_STAGE_DESCRIPTIONS, LEAD_STAGE_LABELS, QUALIFYING, QUALIFYING_DESCRIPTION, shortDate, stageLabel } from "./format.ts";
+import { LEAD_STAGE_DESCRIPTIONS, LEAD_STAGE_LABELS, QUALIFYING, QUALIFYING_DESCRIPTION, humanDuration, shortDate, stageLabel } from "./format.ts";
 import { SIGNAL_TOPICS, type Sentiment, type SignalTopic } from "./signal-topics.ts";
 
 // ---------------------------------------------------------------------------
@@ -3484,15 +3484,15 @@ export function calcAdrMemoInput(hygiene: AdrHygieneResult, insights: AdrInsight
     })),
     funnel_note: `Recent leads have had less time to convert. ${all.leads} leads in the window.`,
     speed_to_lead: {
-      team_assigned_adrs_only: { mqls: insights.team.mqls, on_time_pct: teamSla, never_touched: insights.team.never, median_hours_to_first_touch: r1(insights.team.medianHoursToTouch) },
+      team_assigned_adrs_only: { mqls: insights.team.mqls, on_time_pct: teamSla, never_touched: insights.team.never, median_time_to_first_touch: humanDuration(insights.team.medianHoursToTouch) },
       unassigned_mqls: (() => {
         const u = insights.speed.find((s) => s.adrId === null);
-        return u ? { mqls: u.mqls, on_time_pct: pct1(u.onTimeRate), never_touched: u.never, median_hours_to_first_touch: r1(u.medianHoursToTouch), note: "Not part of the team rate." } : null;
+        return u ? { mqls: u.mqls, on_time_pct: pct1(u.onTimeRate), never_touched: u.never, median_time_to_first_touch: humanDuration(u.medianHoursToTouch), note: "Not part of the team rate." } : null;
       })(),
       by_adr: insights.speed.filter((s) => s.adrId !== null).map((s) => ({
         adr: s.name, mqls: s.mqls, on_time: s.onTime, late: s.late, never_touched: s.never, on_time_pct: pct1(s.onTimeRate),
         points_vs_team: s.onTimeRate === null || teamSla === null ? null : r1(pct1(s.onTimeRate)! - teamSla),
-        median_hours_to_first_touch: r1(s.medianHoursToTouch),
+        median_time_to_first_touch: humanDuration(s.medianHoursToTouch),
       })),
     },
     sequences: insights.sequences.map((s) => ({
@@ -3543,7 +3543,7 @@ const agentWeekLabel = (asOf: string) => {
 const OPEN_LEAD_STAGES = ["new", "engaged", "mql", "sales_accepted", "sales_qualified", "meeting_booked"] as const satisfies readonly LeadStage[];
 
 function speedJson(r: AdrSpeedRow) {
-  return { mqls: r.mqls, on_time: r.onTime, late: r.late, never_touched: r.never, on_time_pct: pct1(r.onTimeRate), median_hours_to_first_touch: r1(r.medianHoursToTouch) };
+  return { mqls: r.mqls, on_time: r.onTime, late: r.late, never_touched: r.never, on_time_pct: pct1(r.onTimeRate), median_time_to_first_touch: humanDuration(r.medianHoursToTouch) };
 }
 
 /** get_hygiene_summary: every hygiene card's count, split into ADRs' own records and unassigned leads by territory. */
@@ -3597,9 +3597,11 @@ export function calcAgentOverdueMqls(input: AdrInputs, asOf: string, adrId: stri
   const rows = items
     .map((i) => {
       const l = byId.get(i.recordId)!;
-      return { lead_id: l.id, contact: l.contact_name, title: l.contact_title, account_id: l.account_id, account: i.accountName, source: l.lead_source, mql_date: shortDate(l.mql_at!), hours_since_mql: Math.floor((now - ms(l.mql_at!)) / HOUR_MS) };
+      return { lead_id: l.id, contact: l.contact_name, title: l.contact_title, account_id: l.account_id, account: i.accountName, source: l.lead_source, mql_date: shortDate(l.mql_at!), hours: Math.floor((now - ms(l.mql_at!)) / HOUR_MS) };
     })
-    .sort((a, b) => b.hours_since_mql - a.hours_since_mql || a.lead_id.localeCompare(b.lead_id));
+    .sort((a, b) => b.hours - a.hours || a.lead_id.localeCompare(b.lead_id))
+    // Durations go to Claude as people say them (days past 48 hours), so it writes "97 days", not "2331 hours".
+    .map(({ hours, ...r }) => ({ ...r, waiting_since_mql: humanDuration(hours) }));
   return { total: rows.length, shown: Math.min(rows.length, AGENT_LIST_LIMIT), leads: rows.slice(0, AGENT_LIST_LIMIT) };
 }
 

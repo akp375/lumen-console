@@ -20,8 +20,10 @@ import {
   type TaskDetails,
   type ToolCallRecord,
 } from "@/lib/pipeline-agent-shared";
-import { dateTimeUtc, pct, shortDate } from "@/lib/format";
+import { aiUsd, dayMonth, dayMonthTimeUtc, modelLabel, pct, shortDate } from "@/lib/format";
+import { firstPhrase, plain, splitSummary } from "@/lib/summary-text";
 import { AiBadge } from "./AiBadge";
+import { AI_TYPE, AiCallout, AiCard, AiField, AiFields, AiMeta, AiPanel, GroundedChip } from "./AiPanel";
 import { Marked } from "./AdrMemoPanel";
 import { ErrorNote, FlagButton, LimitNotice } from "./RiskUi";
 import { Spinner } from "./Spinner";
@@ -122,37 +124,47 @@ export function PipelineAgentPanel({ initial, acceptance, deciders, canDecide, u
   const flags = run?.grounding?.ungrounded ?? [];
   const flagsFor = (field: string) => flags.filter((f) => f.field === field).map((f) => f.text);
 
+  const info = `Claude Sonnet investigates with read-only tools (up to ${PIPELINE_AGENT_LIMITS.maxToolCalls} calls), then proposes up to ${PIPELINE_AGENT_LIMITS.maxProposals} fixes. Nothing changes until someone approves a proposal.`;
+  const done = run && !busy ? run : null;
   return (
-    <section className="mb-8 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="max-w-2xl">
-          <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            AI agent
-            {run && !busy && <AiBadge model={run.model} costUsd={run.costUsd} costNote={`· ${run.claudeCalls} call${run.claudeCalls === 1 ? "" : "s"}`} />}
-          </h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Claude Sonnet investigates with read-only tools (up to {PIPELINE_AGENT_LIMITS.maxToolCalls} calls), then proposes up to {PIPELINE_AGENT_LIMITS.maxProposals} fixes. Nothing changes until
-            someone approves a proposal.
-          </p>
-          <p className="mt-2 text-sm italic text-zinc-700 dark:text-zinc-300">&ldquo;{goal}&rdquo;</p>
-        </div>
-        <FlagButton onClick={start} busy={busy} busyLabel="Agent is working…" label="Run agent" />
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-zinc-600 dark:text-zinc-400">
-        <span>
-          Acceptance rate:{" "}
+    <AiPanel
+      title="AI agent"
+      info={info}
+      badge={done && <AiBadge model={done.model} costUsd={done.costUsd} />}
+      action={<FlagButton onClick={start} busy={busy} busyLabel="Agent is working…" label="Run agent" />}
+      meta={
+        done && (
+          <AiMeta
+            items={[
+              `Ran ${dayMonthTimeUtc(done.createdAt)}`,
+              `Data as of ${dayMonth(done.asOfDate)}`,
+              done.model ? modelLabel(done.model) : null,
+              `${done.claudeCalls} Claude call${done.claudeCalls === 1 ? "" : "s"}`,
+              aiUsd(done.costUsd),
+              STOP_REASON_LABELS[done.stopReason ?? ""] ?? done.stopReason ?? done.status,
+              done.grounding && <GroundedChip key="g" checked={done.grounding.checked} flagged={flags.length} against="the tool results" />,
+            ]}
+          />
+        )
+      }
+    >
+      <div className={`mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800 ${AI_TYPE.label}`}>
+        <span className="min-w-0 flex-1 basis-80">
+          Goal: <span className="italic text-zinc-700 dark:text-zinc-300">&ldquo;{goal}&rdquo;</span>
+        </span>
+        <span className="whitespace-nowrap">
+          Accepted:{" "}
           <span className="font-medium text-zinc-900 dark:text-zinc-100">
-            {stats.rate === null ? "no decisions yet" : `${pct(stats.rate)} (${stats.approved} of ${stats.approved + stats.rejected} decided approved)`}
+            {stats.rate === null ? "no decisions yet" : `${pct(stats.rate)} (${stats.approved} of ${stats.approved + stats.rejected})`}
           </span>
           {stats.waiting > 0 && <> · {stats.waiting} waiting</>}
         </span>
-        <label className="inline-flex items-center gap-2">
+        <label className="inline-flex items-center gap-2 whitespace-nowrap" title="Not verified until Cockpit has a login">
           Deciding as
           <select
             value={decider}
             onChange={(e) => pickDecider(e.target.value)}
-            className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            className="rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
           >
             {deciders.map((d) => (
               <option key={d.id} value={d.id}>
@@ -160,7 +172,6 @@ export function PipelineAgentPanel({ initial, acceptance, deciders, canDecide, u
               </option>
             ))}
           </select>
-          <span className="text-zinc-400">not verified until Cockpit has a login</span>
         </label>
       </div>
 
@@ -170,73 +181,105 @@ export function PipelineAgentPanel({ initial, acceptance, deciders, canDecide, u
         </div>
       )}
 
-      {(calls.length > 0 || busy) && (
-        <ol aria-live="polite" className="mt-4 flex flex-wrap items-center gap-1.5 text-xs">
-          {calls.map((c, i) => (
-            <li key={i} className="inline-flex items-center gap-1.5">
-              {i > 0 && <span aria-hidden className="text-zinc-400">→</span>}
-              <span
-                title={c.summary}
-                className={`rounded-full border px-2 py-0.5 font-mono ${
-                  c.ok ? "border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200" : "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
-                }`}
-              >
-                {c.label}
-                <span className="ml-1 font-sans text-zinc-500 dark:text-zinc-400">· {c.summary}</span>
-              </span>
-            </li>
-          ))}
-          {busy && (
-            <li className="inline-flex items-center gap-1.5 text-zinc-500">
-              {calls.length > 0 && <span aria-hidden className="text-zinc-400">→</span>}
-              <Spinner /> thinking…
-            </li>
-          )}
-        </ol>
-      )}
-
-      {busy && live && live.actions.length > 0 && (
-        <p className="mt-3 text-xs text-zinc-500">{live.actions.length} proposal(s) recorded so far…</p>
-      )}
-
-      {run && !busy && (
+      {busy && (
         <div className="mt-4">
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Ran {dateTimeUtc(run.createdAt)} UTC · data as of {shortDate(run.asOfDate)} · {STOP_REASON_LABELS[run.stopReason ?? ""] ?? run.stopReason ?? run.status}
-          </p>
-          {run.status === "running" && <LimitNotice message="This run didn't finish (the server stopped or the page lost contact). Run the agent again." />}
-          {run.summary ? (
-            <>
-              <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
-                <Marked text={run.summary} flags={flagsFor(groundingKey(null))} />
-              </p>
-              {run.grounding && <Grounding checked={run.grounding.checked} flagged={flags.length} />}
-            </>
+          <Steps calls={calls} busy />
+          {live && live.actions.length > 0 && <p className={`mt-2 ${AI_TYPE.label}`}>{live.actions.length} proposal(s) recorded so far…</p>}
+        </div>
+      )}
+
+      {done && (
+        <div>
+          {done.status === "running" && (
+            <div className="mt-3">
+              <LimitNotice message="This run didn't finish (the server stopped or the page lost contact). Run the agent again." />
+            </div>
+          )}
+          {done.summary ? (
+            <Summary text={done.summary} flags={flagsFor(groundingKey(null))} />
           ) : (
-            run.status !== "running" && <p className="mt-3 text-sm text-zinc-500">No summary: the run stopped before Claude wrote one.</p>
+            done.status !== "running" && <p className={`mt-4 ${AI_TYPE.label}`}>No summary: the run stopped before Claude wrote one.</p>
           )}
 
-          {run.actions.length > 0 && (
-            <ol className="mt-4 grid gap-3 md:grid-cols-2">
-              {run.actions.map((a, i) => (
+          {calls.length > 0 && (
+            <details className="group mt-4 rounded-md border border-zinc-200 dark:border-zinc-800">
+              <summary className={`flex cursor-pointer list-none items-center gap-2 px-3 py-2 ${AI_TYPE.label} hover:text-zinc-700 dark:hover:text-zinc-200`}>
+                <span aria-hidden className="inline-block transition-transform group-open:rotate-90">▸</span>
+                Investigation steps ({calls.length})
+              </summary>
+              <div className="border-t border-zinc-200 px-3 py-2 dark:border-zinc-800">
+                <Steps calls={calls} busy={false} />
+              </div>
+            </details>
+          )}
+
+          {done.actions.length > 0 && (
+            <ol className="mt-4 grid gap-3 lg:grid-cols-2">
+              {done.actions.map((a, i) => (
                 <ActionCard key={a.id} action={a} index={i} flags={flagsFor(groundingKey(i))} decider={decider} canDecide={canDecide} unavailableNote={unavailableNote} onDecided={onDecided} />
               ))}
             </ol>
           )}
-          {run.actions.length === 0 && run.status !== "running" && <p className="mt-3 text-sm text-zinc-500">The agent proposed no actions.</p>}
+          {done.actions.length === 0 && done.status !== "running" && <p className={`mt-4 ${AI_TYPE.label}`}>The agent proposed no actions.</p>}
         </div>
       )}
-      {!run && !busy && !error && <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">No runs yet. A run costs about $0.10 to $0.35.</p>}
-    </section>
+      {!run && !busy && !error && <p className={`mt-4 ${AI_TYPE.label}`}>No runs yet. A run costs about $0.10 to $0.35.</p>}
+    </AiPanel>
   );
 }
 
-function Grounding({ checked, flagged }: { checked: number; flagged: number }) {
-  if (flagged === 0) return <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">All {checked} numbers and dates in the summary and reasons appear in the tool results.</p>;
+/** The tool calls as a numbered list, in label size. */
+function Steps({ calls, busy }: { calls: ToolCallRecord[]; busy: boolean }) {
   return (
-    <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-      {flagged} of {checked} numbers or dates couldn&apos;t be found in the tool results. They are highlighted; treat them with care.
-    </p>
+    <ol aria-live={busy ? "polite" : undefined} className={`list-decimal space-y-0.5 pl-5 ${AI_TYPE.label}`}>
+      {calls.map((c, i) => (
+        <li key={i} className={c.ok ? "" : "text-amber-700 dark:text-amber-300"}>
+          <span className="font-mono text-zinc-700 dark:text-zinc-300">{c.label}</span> · {c.summary}
+        </li>
+      ))}
+      {busy && (
+        <li className="-ml-5 inline-flex list-none items-center gap-2 pt-1">
+          <Spinner /> thinking…
+        </li>
+      )}
+    </ol>
+  );
+}
+
+/**
+ * The run summary: its first paragraph in the callout, numbered points as a numbered list with each
+ * point's first phrase in bold, and anything after as body text.
+ */
+function Summary({ text, flags }: { text: string; flags: string[] }) {
+  const { intro, points, outro } = splitSummary(text);
+  return (
+    <>
+      {intro && (
+        <AiCallout>
+          <Marked text={plain(intro)} flags={flags} />
+        </AiCallout>
+      )}
+      {points.length > 0 && (
+        <ol className={`mt-3 list-decimal space-y-2 pl-5 marker:text-zinc-400 ${AI_TYPE.body}`}>
+          {points.map((p, i) => {
+            const [lead, rest] = firstPhrase(p);
+            return (
+              <li key={i} className="pl-1">
+                <b className="font-semibold text-zinc-900 dark:text-zinc-50">
+                  <Marked text={lead} flags={flags} />
+                </b>
+                <Marked text={rest} flags={flags} />
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {outro.map((o, i) => (
+        <p key={i} className={`mt-3 ${AI_TYPE.body}`}>
+          <Marked text={plain(o)} flags={flags} />
+        </p>
+      ))}
+    </>
   );
 }
 
@@ -274,22 +317,26 @@ function ActionCard({
   };
 
   return (
-    <li className="flex flex-col rounded-md border border-zinc-200 p-4 dark:border-zinc-800">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Proposal {index + 1} · {ACTION_LABELS[a.type]}
-        </span>
-        <StatusBadge action={a} />
-      </div>
-      <div className="text-sm text-zinc-900 dark:text-zinc-100">
-        <ActionDetailsView action={a} />
-      </div>
-      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-        <span className="font-medium text-zinc-500">Why: </span>
-        <Marked text={a.reason} flags={flags} />
-      </p>
-      {a.status === "proposed" ? (
-        <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
+    <AiCard label={`Proposal ${index + 1} · ${ACTION_LABELS[a.type]}`} status={<StatusBadge action={a} />}>
+      <AiFields>
+        <AiField label="Action" emphasis>
+          <ActionDetailsView action={a} />
+        </AiField>
+        <AiField label="Why">
+          <Marked text={a.reason} flags={flags} />
+        </AiField>
+        {a.status !== "proposed" && (
+          <AiField label="Decision">
+            {a.status === "approved" ? "Approved" : "Rejected"} by {a.decidedByName ?? a.decidedBy}
+            {a.decidedAt ? ` · ${dayMonthTimeUtc(a.decidedAt)}` : ""}
+            {a.outcome === "failed" && <span className="block text-red-700 dark:text-red-300">Didn&apos;t execute: {String(a.result?.error ?? "unknown error")}</span>}
+            {a.outcome === "done" && <span className="block text-zinc-600 dark:text-zinc-400">{doneNote(a)}</span>}
+            {a.outcome === "reverted" && <span className="block text-zinc-600 dark:text-zinc-400">Reverted by npm run agent:reset.</span>}
+          </AiField>
+        )}
+      </AiFields>
+      {a.status === "proposed" && (
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
           <button
             type="button"
             onClick={() => decide("approve")}
@@ -304,26 +351,19 @@ function ActionCard({
             onClick={() => decide("reject")}
             disabled={!canDecide || busy !== null}
             title={canDecide ? undefined : unavailableNote}
-            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-transparent dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             {busy === "reject" && <Spinner />}Reject
           </button>
-          {!canDecide && <span className="text-xs text-zinc-500">{unavailableNote}</span>}
+          {!canDecide && <span className={AI_TYPE.label}>{unavailableNote}</span>}
         </div>
-      ) : (
-        <p className="mt-auto pt-3 text-xs text-zinc-500 dark:text-zinc-400">
-          {a.status === "approved" ? "Approved" : "Rejected"} by {a.decidedByName ?? a.decidedBy} · {a.decidedAt ? `${dateTimeUtc(a.decidedAt)} UTC` : ""}
-          {a.outcome === "failed" && <span className="block text-red-700 dark:text-red-300">Didn&apos;t execute: {String(a.result?.error ?? "unknown error")}</span>}
-          {a.outcome === "done" && <span className="block">{doneNote(a)}</span>}
-          {a.outcome === "reverted" && <span className="block">Reverted by npm run agent:reset.</span>}
-        </p>
       )}
       {error && (
         <div className="mt-2">
           <ErrorNote message={error} />
         </div>
       )}
-    </li>
+    </AiCard>
   );
 }
 
@@ -361,10 +401,10 @@ function ActionDetailsView({ action: a }: { action: AgentActionView }): ReactNod
     const d = a.details as ReassignDetails;
     return (
       <>
-        <p>
-          Move {d.leads.length} lead{d.leads.length === 1 ? "" : "s"} from <b>{d.from_adr}</b> to <b>{d.to_adr}</b>
-        </p>
-        <details className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+        <span>
+          Move {d.leads.length} lead{d.leads.length === 1 ? "" : "s"} from {d.from_adr} to {d.to_adr}
+        </span>
+        <details className={`mt-1 font-normal ${AI_TYPE.label}`}>
           <summary className="cursor-pointer">Show leads</summary>
           <ul className="mt-1 space-y-0.5">
             {d.leads.map((l) => (
@@ -380,20 +420,18 @@ function ActionDetailsView({ action: a }: { action: AgentActionView }): ReactNod
   if (a.type === "pause_sequence") {
     const d = a.details as PauseDetails;
     return (
-      <p>
-        Pause <b>{d.sequence}</b> <span className="text-xs text-zinc-500">({d.sequence_id})</span>
-      </p>
+      <span>
+        Pause {d.sequence} <span className={`font-normal ${AI_TYPE.label}`}>({d.sequence_id})</span>
+      </span>
     );
   }
   const d = a.details as TaskDetails;
   return (
     <>
-      <p>
-        <b>{d.title}</b>
-      </p>
-      <p className="text-xs text-zinc-500">
+      <span className="block">{d.title}</span>
+      <span className={`block font-normal ${AI_TYPE.label}`}>
         On the HubSpot {d.object}: {d.record} · due {shortDate(d.due_date)}
-      </p>
+      </span>
     </>
   );
 }

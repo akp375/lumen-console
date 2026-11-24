@@ -5,14 +5,17 @@ import Link from "next/link";
 import { ACCOUNT_LINK } from "@/lib/ui";
 import type { MissingRenewalDealRow, RenewalDealsResult, RenewalRiskResult, RenewalRiskRow, UpcomingRenewalRow, UpcomingRenewalsQuarter } from "@/lib/metrics";
 import { explainRenewalRisk, flagRenewalRisk, type AiNote } from "@/app/customer-success/renewals/actions";
-import { pct, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
+import { aiUsd, dayMonth, dayMonthTimeUtc, modelLabel, pct, segmentLabel, shortDate, signedInt, usd, usdCompact } from "@/lib/format";
 import { PAGES } from "@/lib/pages";
 import { DataTable, type Column } from "./DataTable";
 import { PageHeader } from "./PageHeader";
 import { RenewalDealsTable } from "./RenewalDealsTable";
 import { SectionSkeleton } from "./Skeleton";
 import { AiBadge } from "./AiBadge";
-import { AiCell, type AiState, BackButton, ErrorNote, FlagButton, LimitNotice, RiskBadge, RuleNote, SectionHeading, SignalChips, Stat } from "./RiskUi";
+import { AI_TYPE, AiCard, AiField, AiFields, AiMeta, AiPanel, GroundedChip } from "./AiPanel";
+import { Marked } from "./AdrMemoPanel";
+import type { GroundingResult } from "@/lib/grounding";
+import { type AiState, BackButton, ErrorNote, FlagButton, LimitNotice, RiskBadge, RuleNote, SectionHeading, SignalChips, Stat } from "./RiskUi";
 
 // Default order: High first, then Medium, then Low; within a level, soonest renewal first.
 const LEVEL_RANK = { High: 0, Medium: 1, Low: 2 } as const;
@@ -180,7 +183,7 @@ export function RenewalRiskPanel({
   const [ai, setAi] = useState<AiState>("idle");
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
-  const [aiMeta, setAiMeta] = useState<{ model: string; costUsd: number } | null>(null);
+  const [aiMeta, setAiMeta] = useState<{ model: string; costUsd: number; generatedAt: string; asOfDate: string; grounding: GroundingResult | null } | null>(null);
 
   const run = async () => {
     if (busy || ai === "loading") return; // one run at a time
@@ -205,41 +208,11 @@ export function RenewalRiskPanel({
       setAiError(`Claude notes unavailable: ${explained.error}`);
     } else {
       setNotes(explained.notes ?? {});
-      if (explained.model) setAiMeta({ model: explained.model, costUsd: explained.costUsd ?? 0 });
+      if (explained.model)
+        setAiMeta({ model: explained.model, costUsd: explained.costUsd ?? 0, generatedAt: explained.generatedAt ?? new Date().toISOString(), asOfDate: explained.asOfDate ?? "", grounding: explained.grounding ?? null });
       setAi("done");
     }
   };
-
-  const riskColumns: Column<RenewalRiskRow>[] = [
-    { key: "name", label: "Account", render: account, sortValue: (r) => r.name.toLowerCase() },
-    { key: "risk", label: "Renewal Risk", render: (r) => <RiskBadge level={r.level} />, sortValue: riskOrder, firstDir: "asc" },
-    { key: "arr", label: "ARR", numeric: true, render: (r) => usd(r.arr), sortValue: (r) => r.arr },
-    { key: "renewal", label: "Renewal", render: renewal, sortValue: (r) => r.renewalDate },
-    {
-      key: "health",
-      label: "Health",
-      numeric: true,
-      render: (r) => (
-        <span className="whitespace-nowrap tabular-nums">
-          {r.healthScore === null ? "n/a" : Math.round(r.healthScore)}
-          {r.healthChange !== null && <span className="ml-1 text-xs text-zinc-500">({signedInt(Math.round(r.healthChange))} wk)</span>}
-        </span>
-      ),
-      sortValue: (r) => r.healthScore,
-      firstDir: "asc",
-    },
-    {
-      key: "downsell",
-      label: "Downsell Risk",
-      numeric: true,
-      render: (r) => (r.downsellArr > 0 ? <span className="whitespace-nowrap tabular-nums">{usd(r.downsellArr)} ({pct(r.downsellShare)})</span> : <span className="text-zinc-400">None</span>),
-      sortValue: (r) => r.downsellShare,
-      firstDir: "desc",
-    },
-    { key: "margin", label: "Margin", numeric: true, render: (r) => pct(r.grossMargin), sortValue: (r) => r.grossMargin, firstDir: "asc" },
-    { key: "reasons", label: "Why", render: (r) => <SignalChips signals={r.reasons} />, sortValue: (r) => r.reasons.length, firstDir: "desc" },
-    { key: "ai", label: "Claude: Reason and Next Action", render: (r) => <AiCell state={ai} note={notes[r.accountId]} /> },
-  ];
 
   return (
     <>
@@ -289,27 +262,83 @@ export function RenewalRiskPanel({
             </div>
             {aiNotice && <LimitNotice message={aiNotice} />}
             {aiError && <ErrorNote message={aiError} />}
-            <section>
-              <SectionHeading title="At-Risk Renewals" detail={`Renewing within each segment's window (${windows}) · High first, then soonest renewal`} badge={aiMeta && <AiBadge model={aiMeta.model} costUsd={aiMeta.costUsd} costNote="· reasons and next steps" />} />
-              <DataTable
-                columns={riskColumns}
-                rows={data.rows}
-                rowKey={(r) => r.accountId}
-                defaultSort={{ key: "risk", dir: "asc" }}
-                empty={{ title: "No renewals at risk", detail: "No customer renewing within its window is High or Medium." }}
-                minWidth="min-w-[1180px]"
-              />
-              <div className="mt-2 space-y-1">
+            <AiPanel
+              title="At-Risk Renewals"
+              info={`Renewing within each segment's window (${windows}), High first, then soonest renewal. The rules set each level; Claude writes a reason and a next action for each account from the facts listed on its card.`}
+              badge={aiMeta && <AiBadge model={aiMeta.model} costUsd={aiMeta.costUsd} />}
+              action={<FlagButton onClick={run} busy={busy || ai === "loading"} busyLabel="Claude is writing…" label="Regenerate" />}
+              meta={
+                aiMeta && (
+                  <AiMeta
+                    items={[
+                      `${data.rows.length} accounts`,
+                      `Generated ${dayMonthTimeUtc(aiMeta.generatedAt)}`,
+                      aiMeta.asOfDate && `Data as of ${dayMonth(aiMeta.asOfDate)}`,
+                      modelLabel(aiMeta.model),
+                      aiUsd(aiMeta.costUsd),
+                      aiMeta.grounding && <GroundedChip key="g" checked={aiMeta.grounding.checked} flagged={aiMeta.grounding.ungrounded.length} against="each account's facts" />,
+                    ]}
+                  />
+                )
+              }
+            >
+              {data.rows.length === 0 ? (
+                <p className={`mt-4 ${AI_TYPE.body}`}>No renewals at risk: no customer renewing within its window is High or Medium.</p>
+              ) : (
+                <ol className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {[...data.rows]
+                    .sort((a, b) => riskOrder(a) - riskOrder(b))
+                    .map((r, i) => (
+                      <RenewalCard key={r.accountId} row={r} index={i} state={ai} note={notes[r.accountId]} flags={(aiMeta?.grounding?.ungrounded ?? []).filter((u) => u.field.startsWith(`${r.accountId}:`))} />
+                    ))}
+                </ol>
+              )}
+              <div className="mt-3 space-y-1">
                 <RuleNote>{rules}</RuleNote>
                 <RuleNote>
                   Risk level is the same value synced to HubSpot. &ldquo;Why&rdquo; lists the conditions that set each level. Everyone else, and
                   customers renewing outside their window, are Low and aren&apos;t listed here.
                 </RuleNote>
               </div>
-            </section>
+            </AiPanel>
           </>
         )}
       </div>
     </>
+  );
+}
+
+/** One flagged account: the rule's facts, then Claude's reason and next action (emphasized). */
+function RenewalCard({ row: r, index, state, note, flags }: { row: RenewalRiskRow; index: number; state: AiState; note?: AiNote; flags: { field: string; text: string }[] }) {
+  const flagsOf = (field: string) => flags.filter((f) => f.field === `${r.accountId}:${field}`).map((f) => f.text);
+  const writing = state === "loading" ? <span className={`inline-flex items-center gap-2 ${AI_TYPE.label}`}>Claude is writing…</span> : <span className={AI_TYPE.label}>Not available</span>;
+  return (
+    <AiCard label={`Renewal ${index + 1} · ${segmentLabel(r.segment)}`} status={<RiskBadge level={r.level} />}>
+      <AiFields>
+        <AiField label="Account">
+          <Link href={`/accounts/${r.accountId}`} className={ACCOUNT_LINK}>
+            {r.name}
+          </Link>
+          <span className="text-zinc-500 dark:text-zinc-400"> · {r.owner}</span>
+        </AiField>
+        <AiField label="Renewal">
+          {shortDate(r.renewalDate)} · in {r.daysToRenewal} days · {usd(r.arr)} ARR
+        </AiField>
+        <AiField label="Health">
+          {r.healthScore === null ? "n/a" : Math.round(r.healthScore)}
+          {r.healthChange !== null && ` (${signedInt(Math.round(r.healthChange))} this week)`} · margin {pct(r.grossMargin)}
+          {r.downsellArr > 0 && ` · ${usd(r.downsellArr)} at downsell risk`}
+        </AiField>
+        <AiField label="Why">
+          <SignalChips signals={r.reasons} />
+        </AiField>
+        <AiField label="Reason" emphasis>
+          {note ? <Marked text={note.reason} flags={flagsOf("reason")} /> : writing}
+        </AiField>
+        <AiField label="Next action" emphasis>
+          {note ? <Marked text={note.nextAction} flags={flagsOf("next")} /> : writing}
+        </AiField>
+      </AiFields>
+    </AiCard>
   );
 }

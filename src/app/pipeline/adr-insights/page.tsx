@@ -4,7 +4,7 @@ import { connection } from "next/server";
 import { ADR_RULES, LEAD_FUNNEL, getAdrInsights, type AdrInsightsResult } from "@/lib/metrics";
 import { getLatestAdrMemo } from "@/lib/adr-memo";
 import { PAGES, tabTitle } from "@/lib/pages";
-import { LEAD_STAGE_DESCRIPTIONS, QUALIFYING, QUALIFYING_DESCRIPTION, leadStageLabel, pct, shortDate } from "@/lib/format";
+import { LEAD_STAGE_DESCRIPTIONS, QUALIFYING, QUALIFYING_DESCRIPTION, humanDuration, leadStageLabel, pct, shortDate } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { RuleNote, SectionHeading } from "@/components/RiskUi";
 import { AdrMemoPanel } from "@/components/AdrMemoPanel";
@@ -89,7 +89,7 @@ function Table({ head, children, minWidth = "min-w-[760px]" }: { head: { label: 
 const ROW = "border-b border-zinc-100 last:border-0 dark:border-zinc-800/60";
 const TOTAL_ROW = "border-t border-zinc-200 bg-zinc-50 font-medium dark:border-zinc-800 dark:bg-zinc-900";
 const sourceLabel = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const hours = (h: number | null) => (h === null ? "n/a" : `${h.toFixed(1)} h`);
+const hours = humanDuration; // up to 48 hours in hours, then days
 
 function Funnel({ data, window }: { data: AdrInsightsResult; window: string }) {
   const rows = data.funnel.filter((f) => f.source !== "All sources");

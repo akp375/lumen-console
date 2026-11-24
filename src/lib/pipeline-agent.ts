@@ -56,7 +56,7 @@ export const AGENT_TOOLS: Tool[] = [
   },
   {
     name: "get_speed_to_lead",
-    description: "Speed to lead per ADR and for the team (assigned ADRs only), plus unassigned MQLs as their own row: MQLs, first touched on time (within 24 hours), late, never touched, on-time %, median hours to first touch. For this week's MQLs and for the last 6 months.",
+    description: "Speed to lead per ADR and for the team (assigned ADRs only), plus unassigned MQLs as their own row: MQLs, first touched on time (within 24 hours), late, never touched, on-time %, median time to first touch (hours up to 48, then days). For this week's MQLs and for the last 6 months.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {

@@ -10,6 +10,7 @@ const monthFmt = new Intl.DateTimeFormat("en-US", { month: "short", year: "numer
 //   Dates: 16 Dec 2026
 //   Claude spend: $0.0276 under $1, $2.04 from $1 (aiUsd)
 //   Signed changes: ASCII sign, -7 / +3 / -35.1%
+//   Durations: hours up to 48, then days: 9.8 hours / 4.7 days / 97 days (humanDuration)
 
 /** $1.2M, $387K, $950 */
 export function usdCompact(n: number): string {
@@ -23,6 +24,17 @@ export function usdCompact(n: number): string {
 /** Claude spend: $0.0276 under $1 (small calls stay readable), $2.04 from $1. */
 export function aiUsd(n: number): string {
   return `$${n.toFixed(Math.abs(n) >= 1 ? 2 : 4)}`;
+}
+
+/** Hours as people say them: up to 48 hours in hours ("9.8 hours"), then days ("4.7 days", "97 days"). */
+export function humanDuration(hours: number | null): string {
+  if (hours === null) return "n/a";
+  if (hours <= 48) {
+    const h = Math.round(hours * 10) / 10;
+    return `${h} ${h === 1 ? "hour" : "hours"}`;
+  }
+  const days = hours / 24;
+  return days < 10 ? `${Math.round(days * 10) / 10} days` : `${Math.round(days)} days`;
 }
 
 /** $13,500 */
@@ -124,6 +136,19 @@ const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
  * every browser print exactly the same text (Intl's date-and-time wording differs between browsers,
  * e.g. "23 Nov 2026 at 17:41", which breaks React hydration).
  */
+/** 2026-11-13 -> 13 Nov (for compact meta lines; the year is implied). */
+export function dayMonth(iso: string): string {
+  const d = new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
+  return `${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]}`;
+}
+
+/** 2026-11-23T23:38:00Z -> 23 Nov, 23:38 UTC */
+export function dayMonthTimeUtc(iso: string): string {
+  const d = new Date(iso);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${dayMonth(iso)}, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
+}
+
 export function dateTimeUtc(iso: string): string {
   const d = new Date(iso);
   const two = (n: number) => String(n).padStart(2, "0");

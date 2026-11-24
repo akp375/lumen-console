@@ -3,8 +3,9 @@
 import { useState, type ReactNode } from "react";
 import { generateAdrMemoAction } from "@/app/pipeline/adr-insights/actions";
 import { FIELD_LABELS, REC_FIELDS, memoFieldKey, type AdrMemo } from "@/lib/adr-memo-shared";
-import { dateTimeUtc, shortDate } from "@/lib/format";
+import { aiUsd, dayMonth, dayMonthTimeUtc, modelLabel } from "@/lib/format";
 import { AiBadge } from "./AiBadge";
+import { AI_TYPE, AiCallout, AiCard, AiField, AiFields, AiMeta, AiPanel, GroundedChip } from "./AiPanel";
 import { ErrorNote, FlagButton, LimitNotice } from "./RiskUi";
 import { Spinner } from "./Spinner";
 
@@ -38,81 +39,65 @@ export function AdrMemoPanel({ initial, missingMigration, adrManager }: { initia
   const flags = memo?.grounding.ungrounded ?? [];
   const flagsFor = (field: string) => flags.filter((f) => f.field === field).map((f) => f.text);
 
+  const info = "Claude Sonnet turns this page's numbers into 3 to 5 recommendations. Every number and date is checked against the data it was given.";
   return (
-    <section className="mb-8 rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            Memo for the ADR Manager
-            {memo && <AiBadge model={memo.model} costUsd={memo.costUsd} />}
-          </h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {adrManager ? `For ${adrManager}. ` : ""}Claude Sonnet turns this page&apos;s numbers into 3 to 5 recommendations. Every number is checked against the data
-            it was given.
-          </p>
+    <AiPanel
+      title="Memo for the ADR Manager"
+      info={info}
+      badge={memo && <AiBadge model={memo.model} costUsd={memo.costUsd} />}
+      action={<FlagButton onClick={run} busy={busy} busyLabel="Claude is writing…" label={memo ? "Regenerate" : "Generate memo"} />}
+      meta={
+        memo && (
+          <AiMeta
+            items={[
+              adrManager && `For ${adrManager}`,
+              `Generated ${dayMonthTimeUtc(memo.createdAt)}`,
+              `Data as of ${dayMonth(memo.asOfDate)}`,
+              modelLabel(memo.model),
+              aiUsd(memo.costUsd),
+              <GroundedChip key="g" checked={memo.grounding.checked} flagged={flags.length} against="Cockpit's data" />,
+            ]}
+          />
+        )
+      }
+    >
+      {(notice || error || saveError) && (
+        <div className="mt-3 space-y-2">
+          {notice && <LimitNotice message={notice} />}
+          {error && <ErrorNote message={error} />}
+          {saveError && <LimitNotice message={saveError} />}
         </div>
-        <FlagButton onClick={run} busy={busy} busyLabel="Claude is writing…" label={memo ? "Regenerate" : "Generate memo"} />
-      </div>
-
-      <div className="mt-3 space-y-2">
-        {notice && <LimitNotice message={notice} />}
-        {error && <ErrorNote message={error} />}
-        {saveError && <LimitNotice message={saveError} />}
-      </div>
+      )}
 
       {busy && !memo && (
-        <p className="mt-4 inline-flex items-center gap-2 text-sm text-zinc-500">
+        <p className={`mt-4 inline-flex items-center gap-2 ${AI_TYPE.body}`}>
           <Spinner /> Claude is writing the memo…
         </p>
       )}
 
       {memo && (
-        <div className={`mt-4 ${busy ? "opacity-50" : ""}`}>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Generated {dateTimeUtc(memo.createdAt)} UTC · data as of {shortDate(memo.asOfDate)}
-          </p>
-          <p className="mt-3 text-lg font-medium text-zinc-900 dark:text-zinc-50">
+        <div className={busy ? "opacity-50" : ""}>
+          <AiCallout>
             <Marked text={memo.content.headline} flags={flagsFor(memoFieldKey(null, "headline"))} />
-          </p>
-          <GroundingSummary checked={memo.grounding.checked} flagged={flags.length} />
-          {memo.note && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{memo.note}</p>}
-          <ol className="mt-4 space-y-4">
+          </AiCallout>
+          {memo.note && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{memo.note}</p>}
+          <ol className="mt-4 grid gap-3 lg:grid-cols-2">
             {memo.content.recommendations.map((r, i) => (
-              <li key={i} className="rounded-md border border-zinc-100 p-4 dark:border-zinc-800">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Recommendation {i + 1}</div>
-                <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[140px_1fr]">
+              <AiCard key={i} label={`Recommendation ${i + 1}`}>
+                <AiFields>
                   {REC_FIELDS.map((f) => (
-                    <Row key={f} label={FIELD_LABELS[f]}>
+                    <AiField key={f} label={FIELD_LABELS[f]} emphasis={f === "finding" || f === "action"}>
                       <Marked text={r[f]} flags={flagsFor(memoFieldKey(i, f))} />
-                    </Row>
+                    </AiField>
                   ))}
-                </dl>
-              </li>
+                </AiFields>
+              </AiCard>
             ))}
           </ol>
         </div>
       )}
-      {!memo && !busy && <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">No memo yet. Generating one costs about $0.03.</p>}
-    </section>
-  );
-}
-
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <>
-      <dt className="font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="text-zinc-800 dark:text-zinc-200">{children}</dd>
-    </>
-  );
-}
-
-function GroundingSummary({ checked, flagged }: { checked: number; flagged: number }) {
-  if (flagged === 0)
-    return <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">All {checked} numbers and dates in this memo appear in Cockpit&apos;s data.</p>;
-  return (
-    <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-      {flagged} of {checked} numbers or dates couldn&apos;t be found in Cockpit&apos;s data. They are highlighted below; treat them with care.
-    </p>
+      {!memo && !busy && <p className={`mt-4 ${AI_TYPE.label}`}>No memo yet. Generating one costs about $0.03.</p>}
+    </AiPanel>
   );
 }
 

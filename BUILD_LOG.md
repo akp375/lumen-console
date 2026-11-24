@@ -1017,3 +1017,35 @@ No new features. I clicked through every page: Overview, ADR Insights, ADR Hygie
 | health-inputs rule: ADR on new inbound/outbound deals only, 4 break it | **ADR data:** every Qualifying deal carries the ADR whose lead it came from, partner leads included (opp_s01_005, 010, 015, 020). The rule predates the ADR module. | The rule now also expects an ADR on every Qualifying deal. |
 
 **Result.** Both baselines were re-saved with `--save-before`. Both checks now pass with "Nothing changed", and all ownership and data rules pass.
+
+### AI panels: one layout
+
+The ADR memo, the Pipeline agent and the renewal-risk notes now share one set of components (`src/components/AiPanel.tsx`).
+
+**Shared pieces.**
+- **Header:** the title, a small (i) info tip holding the explanation, the AI badge and the action button, all on one row.
+- **Meta line:** one compact line in a light grey box: who it's for, when it was generated, the as-of date, model, cost, and a green "✓ n/n numbers grounded" chip. The chip replaces the separate grounding sentence.
+- **Callout:** the headline or summary sits in a light violet callout with a slim left border. It is 15px, one size below the 16px title.
+- **Item cards:** recommendations, proposals and flagged accounts each sit on a light grey card. Each card has an uppercase label, a status pill on the right, and labels in a 120px grey column. Finding and Action (and Reason and Next action) are slightly emphasized.
+- **One type scale:** title 16px, headline 15px, body 14px, label 12px, and nothing else. This was checked in the browser.
+
+**Per panel.**
+- **Agent:**
+  - The goal, acceptance rate and "Deciding as" sit in one control bar.
+  - The tool calls fold into "Investigation steps (n)", collapsed by default; while a run is live they show as a numbered list.
+  - The summary's first paragraph goes in the callout. Its numbered points become a numbered list with the first phrase in bold. When Claude bolds the lead itself (`**Overdue MQLs:**`), that phrase is used and the asterisks are dropped (`src/lib/summary-text.ts`).
+- **Renewals:**
+  - The flagged accounts are cards instead of a table.
+  - The notes are now grounding-checked against each account's facts: 79/79 on the first run.
+
+**Durations.** `humanDuration` shows hours up to 48, then days ("4.7 days", "97 days"). It's used on ADR Insights and in what Claude receives:
+- the memo input: `median_time_to_first_touch`
+- the agent's `list_overdue_mqls`: `waiting_since_mql`
+- `get_speed_to_lead`
+
+So Claude now writes days: the regenerated memo says "4.7 days" (64/64 grounded) and the new agent run says "97 days" (38/38 grounded). This test run of the agent left 3 proposals waiting. Its task proposal went onto the Orchardly Qualifying deal.
+
+**Checks.**
+- **Tests:** 150 pass. New coverage: durations, summary splitting and the bold leads.
+- **Typecheck and lint:** clean.
+- **Browser:** all three panels were checked at 1366px with no console errors.
