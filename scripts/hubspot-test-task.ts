@@ -15,6 +15,7 @@ console.log(`Test company: ${account.name} (${account.accountId}); due ${due}`);
 const t = await createHubSpotTask({
   object: "company",
   recordId: account.accountId,
+  accountId: account.accountId,
   title: "Cockpit agent test: check this task is on the right company",
   body: "Cockpit agent test: created by npm run hubspot:test-task. Safe to delete.",
   dueDate: due,

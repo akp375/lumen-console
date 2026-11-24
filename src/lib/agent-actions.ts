@@ -26,7 +26,8 @@ export type ActionDb = {
   setEnrollmentAdr(ids: string[], adrId: string | null): Promise<void>;
   sequenceStatus(id: string): Promise<"active" | "paused" | null>;
   setSequenceStatus(id: string, status: "active" | "paused", pausedAt: string | null): Promise<void>;
-  createHubSpotTask(t: { object: "company" | "deal"; recordId: string; title: string; body: string; dueDate: string }): Promise<{ taskId: string; hubspotRecordId: string }>;
+  /** A deal task is also linked to the deal's company. */
+  createHubSpotTask(t: { object: "company" | "deal"; recordId: string; accountId: string; title: string; body: string; dueDate: string }): Promise<{ taskId: string; hubspotRecordId: string; hubspotCompanyId: string }>;
   /** Sends ADR owner and the two hygiene flags (from lib/metrics.ts) to these leads' HubSpot contacts. */
   updateLeadContacts(leadIds: string[]): Promise<{ updated: number; notInHubSpot: string[] }>;
   /** Approved actions that executed, newest first (for revert). */
@@ -106,8 +107,8 @@ async function execute(db: ActionDb, a: AgentActionView, deciderName: string, de
     if (d.due_date < today) throw new Error(`Nothing created: the due date (${d.due_date}) has passed. Run the agent again for a fresh proposal.`);
     // Work state only: no Cockpit numbers go to HubSpot.
     const body = `Proposed by Cockpit's Pipeline agent and approved by ${deciderName} on ${decidedOn}. The numbers behind it are on ADR Insights in Cockpit.`;
-    const t = await db.createHubSpotTask({ object: d.object, recordId: d.record_id, title: d.title, body, dueDate: d.due_date });
-    return { hubspot_task_id: t.taskId, hubspot_record_id: t.hubspotRecordId, object: d.object };
+    const t = await db.createHubSpotTask({ object: d.object, recordId: d.record_id, accountId: d.account_id, title: d.title, body, dueDate: d.due_date });
+    return { hubspot_task_id: t.taskId, hubspot_record_id: t.hubspotRecordId, hubspot_company_id: t.hubspotCompanyId, object: d.object };
   }
   throw new Error(`Unknown action type "${String(a.type)}".`);
 }

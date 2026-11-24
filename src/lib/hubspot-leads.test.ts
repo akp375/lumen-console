@@ -3,7 +3,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { calcAdrHygiene, calcLeadCrmRows, type AdrInputs, type AdrLeadRow, type LeadCrmRow } from "./metrics.ts";
-import { isoTime, leadContactProperties, leadFlagProperties, leadLifecycleStage, leadProperties, pickTestLead, planLeadContacts, splitName, type ExistingContact } from "./hubspot-sync.ts";
+import { pickTestQualifyingDeal } from "./hubspot-sync-run.ts";
+import type { CrmDealRow } from "./metrics.ts";
+import { FORECAST_TO_HUBSPOT_LABEL, hubspotStageLabel, isoTime, leadContactProperties, leadFlagProperties, leadLifecycleStage, leadProperties, pickTestLead, planLeadContacts, splitName, type ExistingContact } from "./hubspot-sync.ts";
 
 const AS_OF = "2026-11-13";
 
@@ -149,6 +151,26 @@ test("Matching: a re-run finds every lead by email and creates nothing", () => {
   const byEmail = new Map(rows.map((r, i) => [r.email, { id: `hs${i}`, email: r.email, leadId: r.leadId, lifecyclestage: leadLifecycleStage(r) }]));
   const plans = planLeadContacts(rows, byEmail, new Map());
   assert.ok(plans.every((p) => p.existing !== null));
+});
+
+test("Lead CRM rows: each lead carries the deal it became, for the deal -> contact link", () => {
+  assert.equal(row("L5").opportunityId, "O1");
+  assert.equal(row("L1").opportunityId, null);
+});
+
+test("Qualifying deals: Stage 0.1 goes to HubSpot's Qualifying stage, Not forecasted", () => {
+  assert.equal(hubspotStageLabel("Stage 0.1"), "Qualifying");
+  assert.equal(hubspotStageLabel("Discovery"), "Discovery");
+  assert.equal(hubspotStageLabel("Closed Won"), "Closed Won");
+  // Qualifying deals carry forecast category Omitted in Cockpit's data, which is HubSpot's "Not forecasted".
+  assert.equal(FORECAST_TO_HUBSPOT_LABEL.Omitted, "Not forecasted");
+});
+
+test("Test Qualifying deal: the largest one", () => {
+  const deal = (opportunityId: string, stage: string, amount: number) => ({ opportunityId, stage, amount }) as CrmDealRow;
+  const picked = pickTestQualifyingDeal([deal("o1", "Stage 0.1", 24000), deal("o2", "Discovery", 900000), deal("o3", "Stage 0.1", 127200)]);
+  assert.equal(picked?.opportunityId, "o3");
+  assert.equal(pickTestQualifyingDeal([deal("o2", "Discovery", 1)]), undefined);
 });
 
 test("Test lead: the first MQL past the SLA that an ADR owns", () => {

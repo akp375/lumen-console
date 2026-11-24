@@ -893,3 +893,52 @@ Both snapshots are in `reconciliation/adr-numbers-before-lifecycle.json` and `re
 - the test lead
 
 The agent tests now also cover HubSpot being updated on approve and on reset, a HubSpot failure leaving the reassignment in place, and reject never touching HubSpot.
+
+### Qualifying deals in HubSpot
+
+**Why.** This closes the gap between contacts and deals. Qualifying deals (meeting held, not yet qualified as an opportunity) used to stay out of HubSpot. Now they are in, linked to their company and to the lead's contact.
+
+**The stage.**
+- **"Qualifying" is now the first stage of the New business pipeline,** added by `npm run hubspot:setup` from `hubspot/pipelines.json` (`firstStages`). The existing stages kept their order and moved down one place. Renewals & expansion is unchanged.
+- **Probability is 1%, not 0%** (owner's decision, 24 Nov). HubSpot treats any 0% stage as closed lost. The first test deal showed `hs_is_closed_lost: true` until the stage moved to 1%. 1% is the lowest probability HubSpot keeps open. (The seed holds 5% for these deals; HubSpot uses 1%.)
+- **Forecast category:** Qualifying deals carry "Omitted" in Cockpit, which is HubSpot's **Not forecasted**, so they never count toward forecast totals.
+- **No description:** HubSpot deal stages have no description field, so "meeting held, not yet qualified as an opportunity" lives in `pipelines.json` and here.
+
+**Sync.**
+- **Stage mapping:** Stage 0.1 deals now sync into the Qualifying stage (`hubspotStageLabel`).
+- **Lead contacts:** every deal that came from a lead is linked to that lead's contact. That's 69 deals: the 25 Qualifying deals, plus the 44 that converted.
+- **`--one`:** also syncs the largest Qualifying deal (Juniper Health, opp_s01_001, $127,200) with its lead. `--deal <id>` picks another.
+- **Deals left out:** none any more, so `deals_left_out` is 0.
+
+**Pipeline agent.** `create_hubspot_task` about a Qualifying deal now goes on the deal and is also linked to the deal's company. The tool description and system prompt say so.
+
+**HubSpot pipeline totals before and after.** Read from all deals, as HubSpot's reports add them up:
+
+| | Before | After |
+|---|---|---|
+| Deals | 207 | 232 |
+| Forecast total (Pipeline + Best case + Commit) | $1,261,900 | **$1,261,900, unchanged** (matches Cockpit's open pipeline) |
+| Open amount, excluding Not forecasted | $1,261,900 | **$1,261,900, unchanged** |
+| Closed won / closed lost | 89 / 58 | **89 / 58, unchanged** (matches Cockpit) |
+| Weighted amount | $401,446 | $408,856 (+$7,410: 1% of the $741,000 in Qualifying) |
+| Open deals / plain open amount | 60 / $1,261,900 | 85 / $2,002,900 (+25 Qualifying deals, $741,000) |
+
+Reports that add up all open deal amounts should filter out forecast category "Not forecasted" (or the Qualifying stage).
+
+**Run on 24 Nov.**
+- **Setup:** `hubspot:setup` added the stage.
+- **One-deal test:** `hubspot:sync -- --one` synced Juniper Health – New business. It's linked to the Juniper Health company and to Carmen Nwosu (lead_0196, Meeting booked). The owner chose 1% after seeing the closed-lost problem.
+- **Full sync, no errors:**
+  - 232 deals: 24 new, 208 updated, 25 of them Qualifying.
+  - 69 deals linked to their lead's contact.
+  - 600 lead contacts, all updated; 0 created.
+
+**Checks.**
+- **Tests:** 144 pass. New coverage:
+  - the stage label
+  - the Not forecasted mapping
+  - the test-deal pick
+  - lead rows carrying their deal
+  - Qualifying-deal tasks recorded on the deal
+  - approve linking a deal task to its company
+- **`adr:check`:** passes.

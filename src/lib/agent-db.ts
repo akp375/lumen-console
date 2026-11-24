@@ -137,9 +137,11 @@ export async function findHubSpotRecord(object: "company" | "deal", lumenId: str
   return r.results[0].id;
 }
 
-/** Creates a HubSpot task linked to one company or deal. Returns the task id. */
-export async function createHubSpotTask(t: { object: "company" | "deal"; recordId: string; title: string; body: string; dueDate: string }): Promise<{ taskId: string; hubspotRecordId: string }> {
+/** Creates a HubSpot task on one company, or on one deal and that deal's company. Returns the task id. */
+export async function createHubSpotTask(t: { object: "company" | "deal"; recordId: string; accountId: string; title: string; body: string; dueDate: string }): Promise<{ taskId: string; hubspotRecordId: string; hubspotCompanyId: string }> {
   const hubspotRecordId = await findHubSpotRecord(t.object, t.recordId);
+  const hubspotCompanyId = t.object === "company" ? hubspotRecordId : await findHubSpotRecord("company", t.accountId);
+  const link = (id: string, object: "company" | "deal") => ({ to: { id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: TASK_ASSOCIATION[object] }] });
   const task = await hubspot<{ id: string }>("POST", "/crm/v3/objects/tasks", {
     properties: {
       hs_timestamp: `${t.dueDate}T12:00:00.000Z`, // the due date
@@ -149,9 +151,9 @@ export async function createHubSpotTask(t: { object: "company" | "deal"; recordI
       hs_task_priority: "MEDIUM",
       hs_task_type: "TODO",
     },
-    associations: [{ to: { id: hubspotRecordId }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: TASK_ASSOCIATION[t.object] }] }],
+    associations: t.object === "deal" ? [link(hubspotRecordId, "deal"), link(hubspotCompanyId, "company")] : [link(hubspotRecordId, "company")],
   });
-  return { taskId: task.id, hubspotRecordId };
+  return { taskId: task.id, hubspotRecordId, hubspotCompanyId };
 }
 
 export const supabaseActionDb: ActionDb = {

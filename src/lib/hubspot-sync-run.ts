@@ -1,6 +1,8 @@
 // Syncs Supabase -> HubSpot: companies, deals (with their company), one made-up contact per prospect, a
 // contact for each enterprise / mid-market customer's executive sponsor (current or former), and a contact
-// for each ADR lead (matched on email first, then lumen_lead_id; never duplicated).
+// for each ADR lead (matched on email first, then lumen_lead_id; never duplicated). Qualifying deals go in the
+// New business pipeline's Qualifying stage (0%, Not forecasted). Each deal that came from a lead is linked to
+// that lead's contact.
 // Shared by `npm run hubspot:sync` and the "Sync to HubSpot" button on the Integrations page. Server-side only.
 // All numbers come from metrics.ts (getCrmSyncData); mapping rules live in hubspot-sync.ts.
 // Records are matched on lumen_account_id / lumen_opportunity_id / email, so re-runs update instead of duplicating.
@@ -9,12 +11,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCrmSyncData, getLeadCrmRows, type CrmAccountRow, type CrmDealRow, type LeadCrmRow } from "./metrics.ts";
 import { hubspot } from "./hubspot.ts";
-import { LEAD_STAGE_LABELS } from "./format.ts";
+import { LEAD_STAGE_LABELS, QUALIFYING } from "./format.ts";
 import { recordSyncRun } from "./sync-runs.ts";
 import {
   checkbox,
   DEAL_TYPE_TO_HUBSPOT_LABEL,
   dealName,
+  hubspotStageLabel,
   decimal,
   fictionalContact,
   FORECAST_TO_HUBSPOT_LABEL,
@@ -40,8 +43,10 @@ export type SyncOptions = {
   /** Sync one customer and its deals: this account ID, or (with one: true) the default test account. */
   accountId?: string;
   one?: boolean;
-  /** With one / accountId: the lead to sync (default: pickTestLead). */
+  /** With one / accountId: the lead to sync (default: the test Qualifying deal's lead, else pickTestLead). */
   leadId?: string;
+  /** With one / accountId: a Qualifying deal to sync too (default: the largest Qualifying deal). */
+  dealId?: string;
   /** Called with a short line at each step. */
   onProgress?: (line: string) => void;
   /** Where the run started, for the sync_runs record. Defaults to "cli". */
@@ -189,10 +194,7 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   // 1. Our data (all numbers from metrics.ts)
   say("Reading Cockpit data…");
   const all = await getCrmSyncData();
-  // Stage 0.1 deals ("meeting booked, qualifying") aren't in HubSpot's pipelines yet, so they stay out of the sync
-  // (owner's decision, 23 Nov 2026). Sequences aren't synced.
-  const skipped = all.deals.filter((d) => d.stage === STAGE_01).length;
-  all.deals = all.deals.filter((d) => d.stage !== STAGE_01);
+  // Qualifying deals (Stage 0.1) are synced into the Qualifying stage (owner's decision, 24 Nov 2026). Sequences aren't synced.
   let accounts: CrmAccountRow[] = all.accounts;
   let deals: CrmDealRow[] = all.deals;
   const single = opts.accountId
@@ -204,14 +206,25 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     accounts = [single];
     deals = all.deals.filter((d) => d.accountId === single.accountId);
     say(`One account: ${single.name} (${single.accountId}), ${deals.length} deal(s).`);
-  }
+    // Plus one Qualifying deal, to test the Qualifying stage and the deal -> lead contact link.
+    const q = opts.dealId
+      ? (all.deals.find((d) => d.opportunityId === opts.dealId) ?? fail(`No deal with ID "${opts.dealId}".`))
+      : pickTestQualifyingDeal(all.deals);
+    if (q && !deals.includes(q)) {
+      deals.push(q);
+      say(`One ${QUALIFYING} deal: ${dealName(q)} (${q.opportunityId}), $${q.amount.toLocaleString("en-US")}.`);
+    }
+  } else if (opts.dealId) fail("--deal only works with --one or --account.");
   const prospects = single ? [] : accounts.filter((a) => a.status === "prospect");
 
   // ADR leads: all of them, or (one-account runs) a single test lead.
   const allLeads = await getLeadCrmRows();
   let leads: LeadCrmRow[] = allLeads;
   if (single) {
-    const lead = opts.leadId ? (allLeads.find((l) => l.leadId === opts.leadId) ?? fail(`No lead with ID "${opts.leadId}".`)) : (pickTestLead(allLeads) ?? fail("No leads to test with."));
+    const dealLead = allLeads.find((l) => l.opportunityId !== null && deals.some((d) => d.opportunityId === l.opportunityId && d.stage === STAGE_01));
+    const lead = opts.leadId
+      ? (allLeads.find((l) => l.leadId === opts.leadId) ?? fail(`No lead with ID "${opts.leadId}".`))
+      : (dealLead ?? pickTestLead(allLeads) ?? fail("No leads to test with."));
     leads = [lead];
     say(`One lead: ${lead.contactName} (${lead.leadId}) at ${lead.accountName}.`);
   } else if (opts.leadId) fail("--lead only works with --one or --account.");
@@ -287,7 +300,10 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   // 4. Deals
   const dealInputs: Input[] = deals.map((d) => {
     const pipeline = pipelineFor.get(d.type) ?? fail(`No pipeline for deal type "${d.type}"`);
-    const stage = pipeline.stages.find((s) => s.label.trim().toLowerCase() === d.stage.toLowerCase()) ?? fail(`Pipeline "${pipeline.label}" has no "${d.stage}" stage.`);
+    const stageLabel = hubspotStageLabel(d.stage);
+    const stage =
+      pipeline.stages.find((s) => s.label.trim().toLowerCase() === stageLabel.toLowerCase()) ??
+      fail(`Pipeline "${pipeline.label}" has no "${stageLabel}" stage.${d.stage === STAGE_01 ? " Run npm run hubspot:setup." : ""}`);
     return {
       idProperty: "lumen_opportunity_id",
       id: d.opportunityId,
@@ -355,7 +371,6 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   const leadMatched = leadPlans.filter((p) => p.existing).length;
   if (leads.length) say(`Leads: ${leadMatched} already in HubSpot, ${leads.length - leadMatched} to create${merged ? `, ${merged} merged with a prospect or sponsor contact` : ""}.`);
 
-  if (skipped) say(`Left out: ${skipped} Qualifying deal(s), which aren't in HubSpot's pipelines.`);
   say(
     `To sync: ${companyInputs.length} companies, ${dealInputs.length} deals, ${contactInputs.length} contacts ` +
       `(${prospects.length} prospect, ${sponsors.length} executive sponsor), ${leads.length} lead contact(s).`,
@@ -377,7 +392,7 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
       contacts: { ...NONE, synced: contactInputs.length },
       leads: { ...NONE, synced: leads.length, created: leads.length - leadMatched, updated: leadMatched },
       lifecycleCleared: 0,
-      dealsLeftOut: skipped,
+      dealsLeftOut: 0,
       samples: {
         company: companyInputs[0]?.properties,
         deal: dealInputs[0]?.properties,
@@ -424,11 +439,13 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
   say(`Sending ${dealInputs.length} deals…`);
   const dealIds = await upsert("deals", dealInputs);
   const dealCount = count(dealIds);
-  say(`Deals: ${dealCount.synced} synced (${dealCount.created} new, ${dealCount.updated} updated).`);
+  say(`Deals: ${dealCount.synced} synced (${dealCount.created} new, ${dealCount.updated} updated, ${deals.filter((d) => d.stage === STAGE_01).length} ${QUALIFYING}).`);
+  // Companies this run didn't send (one-account runs) are looked up by their Lumen id.
+  const companyIdOf = await companyLookup(companyIds, [...deals.map((d) => d.accountId), ...leads.map((l) => l.accountId)]);
   await associate(
     "deals",
     "companies",
-    deals.map((d) => ({ from: dealIds.get(d.opportunityId)!.id, to: companyIds.get(d.accountId)?.id ?? fail(`Company ${d.accountId} for deal ${d.opportunityId} was not synced.`) })),
+    deals.map((d) => ({ from: dealIds.get(d.opportunityId)!.id, to: companyIdOf(d.accountId) })),
   );
   say(`Deals attached to their companies: ${deals.length}.`);
 
@@ -462,23 +479,36 @@ async function syncOnce(opts: SyncOptions): Promise<SyncResult> {
     const created = leadPlans.filter((p) => p.kind === "upsert" && upserted.get(p.email)?.isNew).length;
     leadCount = { synced: leads.length, created, updated: leads.length - created };
     say(`Lead contacts: ${leadCount.synced} synced (${leadCount.created} new, ${leadCount.updated} updated).`);
-    // Companies this run didn't send (one-lead runs) are looked up by their Lumen id.
-    const needCompanies = [...new Set(leads.map((l) => l.accountId).filter((id) => !companyIds.has(id)))];
-    const otherCompanies = await readIds("companies", "lumen_account_id", needCompanies);
     await associate(
       "contacts",
       "companies",
-      leadPlans.map((p) => {
-        const accountId = leads.find((l) => l.leadId === p.leadId)!.accountId;
-        return { from: contactIdOf(p), to: companyIds.get(accountId)?.id ?? otherCompanies.get(accountId) ?? fail(`Company ${accountId} for lead ${p.leadId} isn't in HubSpot. Run the full sync.`) };
-      }),
+      leadPlans.map((p) => ({ from: contactIdOf(p), to: companyIdOf(leads.find((l) => l.leadId === p.leadId)!.accountId) })),
     );
     say(`Lead contacts attached to their companies: ${leads.length}.`);
+    // Each deal that came from a lead (its Qualifying deal, later the opportunity) is linked to the lead's contact.
+    const dealContacts = leadPlans.flatMap((p) => {
+      const opp = leads.find((l) => l.leadId === p.leadId)!.opportunityId;
+      const deal = opp ? dealIds.get(opp) : undefined;
+      return deal ? [{ from: deal.id, to: contactIdOf(p) }] : [];
+    });
+    await associate("deals", "contacts", dealContacts);
+    if (dealContacts.length) say(`Deals linked to their lead's contact: ${dealContacts.length}.`);
   }
 
   if (scope.kind === "one") scope.hubspotId = companyIds.get(scope.accountId)?.id ?? null;
   say("Sync finished.");
-  return { dryRun, scope, companies, deals: dealCount, contacts, leads: leadCount, lifecycleCleared: toClear.length + contactsToClear.length, dealsLeftOut: skipped };
+  return { dryRun, scope, companies, deals: dealCount, contacts, leads: leadCount, lifecycleCleared: toClear.length + contactsToClear.length, dealsLeftOut: 0 };
+}
+
+/** The largest Qualifying deal: the default test deal for --one. */
+export function pickTestQualifyingDeal(deals: CrmDealRow[]): CrmDealRow | undefined {
+  return deals.filter((d) => d.stage === STAGE_01).sort((a, b) => b.amount - a.amount || a.opportunityId.localeCompare(b.opportunityId))[0];
+}
+
+/** HubSpot company id by Lumen account id: from this run's upserts, else read from HubSpot. Stops if one is missing. */
+async function companyLookup(sent: Map<string, { id: string }>, accountIds: string[]): Promise<(accountId: string) => string> {
+  const other = await readIds("companies", "lumen_account_id", [...new Set(accountIds.filter((id) => !sent.has(id)))]);
+  return (id) => sent.get(id)?.id ?? other.get(id) ?? fail(`Company ${id} isn't in HubSpot. Run the full sync.`);
 }
 
 /** Reads contacts by email or lumen_lead_id. Returns the ones that exist, keyed by that value (emails lower-cased). */

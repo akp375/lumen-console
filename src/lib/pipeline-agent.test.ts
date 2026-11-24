@@ -217,7 +217,9 @@ test("Proposals: made-up ids, a non-ADR target, a past due date and a Qualifying
   assert.match(err({ type: "reassign_leads", details: { from_adr: "Ada", to_adr: "Dan", lead_ids: ["L99"] } }), /no lead/);
   assert.match(err({ type: "reassign_leads", details: { from_adr: "Ada", to_adr: "Ann", lead_ids: ["L1"] } }), /Unknown to_adr/);
   assert.match(err({ type: "reassign_leads", details: { from_adr: "Dan", to_adr: "Ada", lead_ids: ["L1"] } }), /isn't owned by Dan Moss/);
-  assert.match(err({ type: "create_hubspot_task", details: { object: "deal", record_id: "O1", title: "Qualify", due_date: "2026-11-25" } }), /Qualifying deals aren't in HubSpot/);
+  // Qualifying deals are in HubSpot now: a task about one goes on the deal.
+  assert.equal(err({ type: "create_hubspot_task", details: { object: "deal", record_id: "O1", title: "Qualify", due_date: "2026-11-25" } }), "recorded");
+  assert.match(err({ type: "create_hubspot_task", details: { object: "deal", record_id: "O99", title: "Qualify", due_date: "2026-11-25" } }), /no deal/);
   assert.match(err({ type: "pause_sequence", details: { sequence_id: "S1" } }), /get_sequence_stats first/);
   assert.equal(err({ type: "reassign_leads", details: { from_adr: "ada", to_adr: "d2", lead_ids: ["L1"] } }), "recorded");
 });
@@ -305,8 +307,8 @@ function fakeActionDb(actions: AgentActionView[], inputs = makeInputs(), opts: {
       sequences.set(id, s);
     },
     createHubSpotTask: async (t) => {
-      writes.push(`hubspot:${t.recordId}`);
-      return { taskId: "hs_task_1", hubspotRecordId: "hs_co_1" };
+      writes.push(`hubspot:${t.object}:${t.recordId}:${t.accountId}`);
+      return { taskId: "hs_task_1", hubspotRecordId: t.object === "deal" ? "hs_deal_1" : "hs_co_1", hubspotCompanyId: "hs_co_1" };
     },
     updateLeadContacts: async (ids) => {
       if (opts.hubspotDown) throw new Error("Couldn't reach HubSpot");
@@ -371,6 +373,16 @@ test("Approve: reassigns the leads and their enrollments, pauses, creates the ta
   assert.equal(f.byId.get("act3")!.outcome, "done"); // the HubSpot task stays
   assert.deepEqual(lines.map((l) => l.status).sort(), ["kept", "reverted", "reverted"]);
   assert.equal(f.writes.filter((w) => w.startsWith("hubspot")).length, 1); // only the approval wrote to HubSpot
+});
+
+test("Approve: a task on a Qualifying deal goes on the deal and is linked to its company", async () => {
+  const onDeal = proposal("act8", "create_hubspot_task", { object: "deal", record_id: "O1", record: "Bravo: Qualifying deal, $24,000", account_id: "A2", title: "Qualify or close the Qualifying deal at Bravo", due_date: realDate(2) });
+  const f = fakeActionDb([onDeal]);
+  const r = await approveAction(f.db, "act8", "m1", "24 Nov 2026");
+  assert.ok(r.ok);
+  assert.deepEqual(f.writes, ["hubspot:deal:O1:A2"]);
+  assert.equal(f.byId.get("act8")!.result!.hubspot_record_id, "hs_deal_1");
+  assert.equal(f.byId.get("act8")!.result!.hubspot_company_id, "hs_co_1");
 });
 
 test("Approve: a task whose due date has passed (real calendar) creates nothing", async () => {

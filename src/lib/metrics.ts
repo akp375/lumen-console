@@ -3672,7 +3672,7 @@ export function calcAgentStaleQualifying(input: AdrInputs, asOf: string, adrId: 
     .owned
     .map((i) => {
       const d = deal.get(i.recordId)!;
-      return { deal_id: d.id, account_id: d.account_id, account: i.accountName, deal: dealLabel(d), amount_usd: Math.round(d.amount_usd), created: shortDate(d.created_date), last_activity: shortDate(d.last_activity_date ?? d.created_date), days_without_update: i.ageDays, ae: d.ae_id ? (ctx.nameOf.get(d.ae_id) ?? d.ae_id) : null, in_hubspot: false };
+      return { deal_id: d.id, account_id: d.account_id, account: i.accountName, deal: dealLabel(d), amount_usd: Math.round(d.amount_usd), created: shortDate(d.created_date), last_activity: shortDate(d.last_activity_date ?? d.created_date), days_without_update: i.ageDays, ae: d.ae_id ? (ctx.nameOf.get(d.ae_id) ?? d.ae_id) : null };
     });
   return { stale_after_days: ADR_RULES.staleStage01Days, total: rows.length, shown: Math.min(rows.length, AGENT_LIST_LIMIT), deals: rows.slice(0, AGENT_LIST_LIMIT) };
 }
@@ -3713,6 +3713,8 @@ export type LeadCrmRow = {
   mqlAt: string | null;
   firstTouchAt: string | null;
   disqualifyReason: string | null;
+  /** The deal this lead became (its Qualifying deal, later the opportunity), if any. */
+  opportunityId: string | null;
   /** On the "MQLs past the 24-hour SLA" card. */
   mqlPastSla: boolean;
   /** On the "Unassigned leads" card (open New, Engaged or MQL with no ADR; ended leads aren't). */
@@ -3745,6 +3747,7 @@ export function calcLeadCrmRows(input: AdrInputs, asOf: string, emails: Map<stri
         mqlAt: l.mql_at,
         firstTouchAt: l.first_touch_at,
         disqualifyReason: l.disqualify_reason,
+        opportunityId: l.opportunity_id,
         mqlPastSla: pastSla.has(l.id),
         unassigned: unassigned.has(l.id),
       };

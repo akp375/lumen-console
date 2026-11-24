@@ -1,6 +1,8 @@
 // Creates the Lumen Console custom properties (hubspot/properties.json) and deal pipelines (hubspot/pipelines.json).
 // - Creates the "Lumen Console" property group on each object if it is missing.
-// - Skips properties and pipelines that already exist. Never deletes or changes anything that exists.
+// - Skips properties and pipelines that already exist. Never deletes anything.
+// - A pipeline's firstStages (e.g. Qualifying in New business) are added at the front of an existing pipeline
+//   if missing; the existing stages keep their order and move down one place. Nothing else that exists is changed.
 // - Properties made by hand in HubSpot are matched by label; their internal names are saved back to properties.json.
 // - "unique" properties (e.g. lumen_account_id) are created with hasUniqueValue, so the sync can upsert on them.
 // Run with: npm run hubspot:setup             (makes changes)
@@ -28,11 +30,12 @@ type Spec = {
   options?: string[];
 };
 type SpecFile = { group: { name: string; label: string }; properties: Spec[] };
+type StageSpec = { label: string; probability: number; isClosed: boolean; description?: string };
 type PipelineSpec = {
-  pipelines: { label: string; dealTypes: string[] }[];
-  stages: { label: string; probability: number; isClosed: boolean }[];
+  pipelines: { label: string; dealTypes: string[]; firstStages?: StageSpec[] }[];
+  stages: StageSpec[];
 };
-type HsPipeline = { id: string; label: string; stages: { id: string; label: string; metadata: { probability?: string; isClosed?: string } }[] };
+type HsPipeline = { id: string; label: string; stages: { id: string; label: string; displayOrder: number; metadata: { probability?: string; isClosed?: string } }[] };
 type HsOption = { label: string; value: string };
 type HsProperty = {
   name: string;
@@ -180,8 +183,27 @@ try {
   for (const [i, want] of pipeSpec.pipelines.entries()) {
     const have = pipelines.find((p) => p.label.trim().toLowerCase() === want.label.toLowerCase());
     if (have) {
-      console.log(`  - pipeline "${want.label}" exists (${have.id}), skipped`);
-      for (const s of pipeSpec.stages) {
+      console.log(`  - pipeline "${want.label}" exists (${have.id})`);
+      // firstStages missing from an existing pipeline: move every stage down, then add them at the front.
+      const first = want.firstStages ?? [];
+      const missing = first.filter((s) => !have.stages.some((x) => x.label.trim().toLowerCase() === s.label.toLowerCase()));
+      if (missing.length) {
+        if (DRY_RUN) console.log(`  + would add ${missing.map((s) => `"${s.label}" ${Math.round(s.probability * 100)}%`).join(", ")} at the front of "${want.label}"`);
+        else {
+          for (const st of [...have.stages].sort((a, b) => b.displayOrder - a.displayOrder))
+            await hubspot("PATCH", `/crm/v3/pipelines/deals/${have.id}/stages/${st.id}`, { displayOrder: st.displayOrder + missing.length });
+          for (const [j, s] of missing.entries()) {
+            const created = await hubspot<{ id: string }>("POST", `/crm/v3/pipelines/deals/${have.id}/stages`, {
+              label: s.label,
+              displayOrder: j,
+              metadata: { probability: s.probability.toFixed(2), isClosed: String(s.isClosed) },
+            });
+            console.log(`  + added stage "${s.label}" (${created.id}) at the front of "${want.label}", ${Math.round(s.probability * 100)}%`);
+          }
+        }
+        counts.created += missing.length;
+      }
+      for (const s of [...first.filter((x) => !missing.includes(x)), ...pipeSpec.stages]) {
         const st = have.stages.find((x) => x.label.trim().toLowerCase() === s.label.toLowerCase());
         if (!st) warn(`pipeline "${want.label}" has no "${s.label}" stage. Left as is.`);
         else if (Number(st.metadata.probability) !== s.probability)
@@ -191,12 +213,12 @@ try {
       continue;
     }
     if (DRY_RUN) {
-      console.log(`  + would create pipeline "${want.label}" with stages ${pipeSpec.stages.map((s) => `${s.label} ${Math.round(s.probability * 100)}%`).join(", ")}`);
+      console.log(`  + would create pipeline "${want.label}" with stages ${[...(want.firstStages ?? []), ...pipeSpec.stages].map((s) => `${s.label} ${Math.round(s.probability * 100)}%`).join(", ")}`);
     } else {
       const created = await hubspot<HsPipeline>("POST", "/crm/v3/pipelines/deals", {
         label: want.label,
         displayOrder: pipelines.length + i + 1,
-        stages: pipeSpec.stages.map((s, j) => ({
+        stages: [...(want.firstStages ?? []), ...pipeSpec.stages].map((s, j) => ({
           label: s.label,
           displayOrder: j,
           metadata: { probability: s.probability.toFixed(2), isClosed: String(s.isClosed) },

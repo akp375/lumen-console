@@ -75,7 +75,7 @@ export const AGENT_TOOLS: Tool[] = [
   },
   {
     name: "list_stale_qualifying",
-    description: "One ADR's Qualifying deals (meeting held, not yet qualified as an opportunity) with no update for 14 days or more: deal id, account id, amount, days without update, AE. These deals aren't in HubSpot.",
+    description: "One ADR's Qualifying deals (meeting held, not yet qualified as an opportunity) with no update for 14 days or more: deal id, account id, amount, days without update, AE. These deals are in HubSpot (Qualifying stage), so a task can go on the deal.",
     input_schema: { type: "object", properties: { adr: ADR_ARG }, required: ["adr"], additionalProperties: false },
   },
   {
@@ -152,9 +152,9 @@ Proposals:
   high-bounce sequence into another sequence. The fix is to pause it, remove the bounced addresses
   and verify the rest before re-enrolling anyone.
 - create_hubspot_task: for follow-ups a person must do (qualify or close out a stale Qualifying
-  deal, fix a tag). Qualifying deals aren't in HubSpot: put those tasks on the company (its
-  account id) and name the deal in the title. Title is an instruction with no numbers ("Qualify
-  or close the Qualifying deal at Acme"). Due dates use the real calendar, not the data's date:
+  deal, fix a tag). A task about a deal goes on the deal (object "deal", its deal_id; it is also
+  linked to the company). A task about an account goes on the company (its account id). Title is
+  an instruction with no numbers ("Qualify or close the Qualifying deal at Acme"). Due dates use the real calendar, not the data's date:
   today is ${today}, so due_date is between ${today} and ${plusDays(today, LIMITS.taskDueWithinDays)}.
 - At most ${LIMITS.maxProposals} proposals, the ones that fix the biggest leaks. Each reason names the leak and the
   numbers behind it.
@@ -345,8 +345,9 @@ export function checkProposal(raw: Record<string, unknown>, ctx: RunContext): { 
     } else {
       const deal = inputs.deals.find((x) => x.id === recordId);
       if (!deal) return { error: `There is no deal "${recordId}".` };
-      if (deal.stage === "Stage 0.1") return { error: `Qualifying deals aren't in HubSpot. Put the task on the company (record_id ${deal.account_id}) and name the deal in the title.` };
-      details = { object, record_id: deal.id, record: `${accountName(deal.account_id)}: ${deal.type} deal`, account_id: deal.account_id, title, due_date: due };
+      // Every deal is in HubSpot, Qualifying deals included (their own stage in New business).
+      const stage = deal.stage === "Stage 0.1" ? "Qualifying" : deal.stage;
+      details = { object, record_id: deal.id, record: `${accountName(deal.account_id)}: ${stage} deal, $${Math.round(deal.amount_usd).toLocaleString("en-US")}`, account_id: deal.account_id, title, due_date: due };
     }
     return { type, reason, details };
   }

@@ -20,7 +20,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Calls the HubSpot API and returns the parsed JSON, or throws a readable HubSpotError.
  *  On a rate limit (429) it waits as long as HubSpot asks (Retry-After), or 1, 2, 4, 8, 16 seconds, and retries. */
-export async function hubspot<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+export async function hubspot<T>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await request<T>(method, path, body);
@@ -41,7 +41,7 @@ class RateLimited extends Error {
   }
 }
 
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+async function request<T>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
   const token = process.env.HUBSPOT_ACCESS_TOKEN;
   if (!token) throw new HubSpotError(0, "HUBSPOT_ACCESS_TOKEN is not set. Add it to .env.local (see hubspot/README.md, step 6).");
 

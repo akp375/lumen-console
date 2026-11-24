@@ -1,7 +1,7 @@
 // How Cockpit's values map onto HubSpot fields. Pure formatting rules, no network and no business math:
 // every number comes from calcCrmSyncData in metrics.ts. Used by scripts/hubspot-sync.ts.
 import type { CrmAccountRow, CrmDealRow, CrmSyncData, LeadCrmRow, LeadStage } from "./metrics.ts";
-import { LEAD_STAGE_LABELS } from "./format.ts";
+import { LEAD_STAGE_LABELS, QUALIFYING } from "./format.ts";
 
 /** Our forecast category -> the LABEL of HubSpot's built-in Forecast category option (hs_manual_forecast_category).
  *  The sync reads HubSpot's real options and stops if any label is missing. */
@@ -25,6 +25,11 @@ export function lifecycleLabel(a: Pick<CrmAccountRow, "status" | "hasOpenDeal">)
   if (a.status === "customer") return "Customer";
   if (a.status === "churned") return "Other";
   return a.hasOpenDeal ? "Opportunity" : "Lead";
+}
+
+/** The HubSpot deal stage label for one of our stages: Stage 0.1 is "Qualifying" (first stage of New business, 0%). */
+export function hubspotStageLabel(stage: string): string {
+  return stage === "Stage 0.1" ? QUALIFYING : stage;
 }
 
 /** HubSpot's lifecycle order (internal values). HubSpot won't move a stage backwards unless it is cleared first. */

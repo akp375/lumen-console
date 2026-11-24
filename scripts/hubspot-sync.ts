@@ -2,7 +2,9 @@
 // "Sync to HubSpot" button on the Integrations page also uses. Never deletes anything in HubSpot.
 //
 // Run with: npm run hubspot:sync                           (everything)
-//           npm run hubspot:sync -- --one                  (the default test customer and its deals, plus one test lead)
+//           npm run hubspot:sync -- --one                  (the default test customer and its deals, plus the largest
+//                                                          Qualifying deal and its lead)
+//           npm run hubspot:sync -- --one --deal opp_s01_001 (the same, with this Qualifying deal)
 //           npm run hubspot:sync -- --one --lead lead_0044 (the same, with this lead)
 //           npm run hubspot:sync -- --account acc_0089     (one customer by Lumen account ID, and its deals)
 //           npm run hubspot:sync -- --dry-run              (build everything, send nothing; combine with --one or --account)
@@ -14,8 +16,11 @@ const accountAt = args.indexOf("--account");
 const accountId = accountAt === -1 ? undefined : args[accountAt + 1];
 const leadAt = args.indexOf("--lead");
 const leadId = leadAt === -1 ? undefined : args[leadAt + 1];
+const dealAt = args.indexOf("--deal");
+const dealId = dealAt === -1 ? undefined : args[dealAt + 1];
 
 try {
+  if (dealAt !== -1 && (!dealId || dealId.startsWith("--"))) throw new Error("--deal needs a Lumen deal ID, e.g. --deal opp_s01_001");
   if (leadAt !== -1 && (!leadId || leadId.startsWith("--"))) throw new Error("--lead needs a Lumen lead ID, e.g. --lead lead_0044");
   if (accountAt !== -1 && (!accountId || accountId.startsWith("--"))) throw new Error("--account needs a Lumen account ID, e.g. --account acc_0089");
   const r = await runHubSpotSync({
@@ -23,6 +28,7 @@ try {
     one: args.includes("--one"),
     accountId,
     leadId,
+    dealId,
     onProgress: (line) => console.log(line),
   });
   if (r.samples) {

@@ -1,7 +1,18 @@
 {
-  "note": "Deal pipelines for Lumen Console. Probabilities match the seed data (opportunities.probability by stage). dealTypes says which of our deal types go into each pipeline.",
+  "note": "Deal pipelines for Lumen Console. Probabilities match the seed data (opportunities.probability by stage), except Qualifying: 1% in HubSpot (5% in the seed), the lowest open probability (HubSpot treats 0% as closed lost). dealTypes says which of our deal types go into each pipeline. firstStages come before the shared stages in that pipeline only. HubSpot stages have no description field; the description here is for people reading this file.",
   "pipelines": [
-    { "label": "New business", "dealTypes": ["new"] },
+    {
+      "label": "New business",
+      "dealTypes": ["new"],
+      "firstStages": [
+        {
+          "label": "Qualifying",
+          "probability": 0.01,
+          "isClosed": false,
+          "description": "Meeting held, not yet qualified as an opportunity. 1%: HubSpot treats a 0% stage as closed lost, so 1% is the lowest probability that keeps it open. Its deals carry forecast category Not forecasted, so they never count toward forecast totals."
+        }
+      ]
+    },
     { "label": "Renewals & expansion", "dealTypes": ["renewal", "expansion"] }
   ],
   "stages": [
