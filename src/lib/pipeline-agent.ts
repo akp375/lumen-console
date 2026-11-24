@@ -22,6 +22,7 @@ import {
   calcAgentSpeedToLead,
   calcAgentStaleQualifying,
   calcAgentUnassignedLeads,
+  type AdrDealRow,
   type AdrInputs,
 } from "./metrics.ts";
 import {
@@ -285,6 +286,23 @@ export function runReadTool(name: string, input: Record<string, unknown>, ctx: R
 }
 
 const ENDED: readonly string[] = ["converted", "disqualified", "nurture"];
+const CLOSED_STAGES: readonly string[] = ["Closed Won", "Closed Lost"];
+
+/**
+ * The deal a company task is really about, whatever object the proposal named. A title that mentions
+ * a deal is about one of the account's open deals (Qualifying included, all of them are in HubSpot):
+ * a Qualifying deal when the title says "Qualifying" and there is exactly one, else the only open deal.
+ * Returns null when the task isn't about a deal, or an error when it can't tell which deal.
+ */
+export function dealForCompanyTask(inputs: AdrInputs, accountId: string, title: string): AdrDealRow | null | { error: string } {
+  if (!/\bdeals?\b/i.test(title)) return null;
+  const open = inputs.deals.filter((d) => d.account_id === accountId && !CLOSED_STAGES.includes(d.stage));
+  const qualifying = open.filter((d) => d.stage === "Stage 0.1");
+  if (/qualifying/i.test(title) && qualifying.length === 1) return qualifying[0];
+  if (open.length === 1) return open[0];
+  if (open.length === 0) return null;
+  return { error: `This task is about a deal and ${accountId} has ${open.length} open deals (${open.map((d) => d.id).join(", ")}). Use object "deal" and the deal's id.` };
+}
 
 /** Checks a proposal against the data. Returns the details the card shows, or why it can't be recorded. */
 export function checkProposal(raw: Record<string, unknown>, ctx: RunContext): { type: ActionType; details: ActionDetails; reason: string } | { error: string } {
@@ -337,17 +355,24 @@ export function checkProposal(raw: Record<string, unknown>, ctx: RunContext): { 
     // Real calendar: the task lands on HubSpot's calendar, not the demo data's.
     const latest = plusDays(today, LIMITS.taskDueWithinDays);
     if (due < today || due > latest) return { error: `due_date must be between ${today} and ${latest} (today's real date plus ${LIMITS.taskDueWithinDays} days).` };
+    // Every deal is in HubSpot, Qualifying deals included (their own stage in New business). A deal task
+    // goes on the deal and is also linked to the deal's company (agent-db.ts createHubSpotTask).
+    const onDeal = (deal: AdrDealRow): TaskDetails => {
+      const stage = deal.stage === "Stage 0.1" ? "Qualifying" : deal.stage;
+      return { object: "deal", record_id: deal.id, record: `${accountName(deal.account_id)}: ${stage} deal, $${Math.round(deal.amount_usd).toLocaleString("en-US")}`, account_id: deal.account_id, title, due_date: due };
+    };
     let details: TaskDetails;
     if (object === "company") {
       const a = inputs.accounts.find((x) => x.id === recordId);
       if (!a) return { error: `There is no account "${recordId}". Use an account_id from a tool result.` };
-      details = { object, record_id: a.id, record: a.name, account_id: a.id, title, due_date: due };
+      // A task about a deal goes on that deal, even when the proposal named the company.
+      const deal = dealForCompanyTask(inputs, a.id, title);
+      if (deal && "error" in deal) return deal;
+      details = deal ? onDeal(deal) : { object, record_id: a.id, record: a.name, account_id: a.id, title, due_date: due };
     } else {
       const deal = inputs.deals.find((x) => x.id === recordId);
       if (!deal) return { error: `There is no deal "${recordId}".` };
-      // Every deal is in HubSpot, Qualifying deals included (their own stage in New business).
-      const stage = deal.stage === "Stage 0.1" ? "Qualifying" : deal.stage;
-      details = { object, record_id: deal.id, record: `${accountName(deal.account_id)}: ${stage} deal, $${Math.round(deal.amount_usd).toLocaleString("en-US")}`, account_id: deal.account_id, title, due_date: due };
+      details = onDeal(deal);
     }
     return { type, reason, details };
   }

@@ -942,3 +942,28 @@ Reports that add up all open deal amounts should filter out forecast category "N
   - Qualifying-deal tasks recorded on the deal
   - approve linking a deal task to its company
 - **`adr:check`:** passes.
+
+### HubSpot tasks: always on the deal, and no duplicates
+
+**The problem.** Nadia approved a task to qualify or close the Qualifying deal at Orchardly Media. It landed on the company only, because the agent proposed it for the company. An earlier approval had already created an open task with almost the same title, so Orchardly had two tasks asking for the same thing.
+
+**What changed.**
+
+1. **Deal tasks go on the deal, enforced in code** (`dealForCompanyTask` in `pipeline-agent.ts`).
+   - When the agent proposes a company task whose title mentions a deal, the check moves it onto that deal. It doesn't rely on the prompt.
+   - Which deal: the account's Qualifying deal when the title says "Qualifying" and there is exactly one. Otherwise the only open deal.
+   - If the account has several open deals and the title doesn't say which, the proposal is turned away and the agent is asked for the deal id.
+   - Closed deals don't count.
+   - Every deal task is linked to the deal and to its company.
+2. **No duplicate tasks** (`findOpenHubSpotTask` in `agent-db.ts`).
+   - Before creating a task, approval looks for an open (not completed) task with the same title on the same record. The match ignores case and extra spaces.
+   - If one exists, nothing new is created. The action is marked done with that task's id and `existing_task: true`. The task is also linked to the deal and company if it wasn't already.
+
+**Cleanup on 24 Nov.**
+- **Rejected 6 old proposals:** still pending from older runs, now rejected as decided by Nadia Haddad with `rejected_reason: "superseded"` in the result. The 2 proposals in the newest run were left alone.
+- **Deleted HubSpot task 430199963375:** last night's duplicate. HubSpot keeps deleted records in its recycle bin.
+- **Linked task 430279694010 to the Orchardly Media Qualifying deal:** opp_s01_007, HubSpot deal 375875218132. It's still linked to the company too.
+
+**Checks.**
+- **Tests:** 146 pass. New: a company task about a deal moved onto the deal, and an open task reused instead of duplicated (a completed one doesn't count).
+- **Typecheck and lint:** clean.

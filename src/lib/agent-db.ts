@@ -156,6 +156,44 @@ export async function createHubSpotTask(t: { object: "company" | "deal"; recordI
   return { taskId: task.id, hubspotRecordId, hubspotCompanyId };
 }
 
+const normTitle = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+const HS_OBJECT = { company: "companies", deal: "deals" } as const;
+
+/** Links a task to these records with HubSpot's default association (does nothing if already linked). */
+export async function linkHubSpotTask(taskId: string, to: { object: "company" | "deal"; id: string }[]): Promise<void> {
+  for (const t of to) {
+    await hubspot("POST", `/crm/v4/associations/tasks/${HS_OBJECT[t.object]}/batch/associate/default`, { inputs: [{ from: { id: taskId }, to: { id: t.id } }] });
+  }
+}
+
+/** An open task with this title on this HubSpot record (see ActionDb.findOpenHubSpotTask). */
+export async function findOpenHubSpotTask(t: { object: "company" | "deal"; recordId: string; accountId: string; title: string }): Promise<{ taskId: string; hubspotRecordId: string; hubspotCompanyId: string } | null> {
+  const hubspotRecordId = await findHubSpotRecord(t.object, t.recordId);
+  const taskIds: string[] = [];
+  for (let after: string | undefined; ; ) {
+    const page = await hubspot<{ results: { toObjectId: string | number }[]; paging?: { next?: { after: string } } }>(
+      "GET",
+      `/crm/v4/objects/${HS_OBJECT[t.object]}/${hubspotRecordId}/associations/tasks?limit=500${after ? `&after=${after}` : ""}`,
+    );
+    taskIds.push(...page.results.map((r) => String(r.toObjectId)));
+    after = page.paging?.next?.after;
+    if (!after) break;
+  }
+  for (let i = 0; i < taskIds.length; i += 100) {
+    const r = await hubspot<{ results: { id: string; properties: Record<string, string | null> }[] }>("POST", "/crm/v3/objects/tasks/batch/read", {
+      properties: ["hs_task_subject", "hs_task_status"],
+      inputs: taskIds.slice(i, i + 100).map((id) => ({ id })),
+    });
+    const hit = r.results.find((x) => normTitle(x.properties.hs_task_subject ?? "") === normTitle(t.title) && x.properties.hs_task_status !== "COMPLETED");
+    if (hit) {
+      const hubspotCompanyId = t.object === "company" ? hubspotRecordId : await findHubSpotRecord("company", t.accountId);
+      await linkHubSpotTask(hit.id, t.object === "deal" ? [{ object: "deal", id: hubspotRecordId }, { object: "company", id: hubspotCompanyId }] : [{ object: "company", id: hubspotRecordId }]);
+      return { taskId: hit.id, hubspotRecordId, hubspotCompanyId };
+    }
+  }
+  return null;
+}
+
 export const supabaseActionDb: ActionDb = {
   async getAction(id) {
     const r = await db().from("agent_actions").select("*").eq("id", id).maybeSingle();
@@ -209,6 +247,7 @@ export const supabaseActionDb: ActionDb = {
   async setSequenceStatus(id, status, pausedAt) {
     must(await db().from("sequences").update({ status, paused_at: pausedAt }).eq("id", id), "Updating the sequence");
   },
+  findOpenHubSpotTask,
   createHubSpotTask,
   updateLeadContacts: updateLeadOwnership,
   async doneActions() {

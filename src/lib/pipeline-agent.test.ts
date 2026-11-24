@@ -3,9 +3,9 @@
 // Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runPipelineAgent, checkProposal, type ModelReply, type ModelRequest, type RunStore, type RunPatch } from "./pipeline-agent.ts";
+import { runPipelineAgent, checkProposal, dealForCompanyTask, type ModelReply, type ModelRequest, type RunStore, type RunPatch } from "./pipeline-agent.ts";
 import { approveAction, rejectAction, revertApprovedActions, type ActionDb } from "./agent-actions.ts";
-import { PIPELINE_AGENT_LIMITS, type AgentActionView, type ActionType, type ActionDetails } from "./pipeline-agent-shared.ts";
+import { PIPELINE_AGENT_LIMITS, type AgentActionView, type ActionType, type ActionDetails, type TaskDetails } from "./pipeline-agent-shared.ts";
 import { calcAdrHygiene, calcAdrInsights, calcAdrMemoInput, calcAgentAdrCapacity, calcAgentHygieneSummary, calcAgentOverdueMqls, type AdrInputs, type AdrLeadRow } from "./metrics.ts";
 
 const AS_OF = "2026-11-13"; // the data's date: every analysis number
@@ -224,6 +224,32 @@ test("Proposals: made-up ids, a non-ADR target, a past due date and a Qualifying
   assert.equal(err({ type: "reassign_leads", details: { from_adr: "ada", to_adr: "d2", lead_ids: ["L1"] } }), "recorded");
 });
 
+test("Proposals: a task about a deal goes on the deal (and its company), even when the proposal names the company", () => {
+  const inputs = makeInputs();
+  const ctx = { inputs, asOf: AS_OF, today: TODAY, seenLeads: new Set<string>(), seenSequences: new Set<string>() };
+  const task = (record_id: string, title: string) => checkProposal({ type: "create_hubspot_task", details: { object: "company", record_id, title, due_date: "2026-11-25" }, reason: "Why." }, ctx);
+  // Bravo (A2) has one Qualifying deal, O1: the company task is moved onto the deal.
+  const moved = task("A2", "Qualify or close the Qualifying deal at Bravo");
+  assert.ok(!("error" in moved));
+  if (!("error" in moved)) {
+    const d = moved.details as TaskDetails;
+    assert.equal(d.object, "deal");
+    assert.equal(d.record_id, "O1");
+    assert.equal(d.account_id, "A2"); // the company link
+    assert.match(d.record, /Bravo: Qualifying deal/);
+  }
+  // A task that isn't about a deal stays on the company.
+  const stays = task("A2", "Fix the territory tag at Bravo");
+  assert.ok(!("error" in stays) && (stays.details as TaskDetails).object === "company");
+  // Two open deals and nothing to tell them apart: turned away, asking for the deal id.
+  const two = { ...inputs, deals: [...inputs.deals, { ...inputs.deals[0], id: "O2", stage: "Discovery" }] };
+  assert.equal(dealForCompanyTask(two, "A2", "Chase the deal at Bravo") !== null && "error" in dealForCompanyTask(two, "A2", "Chase the deal at Bravo")!, true);
+  assert.equal((dealForCompanyTask(two, "A2", "Qualify the Qualifying deal at Bravo") as { id: string }).id, "O1");
+  // Closed deals don't count.
+  const closed = { ...inputs, deals: [{ ...inputs.deals[0], stage: "Closed Lost" }] };
+  assert.equal(dealForCompanyTask(closed, "A2", "Close out the deal at Bravo"), null);
+});
+
 test("Proposals: task due dates use the real calendar (today + 7 days), not the data's as-of date", () => {
   const ctx = { inputs: makeInputs(), asOf: AS_OF, today: TODAY, seenLeads: new Set<string>(), seenSequences: new Set<string>() };
   const due = (d: string) => {
@@ -273,7 +299,7 @@ test("MQLs past the SLA: the memo, the agent's list, its capacity and its hygien
 // --- Approve, reject, revert --------------------------------------------------------
 
 /** An in-memory ActionDb that counts every write. */
-function fakeActionDb(actions: AgentActionView[], inputs = makeInputs(), opts: { hubspotDown?: boolean } = {}) {
+function fakeActionDb(actions: AgentActionView[], inputs = makeInputs(), opts: { hubspotDown?: boolean; openTasks?: { object: string; recordId: string; title: string; taskId: string; completed?: boolean }[] } = {}) {
   const writes: string[] = [];
   /** Lead ids sent to HubSpot's contact update, per call. */
   const hubspotLeadUpdates: string[][] = [];
@@ -305,6 +331,12 @@ function fakeActionDb(actions: AgentActionView[], inputs = makeInputs(), opts: {
     setSequenceStatus: async (id, s) => {
       writes.push(`sequence:${id}->${s}`);
       sequences.set(id, s);
+    },
+    findOpenHubSpotTask: async (t) => {
+      const hit = (opts.openTasks ?? []).find((o) => o.object === t.object && o.recordId === t.recordId && o.title.trim().toLowerCase() === t.title.trim().toLowerCase() && !o.completed);
+      if (!hit) return null;
+      writes.push(`hubspot-link:${hit.taskId}:${t.object}:${t.recordId}:${t.accountId}`);
+      return { taskId: hit.taskId, hubspotRecordId: t.object === "deal" ? "hs_deal_1" : "hs_co_1", hubspotCompanyId: "hs_co_1" };
     },
     createHubSpotTask: async (t) => {
       writes.push(`hubspot:${t.object}:${t.recordId}:${t.accountId}`);
@@ -383,6 +415,26 @@ test("Approve: a task on a Qualifying deal goes on the deal and is linked to its
   assert.deepEqual(f.writes, ["hubspot:deal:O1:A2"]);
   assert.equal(f.byId.get("act8")!.result!.hubspot_record_id, "hs_deal_1");
   assert.equal(f.byId.get("act8")!.result!.hubspot_company_id, "hs_co_1");
+});
+
+test("Approve: an open task with the same title on the same record is reused, not duplicated", async () => {
+  const title = "Qualify or close the Qualifying deal at Bravo";
+  const onDeal = proposal("act10", "create_hubspot_task", { object: "deal", record_id: "O1", record: "Bravo: Qualifying deal, $24,000", account_id: "A2", title, due_date: realDate(2) });
+  const f = fakeActionDb([onDeal], makeInputs(), { openTasks: [{ object: "deal", recordId: "O1", title: `  ${title.toUpperCase()} `, taskId: "hs_task_old" }] });
+  const r = await approveAction(f.db, "act10", "m1", "24 Nov 2026");
+  assert.ok(r.ok);
+  assert.deepEqual(f.writes, ["hubspot-link:hs_task_old:deal:O1:A2"]); // nothing created; linked to the deal and its company
+  const a = f.byId.get("act10")!;
+  assert.equal(a.outcome, "done");
+  assert.equal(a.result!.hubspot_task_id, "hs_task_old");
+  assert.equal(a.result!.existing_task, true);
+
+  // A completed task with the same title doesn't count: a new one is created.
+  const again = proposal("act11", "create_hubspot_task", { ...(onDeal.details as object) } as ActionDetails);
+  const g = fakeActionDb([again], makeInputs(), { openTasks: [{ object: "deal", recordId: "O1", title, taskId: "hs_task_done", completed: true }] });
+  await approveAction(g.db, "act11", "m1", "24 Nov 2026");
+  assert.deepEqual(g.writes, ["hubspot:deal:O1:A2"]);
+  assert.equal(g.byId.get("act11")!.result!.hubspot_task_id, "hs_task_1");
 });
 
 test("Approve: a task whose due date has passed (real calendar) creates nothing", async () => {

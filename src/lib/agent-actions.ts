@@ -7,6 +7,8 @@
 //   also updates ADR owner and the Unassigned / MQL past SLA flags on those leads' HubSpot contacts; if
 //   HubSpot fails, the reassignment in Cockpit stands (Supabase is the source) and the error is saved. What
 //   changed (each lead's previous ADR, the HubSpot task id) is saved with the action, or the error.
+//   Before creating a task it looks for an open task with the same title on the same record; if there is
+//   one, nothing is created and the action is done with that task's id (existing_task: true).
 // - Revert (npm run agent:reset) undoes approved reassignments and pauses only. HubSpot tasks stay.
 //
 // The database and HubSpot are passed in (ActionDb), so all of this can be tested with fakes.
@@ -26,6 +28,11 @@ export type ActionDb = {
   setEnrollmentAdr(ids: string[], adrId: string | null): Promise<void>;
   sequenceStatus(id: string): Promise<"active" | "paused" | null>;
   setSequenceStatus(id: string, status: "active" | "paused", pausedAt: string | null): Promise<void>;
+  /**
+   * An open (not completed) HubSpot task with this title on this record, or null. When one is found it is
+   * also linked to the record (and, for a deal, the deal's company), so it ends up where a new task would.
+   */
+  findOpenHubSpotTask(t: { object: "company" | "deal"; recordId: string; accountId: string; title: string }): Promise<{ taskId: string; hubspotRecordId: string; hubspotCompanyId: string } | null>;
   /** A deal task is also linked to the deal's company. */
   createHubSpotTask(t: { object: "company" | "deal"; recordId: string; accountId: string; title: string; body: string; dueDate: string }): Promise<{ taskId: string; hubspotRecordId: string; hubspotCompanyId: string }>;
   /** Sends ADR owner and the two hygiene flags (from lib/metrics.ts) to these leads' HubSpot contacts. */
@@ -106,6 +113,9 @@ async function execute(db: ActionDb, a: AgentActionView, deciderName: string, de
     const today = new Date().toISOString().slice(0, 10);
     if (d.due_date < today) throw new Error(`Nothing created: the due date (${d.due_date}) has passed. Run the agent again for a fresh proposal.`);
     // Work state only: no Cockpit numbers go to HubSpot.
+    // No duplicates: an open task with the same title on the same record is linked instead.
+    const existing = await db.findOpenHubSpotTask({ object: d.object, recordId: d.record_id, accountId: d.account_id, title: d.title });
+    if (existing) return { hubspot_task_id: existing.taskId, hubspot_record_id: existing.hubspotRecordId, hubspot_company_id: existing.hubspotCompanyId, object: d.object, existing_task: true };
     const body = `Proposed by Cockpit's Pipeline agent and approved by ${deciderName} on ${decidedOn}. The numbers behind it are on ADR Insights in Cockpit.`;
     const t = await db.createHubSpotTask({ object: d.object, recordId: d.record_id, accountId: d.account_id, title: d.title, body, dueDate: d.due_date });
     return { hubspot_task_id: t.taskId, hubspot_record_id: t.hubspotRecordId, hubspot_company_id: t.hubspotCompanyId, object: d.object };
